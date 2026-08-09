@@ -847,7 +847,7 @@ async function fallbackAnonymousLogin() {
   var email = localStorage.getItem('jiayou_anon_email');
   var password = localStorage.getItem('jiayou_anon_password');
   if (!email) {
-    email = deviceId + '@jiayou.local';
+    email = deviceId + '@jiayou.app';
     password = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
   }
   try {
@@ -3788,7 +3788,7 @@ function renderSettings() {
     else statusText = '已登录';
   }
   html += '<div class="setting-row" onclick="manualSync()"><div class="setting-label">☁️ 同步状态</div><div class="setting-value" id="settings-cloud-status">' + statusText + '</div></div>';
-  if (currentUser && currentUser.email && !currentUser.email.endsWith('@jiayou.local')) {
+  if (currentUser && currentUser.email && !currentUser.email.endsWith('@jiayou.app')) {
     html += '<div class="setting-row"><div class="setting-label">📧 已绑定邮箱</div><div class="setting-value">' + escapeHtml(currentUser.email) + '</div></div>';
   }
   html += '<button class="btn btn-primary btn-full" style="margin-top:10px;" onclick="manualSync()">立即同步</button>';
