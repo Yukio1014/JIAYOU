@@ -467,13 +467,18 @@ body {
   background: rgba(0,0,0,0.4);
   backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
   display: none; align-items: flex-end; justify-content: center;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
 }
 .modal-overlay.show { display: flex; }
 .modal {
   background: var(--card-bg); border-radius: 20px 20px 0 0;
   width: 100%; max-width: 600px; max-height: 90vh;
-  overflow-y: auto; padding: 20px 16px 30px;
+  overflow-x: hidden; overflow-y: auto;
+  padding: 20px 16px 30px;
   animation: slideUp 0.3s ease;
+  box-sizing: border-box;
 }
 @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
 .modal-handle {
@@ -886,7 +891,20 @@ function syncItemFromVariants(item) {
   if (item.variants.length > 0) {
     item.currentPrice = item.variants[0].price;
     item.channel = item.variants[0].channel;
-    item.photos = item.variants[0].photos;
+    // 合并所有变体的照片到 item.photos（用于首页卡片正面展示）
+    var allVariantPhotos = [];
+    item.variants.forEach(function(v) {
+      if (v.photos && v.photos.length > 0) {
+        v.photos.forEach(function(p) { allVariantPhotos.push(p); });
+      }
+    });
+    // 优先保留顶层 item.photos 中已有的照片，再加上变体照片去重
+    var seen = {};
+    var merged = [];
+    (item.photos || []).concat(allVariantPhotos).forEach(function(p) {
+      if (p && !seen[p]) { seen[p] = true; merged.push(p); }
+    });
+    item.photos = merged;
     item.opened = item.variants.some(function(v) { return v.opened && !v.usedUp; });
     item.usedUp = item.variants.length > 0 && item.variants.every(function(v) { return v.usedUp; });
     var active = item.variants.find(function(v) { return v.opened && !v.usedUp; });
@@ -2555,13 +2573,23 @@ function saveItem() {
   if (zone.type === 'consumable') {
     // 从品牌变体编辑器读取
     var editVariants = window._editVariants || [];
-    data.variants = editVariants.map(function(ev) {
+    var editPhotos = window._editVariantPhotos || [];
+    data.variants = editVariants.map(function(ev, i) {
       return {
         id: ev.id, brand: ev.brand || '未命名', stock: ev.stock || 0, price: ev.price || 0,
-        channel: '', photos: [], opened: false, openDate: null, finishDate: null,
+        channel: '', photos: (editPhotos[i] || []).slice(),
+        opened: false, openDate: null, finishDate: null,
         usedUp: false, openQty: 0, feeling: null, shelfLife: null, productionDate: null
       };
     });
+    // 合并变体照片 + 顶级照片，用于首页卡片展示
+    var topPhotos = itemPhotos.slice();
+    var variantPhotos = [];
+    data.variants.forEach(function(v) { variantPhotos = variantPhotos.concat(v.photos); });
+    var seenP = {};
+    var allP = [];
+    topPhotos.concat(variantPhotos).forEach(function(p) { if (p && !seenP[p]) { seenP[p] = true; allP.push(p); } });
+    data.photos = allP;
     data.stock = data.variants.reduce(function(s,v) { return s + (v.stock||0); }, 0);
     data.currentPrice = data.variants.length > 0 ? data.variants[0].price : 0;
     data.unit = document.getElementById('item-unit').value || '个';
