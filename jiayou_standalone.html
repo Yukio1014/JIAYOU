@@ -1092,7 +1092,7 @@ function renderHome() {
       var totalPrice = calcZoneTotalPrice(zone);
       html += '<div class="zone-count" style="text-align:right;line-height:1.4">';
       html += '<div style="font-size:14px;font-weight:700;color:var(--text)">' + count + '件</div>';
-      html += '<div style="font-size:12px;color:var(--accent);font-weight:600">¥' + totalPrice + '</div>';
+      html += '<div style="font-size:12px;color:var(--accent);font-weight:600">¥' + totalPrice.toFixed(2) + '</div>';
       html += '</div>';
     } else {
       html += '<div class="zone-count">' + count + '件</div>';
@@ -1469,7 +1469,7 @@ function renderItemCard(item, zone) {
     // 耐用品正面：显示件数 + 总金额
     html += '<div class="card-info" style="color:var(--accent);font-weight:600">' + variantCount + '件</div>';
     var totalPrice = calcDurableTotalPrice(item);
-    html += '<div class="card-info" style="font-weight:600">总金额 ¥' + totalPrice + '</div>';
+    html += '<div class="card-info" style="font-weight:600">总金额 ¥' + totalPrice.toFixed(2) + '</div>';
     if (item.location) {
       html += '<div class="card-info">📍 ' + escapeHtml(item.location) + '</div>';
     }
@@ -1576,7 +1576,7 @@ function renderCardFront(item, zone) {
     var totalPrice = calcDurableTotalPrice(item);
     html += '<div style="margin-top:14px;text-align:center;padding:16px;border-radius:10px;background:rgba(0,122,255,0.08);color:var(--accent);font-weight:700">';
     html += '共 ' + variantCount + ' 件';
-    html += '<div style="font-size:15px;margin-top:4px">总金额 ¥' + totalPrice + '</div>';
+    html += '<div style="font-size:15px;margin-top:4px">总金额 ¥' + totalPrice.toFixed(2) + '</div>';
     html += '</div>';
     if (item.location) {
       html += '<div style="margin-top:8px;text-align:center;font-size:13px;color:var(--text-secondary)">📍 ' + escapeHtml(item.location) + '</div>';
