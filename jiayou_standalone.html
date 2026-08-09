@@ -784,17 +784,64 @@ var ZONE_TYPES = {
   durable: { name: '耐用品', icon: '🐨', desc: '外观库、配件等耐用品' }
 };
 
+// ========== IndexedDB 存储（iOS PWA 更可靠） ==========
+var DB_NAME = 'jiayou_app_db';
+var STORE_NAME = 'data';
+var dbPromise = null;
+
+function initIndexedDB() {
+  return new Promise(function(resolve) {
+    if (dbPromise) { resolve(dbPromise); return; }
+    if (!window.indexedDB) { resolve(null); return; }
+    var req = indexedDB.open(DB_NAME, 1);
+    req.onerror = function() { console.error('IndexedDB打开失败'); resolve(null); };
+    req.onsuccess = function(e) { dbPromise = e.target.result; resolve(dbPromise); };
+    req.onupgradeneeded = function(e) {
+      var db = e.target.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME);
+      }
+    };
+  });
+}
+
+function saveDBIndexed() {
+  return initIndexedDB().then(function(db) {
+    if (!db) return Promise.reject('no db');
+    return new Promise(function(resolve, reject) {
+      try {
+        var tx = db.transaction(STORE_NAME, 'readwrite');
+        var store = tx.objectStore(STORE_NAME);
+        var req = store.put(DB, 'jiayou_db');
+        req.onsuccess = function() { resolve(); };
+        req.onerror = function(e) { reject(e); };
+      } catch(e) { reject(e); }
+    });
+  });
+}
+
+function loadDBIndexed() {
+  return initIndexedDB().then(function(db) {
+    if (!db) return Promise.resolve(null);
+    return new Promise(function(resolve) {
+      try {
+        var tx = db.transaction(STORE_NAME, 'readonly');
+        var store = tx.objectStore(STORE_NAME);
+        var req = store.get('jiayou_db');
+        req.onsuccess = function(e) { resolve(e.target.result); };
+        req.onerror = function() { resolve(null); };
+      } catch(e) { resolve(null); }
+    });
+  });
+}
+
 // ========== 存储管理 ==========
 function saveDB() {
   try {
     var json = JSON.stringify(DB);
     localStorage.setItem('jiayou_db', json);
-    // 验证写入是否成功
-    var verify = localStorage.getItem('jiayou_db');
-    if (!verify || verify.length < 10) {
-      console.error('存储验证失败: 数据未正确写入');
-      toast('存储异常，请导出数据备份');
-    }
+    // 同时保存到 IndexedDB（iOS PWA 更可靠）
+    saveDBIndexed().catch(function(e) { console.error('IndexedDB保存失败', e); });
   } catch(e) {
     console.error('saveDB错误:', e);
     if (e.name === 'QuotaExceededError') {
@@ -806,15 +853,33 @@ function saveDB() {
 }
 
 function loadDB() {
+  // 优先从 IndexedDB 读取（iOS PWA 更稳定），回退到 localStorage
+  var loaded = false;
   var raw = localStorage.getItem('jiayou_db');
   if (raw) {
     try {
       var parsed = JSON.parse(raw);
       DB = mergeDB(DB, parsed);
+      loaded = true;
     } catch(e) {
-      console.error('数据加载失败', e);
+      console.error('localStorage数据加载失败', e);
     }
   }
+
+  // 尝试从 IndexedDB 恢复
+  loadDBIndexed().then(function(idbData) {
+    if (idbData && idbData.zones) {
+      DB = mergeDB(DB, idbData);
+      // 如果 IndexedDB 有数据但 localStorage 没有/损坏，同步回 localStorage
+      if (!loaded) {
+        try { localStorage.setItem('jiayou_db', JSON.stringify(DB)); } catch(e) {}
+        showPage('home');
+      }
+    }
+  }).catch(function(e) {
+    console.error('IndexedDB加载失败', e);
+  });
+
   // 首次使用：创建默认板块
   if (!DB.zones || DB.zones.length === 0) {
     DB.zones = [
@@ -2795,9 +2860,20 @@ function saveItem() {
           nv.feeling = old.feeling;
           nv.shelfLife = old.shelfLife;
           nv.productionDate = old.productionDate;
-          nv.photos = old.photos;
+          // 注意：不覆盖 nv.photos，让用户编辑时新上传的照片生效
+          // 但如果新上传为空且旧照片存在，保留旧照片
+          if ((!nv.photos || nv.photos.length === 0) && old.photos && old.photos.length > 0) {
+            nv.photos = old.photos.slice();
+          }
         }
       });
+      // 兼容旧数据：如果variant没有照片但item.photos有，把item.photos分给第一个variant
+      var hasAnyVariantPhoto = newVariants.some(function(v) { return v.photos && v.photos.length > 0; });
+      if (!hasAnyVariantPhoto && item.photos && item.photos.length > 0) {
+        if (newVariants.length > 0) {
+          newVariants[0].photos = item.photos.slice();
+        }
+      }
     } else {
       // 耐用品：保留已有的variant使用感受
       var oldDVariants = item.variants || [];
