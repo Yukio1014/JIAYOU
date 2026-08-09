@@ -1,0 +1,2828 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>家有</title>
+<style>
+/* ========== 设计系统 ========== */
+:root {
+  --bg: #F2F2F7;
+  --card-bg: #FFFFFF;
+  --text: #1C1C1E;
+  --text-secondary: #8E8E93;
+  --text-tertiary: #C7C7CC;
+  --separator: #E5E5EA;
+  --accent: #007AFF;
+  --red: #FF3B30;
+  --orange: #FF9500;
+  --yellow: #FFCC00;
+  --green: #34C759;
+  --blue: #5AC8FA;
+  --purple: #AF52DE;
+  --radius: 16px;
+  --radius-sm: 10px;
+  --shadow: 0 2px 12px rgba(0,0,0,0.06);
+  --shadow-lg: 0 8px 32px rgba(0,0,0,0.12);
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.5;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ========== 导航栏 ========== */
+.navbar {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(242,242,247,0.85);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 0.5px solid var(--separator);
+  padding: 12px 16px 8px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.navbar h1 { font-size: 28px; font-weight: 700; letter-spacing: -0.5px; }
+.navbar .nav-actions { display: flex; gap: 8px; }
+.nav-btn {
+  width: 32px; height: 32px;
+  border-radius: 50%; border: none;
+  background: rgba(0,122,255,0.1);
+  color: var(--accent);
+  font-size: 18px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform 0.1s;
+}
+.nav-btn:active { transform: scale(0.88); }
+
+/* ========== 底部Tab栏 ========== */
+.tabbar {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
+  background: rgba(255,255,255,0.92);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-top: 0.5px solid var(--separator);
+  display: flex; padding: 6px 0 20px;
+  max-width: 600px; margin: 0 auto;
+}
+.tabbar-item {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; gap: 2px; cursor: pointer;
+  transition: opacity 0.15s; -webkit-user-select: none; user-select: none;
+}
+.tabbar-item:active { opacity: 0.5; }
+.tabbar-item .tab-icon { font-size: 24px; line-height: 1; }
+.tabbar-item .tab-label { font-size: 10px; color: var(--text-secondary); font-weight: 500; }
+.tabbar-item.active .tab-label { color: var(--accent); }
+.tabbar-item.active .tab-icon { transform: scale(1.1); }
+
+/* ========== 页面容器 ========== */
+.page {
+  max-width: 600px; margin: 0 auto;
+  padding: 0 16px 100px;
+  display: none;
+}
+.page.active { display: block; }
+
+/* ========== 按钮系统 ========== */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: 6px; padding: 10px 20px;
+  border-radius: var(--radius-sm);
+  font-size: 15px; font-weight: 600; border: none;
+  cursor: pointer; transition: opacity 0.15s, transform 0.1s;
+  font-family: var(--font);
+}
+.btn:active { transform: scale(0.96); opacity: 0.7; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-danger { background: var(--red); color: #fff; }
+.btn-success { background: var(--green); color: #fff; }
+.btn-warn { background: var(--orange); color: #fff; }
+.btn-ghost { background: transparent; color: var(--accent); }
+.btn-full { width: 100%; padding: 14px; font-size: 16px; }
+.btn-outline { background: transparent; border: 1.5px solid var(--separator); color: var(--text); }
+.btn-sm { padding: 6px 12px; font-size: 13px; }
+
+/* ========== 卡片 ========== */
+.card { background: var(--card-bg); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+
+/* ========== 首页预警条 ========== */
+.alert-strip {
+  display: flex; gap: 8px; margin-bottom: 16px;
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+  scrollbar-width: none; padding: 2px 0;
+}
+.alert-strip::-webkit-scrollbar { display: none; }
+.alert-badge {
+  flex-shrink: 0; padding: 10px 14px; border-radius: 12px;
+  display: flex; flex-direction: column; gap: 2px;
+  min-width: 100px; cursor: pointer;
+  transition: transform 0.15s;
+}
+.alert-badge:active { transform: scale(0.95); }
+.alert-badge .badge-num { font-size: 24px; font-weight: 800; line-height: 1.1; }
+.alert-badge .badge-label { font-size: 11px; opacity: 0.9; font-weight: 500; }
+.alert-red { background: linear-gradient(135deg, #FF3B30, #FF6B6B); color: #fff; }
+.alert-yellow { background: linear-gradient(135deg, #FF9500, #FFB340); color: #fff; }
+.alert-blue { background: linear-gradient(135deg, #5AC8FA, #7AD9FF); color: #fff; }
+.alert-green { background: linear-gradient(135deg, #34C759, #5AD680); color: #fff; }
+.alert-gray { background: linear-gradient(135deg, #8E8E93, #AEAEB2); color: #fff; }
+.alert-purple { background: linear-gradient(135deg, #AF52DE, #C97AF0); color: #fff; }
+@keyframes pulse-red {
+  0%,100% { box-shadow: 0 0 0 0 rgba(255,59,48,0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(255,59,48,0); }
+}
+.alert-red.pulse { animation: pulse-red 2s infinite; }
+
+/* ========== 区块标题 ========== */
+.section-title {
+  font-size: 20px; font-weight: 700;
+  margin: 20px 0 12px; letter-spacing: -0.3px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.section-title .section-action {
+  font-size: 14px; font-weight: 500; color: var(--accent); cursor: pointer;
+}
+
+/* ========== 拥有量卡 ========== */
+.own-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+.own-card {
+  background: var(--card-bg); border-radius: var(--radius); padding: 14px;
+  box-shadow: var(--shadow); cursor: pointer; transition: transform 0.15s;
+}
+.own-card:active { transform: scale(0.97); }
+.own-card .own-icon { font-size: 28px; }
+.own-card .own-name { font-size: 13px; color: var(--text-secondary); margin-top: 4px; }
+.own-card .own-num { font-size: 32px; font-weight: 800; letter-spacing: -1px; }
+.own-card .own-unit { font-size: 13px; color: var(--text-secondary); }
+.own-card .own-idle { font-size: 11px; color: var(--orange); margin-top: 2px; font-weight: 600; }
+
+/* ========== AI分析卡 ========== */
+.ai-card {
+  background: linear-gradient(135deg, #E0F7FA, #B2DFDB, #E1BEE7);
+  color: #1C1C1E; border-radius: var(--radius);
+  padding: 18px; margin-bottom: 16px; box-shadow: var(--shadow-lg);
+  border: 1px solid rgba(178,223,219,0.4);
+}
+.ai-card .ai-header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.ai-card .ai-title { font-size: 16px; font-weight: 700; color: #00695C; }
+.ai-card .ai-badge {
+  font-size: 10px; background: rgba(0,105,92,0.12);
+  padding: 2px 8px; border-radius: 6px; font-weight: 600; color: #00695C;
+}
+.ai-card .ai-section { margin-bottom: 14px; }
+.ai-card .ai-section:last-child { margin-bottom: 0; }
+.ai-card .ai-section-title {
+  font-size: 12px; color: #00897B;
+  margin-bottom: 6px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.ai-card .ai-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 0; border-bottom: 0.5px solid rgba(0,105,92,0.12);
+  font-size: 14px;
+}
+.ai-card .ai-item:last-child { border-bottom: none; }
+.ai-card .ai-item .ai-val { font-weight: 700; color: #00695C; }
+.ai-card .ai-suggest {
+  background: rgba(255,255,255,0.5); border-radius: 8px;
+  padding: 10px 12px; font-size: 13px; line-height: 1.6; color: #1C1C1E;
+}
+.ai-card .ai-suggest strong { color: #00897B; }
+.ai-card .ai-suggest .donate-buy { color: #007AFF; font-weight: 700; }
+.ai-card .ai-suggest .stop-buy { color: var(--red); font-weight: 700; }
+
+/* ========== 进度条 ========== */
+.bar-wrap { width: 100%; height: 8px; background: var(--separator); border-radius: 4px; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+.bar-green { background: var(--green); }
+.bar-yellow { background: var(--yellow); }
+.bar-orange { background: var(--orange); }
+.bar-red { background: var(--red); }
+.bar-blue { background: var(--blue); }
+.bar-purple { background: var(--purple); }
+
+/* 大进度条（库存可视化） */
+.stock-bar {
+  width: 100%; height: 12px; border-radius: 6px;
+  overflow: hidden; background: var(--separator); position: relative;
+}
+.stock-bar .stock-fill {
+  height: 100%; border-radius: 6px; transition: width 0.5s ease;
+}
+.stock-bar.low .stock-fill { background: linear-gradient(90deg, #FF3B30, #FF6B6B); }
+.stock-bar.mid .stock-fill { background: linear-gradient(90deg, #FF9500, #FFB340); }
+.stock-bar.high .stock-fill { background: linear-gradient(90deg, #34C759, #5AD680); }
+.stock-bar.over .stock-fill { background: linear-gradient(90deg, #5AC8FA, #7AD9FF); }
+
+/* 保质期进度条 */
+.shelf-bar {
+  width: 100%; height: 6px; border-radius: 3px;
+  overflow: hidden; background: var(--separator);
+}
+.shelf-bar .shelf-fill { height: 100%; transition: width 0.5s ease; }
+
+/* ========== 物品卡片网格 ========== */
+.item-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.item-card {
+  background: var(--card-bg); border-radius: var(--radius);
+  box-shadow: var(--shadow); overflow: hidden;
+  cursor: pointer; transition: transform 0.15s;
+  position: relative;
+}
+.item-card:active { transform: scale(0.97); }
+.item-card .card-photo {
+  width: 100%; aspect-ratio: 1; object-fit: cover;
+  background: var(--bg); display: flex; align-items: center; justify-content: center;
+  font-size: 40px; color: var(--text-tertiary);
+}
+.item-card .card-photo img { width: 100%; height: 100%; object-fit: cover; }
+.item-card .card-body { padding: 10px 12px; }
+.item-card .card-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item-card .card-info { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+.item-card .card-mini-bar { margin-top: 6px; }
+
+/* 卡片角标 */
+.card-badge {
+  position: absolute; top: 8px; right: 8px;
+  padding: 3px 8px; border-radius: 8px;
+  font-size: 10px; font-weight: 700; color: #fff;
+  backdrop-filter: blur(4px);
+}
+.badge-expire { background: rgba(255,59,48,0.9); }
+.badge-warn { background: rgba(255,149,0,0.9); }
+.badge-low { background: rgba(255,149,0,0.9); }
+.badge-over { background: rgba(90,200,250,0.9); }
+.badge-idle { background: rgba(175,82,222,0.9); }
+.badge-good { background: rgba(52,199,89,0.85); }
+.badge-bad { background: rgba(255,59,48,0.85); }
+
+/* 卡片3D翻面 */
+.card-detail-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(0,0,0,0.4);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  display: none; align-items: center; justify-content: center;
+  padding: 16px;
+}
+.card-detail-overlay.show { display: flex; }
+.flip-card {
+  width: 100%; max-width: 360px; max-height: 85vh;
+  perspective: 1200px; position: relative;
+}
+.flip-inner {
+  width: 100%; position: relative;
+  transition: transform 0.6s cubic-bezier(0.4,0,0.2,1);
+  transform-style: preserve-3d;
+}
+.flip-inner.flipped { transform: rotateY(180deg); }
+.flip-face {
+  width: 100%; backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  border-radius: 20px; overflow: hidden;
+  box-shadow: var(--shadow-lg);
+}
+.flip-front { background: var(--card-bg); }
+.flip-back {
+  position: absolute; top: 0; left: 0;
+  transform: rotateY(180deg); background: var(--card-bg);
+  max-height: 85vh; overflow-y: auto;
+}
+
+/* 卡片正面（弹窗版） */
+.detail-front { padding: 0; }
+.detail-front .detail-photo {
+  width: 100%; aspect-ratio: 1; object-fit: cover;
+  background: var(--bg); display: flex; align-items: center; justify-content: center;
+  font-size: 60px; color: var(--text-tertiary); position: relative;
+}
+.detail-front .detail-photo img { width: 100%; height: 100%; object-fit: cover; }
+.detail-front .detail-body { padding: 16px; }
+.detail-front .detail-name { font-size: 22px; font-weight: 700; }
+.detail-front .detail-cat { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
+.detail-front .detail-tap-hint {
+  text-align: center; font-size: 12px; color: var(--text-tertiary);
+  margin-top: 12px; padding: 8px;
+  border: 1px dashed var(--separator); border-radius: 8px;
+}
+
+/* 卡片背面 */
+.detail-back { padding: 16px; }
+.detail-back .back-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 14px;
+}
+.detail-back .back-title { font-size: 18px; font-weight: 700; }
+.detail-back .back-close {
+  width: 30px; height: 30px; border-radius: 50%;
+  background: var(--bg); border: none; font-size: 16px;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.back-section { margin-bottom: 16px; }
+.back-section-title {
+  font-size: 12px; color: var(--text-secondary);
+  font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; margin-bottom: 8px;
+}
+.back-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 0; border-bottom: 0.5px solid var(--separator); font-size: 14px;
+}
+.back-row:last-child { border-bottom: none; }
+.back-row .back-label { color: var(--text-secondary); }
+.back-row .back-value { font-weight: 600; }
+
+/* ========== 表单 ========== */
+.form-group { margin-bottom: 14px; }
+.form-label { font-size: 13px; color: var(--text-secondary); font-weight: 600; margin-bottom: 6px; display: block; }
+.form-input, .form-select, .form-textarea {
+  width: 100%; padding: 12px 14px; border-radius: var(--radius-sm);
+  border: 1px solid var(--separator); background: var(--card-bg);
+  font-size: 15px; font-family: var(--font); color: var(--text);
+  outline: none; transition: border-color 0.2s;
+}
+.form-input:focus, .form-select:focus, .form-textarea:focus { border-color: var(--accent); }
+.form-textarea { resize: none; min-height: 60px; }
+.form-row { display: flex; gap: 10px; }
+.form-row .form-group { flex: 1; }
+
+/* 图片上传 */
+.photo-upload {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+}
+.photo-slot {
+  aspect-ratio: 1; border-radius: var(--radius-sm);
+  border: 2px dashed var(--separator); background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 28px; color: var(--text-tertiary);
+  cursor: pointer; overflow: hidden; position: relative;
+}
+.photo-slot img { width: 100%; height: 100%; object-fit: cover; }
+.photo-slot.has-photo { border-style: solid; border-color: var(--separator); }
+.photo-slot .remove-photo {
+  position: absolute; top: 4px; right: 4px;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: rgba(0,0,0,0.5); color: #fff;
+  border: none; font-size: 12px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+
+/* ========== 搜索栏 ========== */
+.search-bar {
+  position: relative; margin-bottom: 12px;
+}
+.search-bar input {
+  width: 100%; padding: 10px 14px 10px 36px;
+  border-radius: 10px; border: none;
+  background: rgba(118,118,128,0.12);
+  font-size: 15px; font-family: var(--font); outline: none;
+}
+.search-bar .search-icon {
+  position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+  font-size: 16px; color: var(--text-tertiary);
+}
+
+/* ========== 分类标签 ========== */
+.cat-tabs {
+  display: flex; gap: 8px; margin-bottom: 14px;
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+  scrollbar-width: none; padding: 2px 0;
+}
+.cat-tabs::-webkit-scrollbar { display: none; }
+.cat-tab {
+  flex-shrink: 0; padding: 6px 14px; border-radius: 16px;
+  background: var(--card-bg); font-size: 14px; font-weight: 500;
+  color: var(--text-secondary); cursor: pointer;
+  border: 1.5px solid transparent; transition: all 0.2s;
+  -webkit-user-select: none; user-select: none;
+  display: flex; align-items: center; gap: 4px;
+}
+.cat-tab:active { transform: scale(0.95); }
+.cat-tab.active { background: var(--accent); color: #fff; }
+.cat-tab .cat-edit-icon { font-size: 12px; opacity: 0.6; }
+
+/* ========== 弹窗 ========== */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 300;
+  background: rgba(0,0,0,0.4);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  display: none; align-items: flex-end; justify-content: center;
+}
+.modal-overlay.show { display: flex; }
+.modal {
+  background: var(--card-bg); border-radius: 20px 20px 0 0;
+  width: 100%; max-width: 600px; max-height: 90vh;
+  overflow-y: auto; padding: 20px 16px 30px;
+  animation: slideUp 0.3s ease;
+}
+@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+.modal-handle {
+  width: 36px; height: 5px; border-radius: 3px;
+  background: var(--text-tertiary); margin: 0 auto 16px;
+}
+.modal-title { font-size: 20px; font-weight: 700; margin-bottom: 16px; text-align: center; }
+
+/* ========== 空状态 ========== */
+.empty-state {
+  text-align: center; padding: 40px 20px;
+  color: var(--text-tertiary);
+}
+.empty-state .empty-icon { font-size: 48px; margin-bottom: 12px; }
+.empty-state .empty-text { font-size: 15px; }
+
+/* ========== 准备池 ========== */
+.pool-item {
+  background: var(--card-bg); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 14px; margin-bottom: 10px;
+}
+.pool-item .pool-header {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  margin-bottom: 8px;
+}
+.pool-item .pool-name { font-size: 15px; font-weight: 600; }
+.pool-item .pool-meta { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+.pool-item .pool-price { font-size: 16px; font-weight: 700; color: var(--accent); }
+.pool-item .pool-warn {
+  background: rgba(255,149,0,0.1); border-radius: 8px;
+  padding: 8px 10px; font-size: 12px; color: var(--orange);
+  margin-top: 8px; font-weight: 600;
+}
+.pool-item .pool-ok {
+  background: rgba(52,199,89,0.1); border-radius: 8px;
+  padding: 8px 10px; font-size: 12px; color: var(--green);
+  margin-top: 8px; font-weight: 600;
+}
+.pool-item .pool-actions { display: flex; gap: 8px; margin-top: 10px; }
+.pool-status {
+  display: inline-block; padding: 2px 8px; border-radius: 6px;
+  font-size: 11px; font-weight: 600;
+}
+.status-pending { background: rgba(255,149,0,0.15); color: var(--orange); }
+.status-decided { background: rgba(0,122,255,0.15); color: var(--accent); }
+.status-given-up { background: rgba(142,142,147,0.15); color: var(--text-secondary); }
+
+/* ========== 开封按钮 ========== */
+.open-btn {
+  display: flex; align-items: center; justify-content: center;
+  gap: 6px; padding: 12px; border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, #FF9500, #FFB340);
+  color: #fff; font-size: 15px; font-weight: 700;
+  border: none; cursor: pointer; width: 100%;
+  transition: transform 0.1s;
+}
+.open-btn:active { transform: scale(0.97); }
+.open-btn.done { background: linear-gradient(135deg, #34C759, #5AD680); }
+
+/* ========== 评分星星 ========== */
+.stars { display: flex; gap: 2px; }
+.star { font-size: 20px; color: var(--text-tertiary); cursor: pointer; -webkit-user-select: none; user-select: none; }
+.star.filled { color: var(--yellow); }
+
+/* ========== 标签 ========== */
+.tag-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag {
+  padding: 4px 10px; border-radius: 12px;
+  font-size: 12px; font-weight: 500;
+  background: rgba(0,122,255,0.1); color: var(--accent);
+  cursor: pointer; -webkit-user-select: none; user-select: none;
+}
+.tag.selected { background: var(--accent); color: #fff; }
+.tag-removable { position: relative; }
+
+/* ========== 设置页 ========== */
+.setting-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px; background: var(--card-bg);
+  border-bottom: 0.5px solid var(--separator);
+  cursor: pointer;
+}
+.setting-row:last-child { border-bottom: none; }
+.setting-row:active { background: var(--bg); }
+.setting-row .setting-label { font-size: 15px; }
+.setting-row .setting-value { font-size: 14px; color: var(--text-secondary); }
+
+.setting-group {
+  background: var(--card-bg); border-radius: var(--radius);
+  overflow: hidden; margin-bottom: 16px; box-shadow: var(--shadow);
+}
+
+/* ========== Toast ========== */
+.toast {
+  position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%);
+  z-index: 400; background: rgba(0,0,0,0.8);
+  color: #fff; padding: 10px 20px; border-radius: 20px;
+  font-size: 14px; font-weight: 500;
+  opacity: 0; transition: opacity 0.3s, transform 0.3s;
+  pointer-events: none; white-space: nowrap;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(-10px); }
+
+/* ========== 图表 ========== */
+.chart-container { background: var(--card-bg); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); margin-bottom: 12px; }
+.chart-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
+.bar-chart { display: flex; flex-direction: column; gap: 8px; }
+.bar-chart-item { display: flex; align-items: center; gap: 8px; }
+.bar-chart-label { font-size: 12px; color: var(--text-secondary); min-width: 60px; text-align: right; }
+.bar-chart-track { flex: 1; height: 20px; background: var(--bg); border-radius: 4px; overflow: hidden; }
+.bar-chart-fill { height: 100%; border-radius: 4px; transition: width 0.6s ease; display: flex; align-items: center; padding-left: 6px; }
+.bar-chart-fill span { font-size: 11px; color: #fff; font-weight: 600; }
+
+/* 倒计时圆环 */
+.countdown-ring {
+  width: 60px; height: 60px; position: relative;
+  display: flex; align-items: center; justify-content: center;
+}
+.countdown-ring svg { transform: rotate(-90deg); }
+.countdown-ring .ring-text {
+  position: absolute; font-size: 12px; font-weight: 700; text-align: center;
+}
+
+/* ========== 工具栏 ========== */
+.toolbar {
+  display: flex; gap: 8px; margin-bottom: 12px;
+  overflow-x: auto; scrollbar-width: none;
+}
+.toolbar::-webkit-scrollbar { display: none; }
+
+/* ========== 板块选择卡 ========== */
+.zone-card {
+  background: var(--card-bg); border-radius: var(--radius);
+  padding: 16px; margin-bottom: 10px; box-shadow: var(--shadow);
+  cursor: pointer; transition: transform 0.15s;
+  display: flex; align-items: center; gap: 14px;
+  border-left: 4px solid var(--zone-color, var(--accent));
+}
+.zone-card:active { transform: scale(0.98); }
+.zone-card .zone-icon { font-size: 32px; }
+.zone-card .zone-info { flex: 1; }
+.zone-card .zone-name { font-size: 16px; font-weight: 700; }
+.zone-card .zone-desc { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+.zone-card .zone-count { font-size: 13px; color: var(--text-secondary); }
+
+/* 板块主题色 */
+.zone-theme-consumable { --zone-color: #26C6DA; }
+.zone-theme-durable { --zone-color: #AB47BC; }
+.zone-theme-durable2 { --zone-color: #7E57C2; }
+
+/* 输入数量步进器 */
+.stepper {
+  display: flex; align-items: center; gap: 12px;
+  justify-content: center;
+}
+.stepper button {
+  width: 36px; height: 36px; border-radius: 50%;
+  border: none; background: var(--bg); font-size: 20px;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: transform 0.1s;
+}
+.stepper button:active { transform: scale(0.9); }
+.stepper .stepper-val { font-size: 20px; font-weight: 700; min-width: 40px; text-align: center; }
+
+/* 消费记录列表 */
+.usage-log { font-size: 12px; color: var(--text-secondary); }
+.usage-log-item { padding: 4px 0; border-bottom: 0.5px solid var(--separator); }
+.usage-log-item:last-child { border-bottom: none; }
+
+/* 响应式 */
+@media (min-width: 601px) {
+  .tabbar { border-radius: 20px 20px 0 0; }
+}
+
+/* 隐藏文件输入 */
+.hidden-input { display: none; }
+
+/* 价格对比提示 */
+.price-compare {
+  border-radius: 8px; padding: 10px 12px; font-size: 13px;
+  margin-top: 8px; font-weight: 600;
+}
+.price-cheaper { background: rgba(52,199,89,0.1); color: var(--green); }
+.price-expensive { background: rgba(255,59,48,0.1); color: var(--red); }
+.price-same { background: rgba(142,142,147,0.1); color: var(--text-secondary); }
+.price-first { background: rgba(0,122,255,0.1); color: var(--accent); }
+
+/* 开封记录 */
+.open-record {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 0; font-size: 12px; color: var(--text-secondary);
+  border-bottom: 0.5px solid var(--separator);
+}
+.open-record:last-child { border-bottom: none; }
+
+/* 拥有量顶部大数字 */
+.zone-overview-num {
+  font-size: 48px; font-weight: 800; letter-spacing: -2px;
+  line-height: 1; text-align: center; padding: 20px 0;
+}
+.zone-overview-label {
+  text-align: center; font-size: 14px; color: var(--text-secondary);
+  margin-bottom: 16px;
+}
+</style>
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#4A90E2">
+</head>
+<body>
+
+<!-- ========== 首页 ========== -->
+<div class="navbar" id="nav-home">
+  <h1>家有</h1>
+  <div class="nav-actions">
+    <button class="nav-btn" onclick="openSettings()">⚙</button>
+  </div>
+</div>
+
+<div class="page active" id="page-home">
+  <div id="home-content"></div>
+</div>
+
+<!-- ========== 板块页 ========== -->
+<div class="navbar" id="nav-zone" style="display:none;">
+  <button class="nav-btn" onclick="showPage('home')">‹</button>
+  <h1 id="zone-title">领地</h1>
+  <div class="nav-actions">
+    <button class="nav-btn" onclick="openCategoryManager()">✎</button>
+    <button class="nav-btn" onclick="openItemForm()">＋</button>
+  </div>
+</div>
+
+<div class="page" id="page-zone">
+  <div id="zone-content"></div>
+</div>
+
+<!-- ========== 目标锁定页 ========== -->
+<div class="navbar" id="nav-pool" style="display:none;">
+  <h1>🎯 目标锁定</h1>
+  <div class="nav-actions">
+    <button class="nav-btn" onclick="openPoolForm()">＋</button>
+  </div>
+</div>
+
+<div class="page" id="page-pool">
+  <div id="pool-content"></div>
+</div>
+
+<!-- ========== 设置页 ========== -->
+<div class="navbar" id="nav-settings" style="display:none;">
+  <button class="nav-btn" onclick="showPage('home')">‹</button>
+  <h1>设置</h1>
+</div>
+
+<div class="page" id="page-settings">
+  <div id="settings-content"></div>
+</div>
+
+<!-- ========== 底部Tab栏 ========== -->
+<div class="tabbar">
+  <div class="tabbar-item active" data-tab="home" onclick="showPage('home')">
+    <span class="tab-icon">🏠</span>
+    <span class="tab-label">总览</span>
+  </div>
+  <div class="tabbar-item" data-tab="pool" onclick="showPage('pool')">
+    <span class="tab-icon">🎯</span>
+    <span class="tab-label">目标锁定</span>
+  </div>
+  <div class="tabbar-item" data-tab="settings" onclick="showPage('settings')">
+    <span class="tab-icon">⚙</span>
+    <span class="tab-label">设置</span>
+  </div>
+</div>
+
+<!-- ========== 卡片详情弹窗 ========== -->
+<div class="card-detail-overlay" id="card-detail-overlay">
+  <div class="flip-card" id="flip-card">
+    <div class="flip-inner" id="flip-inner">
+      <div class="flip-face flip-front" id="flip-front"></div>
+      <div class="flip-face flip-back" id="flip-back"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ========== 通用弹窗 ========== -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal" id="modal-content"></div>
+</div>
+
+<!-- ========== Toast ========== -->
+<div class="toast" id="toast"></div>
+
+<!-- ========== 隐藏文件输入 ========== -->
+<input type="file" id="photo-input" class="hidden-input" accept="image/*" multiple>
+<input type="file" id="import-input" class="hidden-input" accept=".json">
+
+<script>
+/* ================================================================
+   家有 App - 核心逻辑
+   ================================================================ */
+
+// ========== 数据层 ==========
+var DB = {
+  zones: [],
+  pool: [],
+  poolHistory: [],
+  settings: {
+    githubToken: 'gh_YOUR_TOKEN_HERE'  // ⚠️ 请在浏览器控制台填入你的 GitHub Token,
+    githubRepo: 'Yukio1014/HOME',
+    githubPath: 'jiayou-backup.json',
+    lastBackup: null
+  },
+  version: 1
+};
+
+// 板块类型: consumable(补给品) / durable(耐用品)
+var ZONE_TYPES = {
+  consumable: { name: '补给品', icon: '🦦', desc: '会用完、会过期、需要补货' },
+  durable: { name: '耐用品', icon: '🐨', desc: '外观库、配件等耐用品' }
+};
+
+// ========== 存储管理 ==========
+function saveDB() {
+  try {
+    localStorage.setItem('jiayou_db', JSON.stringify(DB));
+  } catch(e) {
+    toast('存储空间不足，请导出数据后清理');
+  }
+}
+
+function loadDB() {
+  var raw = localStorage.getItem('jiayou_db');
+  if (raw) {
+    try {
+      var parsed = JSON.parse(raw);
+      DB = mergeDB(DB, parsed);
+    } catch(e) {
+      console.error('数据加载失败', e);
+    }
+  }
+  // 首次使用：创建默认板块
+  if (!DB.zones || DB.zones.length === 0) {
+    DB.zones = [
+      {
+        id: genId(), name: '补给品', type: 'consumable', icon: '🦦', theme: 'consumable',
+        categories: [
+          { id: genId(), name: '个护' },
+          { id: genId(), name: '清洁' },
+          { id: genId(), name: '食品' },
+          { id: genId(), name: '药品' }
+        ],
+        items: []
+      },
+      {
+        id: genId(), name: '角色外观库', type: 'durable', icon: '🐨', theme: 'durable',
+        categories: [
+          { id: genId(), name: '上衣' },
+          { id: genId(), name: '裤子' },
+          { id: genId(), name: '鞋' },
+          { id: genId(), name: '包' }
+        ],
+        items: []
+      },
+      {
+        id: genId(), name: '角色配件', type: 'durable', icon: '🦝', theme: 'durable2',
+        categories: [
+          { id: genId(), name: '戒指' },
+          { id: genId(), name: '项链' },
+          { id: genId(), name: '耳环' },
+          { id: genId(), name: '手链' }
+        ],
+        items: []
+      }
+    ];
+    saveDB();
+  }
+}
+
+function mergeDB(defaults, loaded) {
+  var result = Object.assign({}, defaults, loaded);
+  if (!result.settings) result.settings = defaults.settings;
+  if (!result.zones) result.zones = [];
+  if (!result.pool) result.pool = [];
+  if (!result.poolHistory) result.poolHistory = [];
+  return result;
+}
+
+function genId() {
+  return Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+}
+
+// ========== 页面切换 ==========
+var currentZoneId = null;
+var currentCategoryId = null;
+var currentSearchQuery = '';
+
+function showPage(page) {
+  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
+  document.getElementById('page-' + page).classList.add('active');
+
+  document.querySelectorAll('.navbar').forEach(function(n) { n.style.display = 'none'; });
+  if (page === 'home') document.getElementById('nav-home').style.display = 'flex';
+  else if (page === 'zone') document.getElementById('nav-zone').style.display = 'flex';
+  else if (page === 'pool') document.getElementById('nav-pool').style.display = 'flex';
+  else if (page === 'settings') document.getElementById('nav-settings').style.display = 'flex';
+
+  document.querySelectorAll('.tabbar-item').forEach(function(t) {
+    t.classList.toggle('active', t.dataset.tab === page);
+  });
+
+  if (page === 'home') renderHome();
+  else if (page === 'zone') renderZone();
+  else if (page === 'pool') renderPool();
+  else if (page === 'settings') renderSettings();
+
+  window.scrollTo(0, 0);
+}
+
+function enterZone(zoneId) {
+  currentZoneId = zoneId;
+  var zone = getZone(zoneId);
+  document.getElementById('zone-title').textContent = zone.icon + ' ' + zone.name;
+  currentCategoryId = zone.categories.length > 0 ? zone.categories[0].id : null;
+  showPage('zone');
+}
+
+// ========== 数据查询 ==========
+function getZone(zoneId) {
+  for (var i = 0; i < DB.zones.length; i++) {
+    if (DB.zones[i].id === zoneId) return DB.zones[i];
+  }
+  return null;
+}
+function getCategory(zoneId, catId) {
+  var zone = getZone(zoneId);
+  if (!zone) return null;
+  for (var i = 0; i < zone.categories.length; i++) {
+    if (zone.categories[i].id === catId) return zone.categories[i];
+  }
+  return null;
+}
+function getItem(zoneId, itemId) {
+  var zone = getZone(zoneId);
+  if (!zone) return null;
+  for (var i = 0; i < zone.items.length; i++) {
+    if (zone.items[i].id === itemId) return zone.items[i];
+  }
+  return null;
+}
+function getItemsByCategory(zoneId, catId) {
+  var zone = getZone(zoneId);
+  if (!zone) return [];
+  return zone.items.filter(function(it) {
+    if (currentSearchQuery) {
+      var q = currentSearchQuery.toLowerCase();
+      if (it.name.toLowerCase().indexOf(q) === -1) return false;
+    }
+    return catId === 'all' || it.categoryId === catId;
+  });
+}
+
+// ========== 首页渲染 ==========
+function renderHome() {
+  var html = '';
+  var allItems = [];
+  DB.zones.forEach(function(zone) {
+    zone.items.forEach(function(it) {
+      it._zoneId = zone.id;
+      it._zoneType = zone.type;
+      allItems.push(it);
+    });
+  });
+
+  // === 消耗品预警 ===
+  var expired = [], expiring = [], lowStock = [], overStock = [];
+  DB.zones.forEach(function(zone) {
+    if (zone.type !== 'consumable') return;
+    zone.items.forEach(function(it) {
+      var status = getItemStatus(it);
+      if (status.expired) expired.push({item: it, zone: zone});
+      if (status.expiring) expiring.push({item: it, zone: zone});
+      if (status.lowStock) lowStock.push({item: it, zone: zone});
+      if (status.overStock) overStock.push({item: it, zone: zone});
+    });
+  });
+
+  // === 耐用品统计 ===
+  var durableZones = DB.zones.filter(function(z) { return z.type === 'durable'; });
+  var idleItems = [];
+  durableZones.forEach(function(zone) {
+    zone.items.forEach(function(it) {
+      if (it.lastUsedDate) {
+        var days = daysBetween(new Date(it.lastUsedDate), new Date());
+        if (days > 180) idleItems.push({item: it, zone: zone, days: days});
+      }
+    });
+  });
+
+  // === 预警条 ===
+  html += '<div class="alert-strip">';
+  if (expired.length > 0) {
+    html += '<div class="alert-badge alert-red pulse" onclick="filterExpired()">';
+    html += '<div class="badge-num">' + expired.length + '</div>';
+    html += '<div class="badge-label">已过期</div></div>';
+  }
+  if (expiring.length > 0) {
+    html += '<div class="alert-badge alert-yellow" onclick="filterExpiring()">';
+    html += '<div class="badge-num">' + expiring.length + '</div>';
+    html += '<div class="badge-label">即将过期</div></div>';
+  }
+  if (lowStock.length > 0) {
+    html += '<div class="alert-badge alert-yellow" onclick="filterLowStock()">';
+    html += '<div class="badge-num">' + lowStock.length + '</div>';
+    html += '<div class="badge-label">库存告急</div></div>';
+  }
+  if (overStock.length > 0) {
+    html += '<div class="alert-badge alert-blue" onclick="filterOverStock()">';
+    html += '<div class="badge-num">' + overStock.length + '</div>';
+    html += '<div class="badge-label">囤太多</div></div>';
+  }
+  if (idleItems.length > 0) {
+    html += '<div class="alert-badge alert-purple" onclick="filterIdle()">';
+    html += '<div class="badge-num">' + idleItems.length + '</div>';
+    html += '<div class="badge-label">闲置中</div></div>';
+  }
+  if (expired.length === 0 && expiring.length === 0 && lowStock.length === 0 && overStock.length === 0 && idleItems.length === 0) {
+    html += '<div class="alert-badge alert-green">';
+    html += '<div class="badge-num">✓</div>';
+    html += '<div class="badge-label">一切正常</div></div>';
+  }
+  html += '</div>';
+
+  // === 板块入口 ===
+  html += '<div class="section-title">领地分布<div class="section-action" onclick="openZoneManager()">管理</div></div>';
+  html += '<div>';
+  DB.zones.forEach(function(zone) {
+    var count = zone.items.length;
+    var themeClass = 'zone-theme-' + (zone.theme || (zone.type === 'consumable' ? 'consumable' : 'durable'));
+    html += '<div class="zone-card ' + themeClass + '" onclick="enterZone(\'' + zone.id + '\')">';
+    html += '<div class="zone-icon">' + zone.icon + '</div>';
+    html += '<div class="zone-info">';
+    html += '<div class="zone-name">' + escapeHtml(zone.name) + '</div>';
+    html += '<div class="zone-desc">' + (zone.categories.length + '个分类') + '</div>';
+    html += '</div>';
+    html += '<div class="zone-count">' + count + '件</div>';
+    html += '</div>';
+  });
+  html += '</div>';
+
+  // === 耐用品拥有量概览 ===
+  if (durableZones.length > 0) {
+    html += '<div class="section-title">资源储备</div>';
+    html += '<div class="own-summary">';
+    durableZones.forEach(function(zone) {
+      var total = zone.items.length;
+      var idleCount = 0;
+      zone.items.forEach(function(it) {
+        if (it.lastUsedDate) {
+          if (daysBetween(new Date(it.lastUsedDate), new Date()) > 180) idleCount++;
+        }
+      });
+      html += '<div class="own-card" onclick="enterZone(\'' + zone.id + '\')">';
+      html += '<div class="own-icon">' + zone.icon + '</div>';
+      html += '<div class="own-name">' + zone.name + '</div>';
+      html += '<div><span class="own-num">' + total + '</span><span class="own-unit">件</span></div>';
+      if (idleCount > 0) {
+        html += '<div class="own-idle">' + idleCount + '件闲置中</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  // === AI分析 ===
+  html += renderAIAnalysis();
+
+  document.getElementById('home-content').innerHTML = html;
+}
+
+// ========== 物品状态判断 ==========
+function getItemStatus(item) {
+  var status = {
+    expired: false, expiring: false,
+    lowStock: false, overStock: false,
+    shelfPercent: 100, daysLeft: null
+  };
+
+  // 保质期
+  if (item.shelfLife && item.shelfLife > 0 && item.productionDate) {
+    var prod = new Date(item.productionDate);
+    var expireDate = new Date(prod);
+    expireDate.setMonth(expireDate.getMonth() + item.shelfLife);
+    var daysLeft = daysBetween(new Date(), expireDate);
+    status.daysLeft = daysLeft;
+    var totalDays = item.shelfLife * 30;
+    status.shelfPercent = Math.max(0, Math.min(100, (daysLeft / totalDays) * 100));
+    if (daysLeft <= 0) status.expired = true;
+    else if (daysLeft <= 30) status.expiring = true;
+  }
+
+  // 库存
+  if (item.stockThreshold && item.stock !== undefined) {
+    if (item.stock <= item.stockThreshold) status.lowStock = true;
+  }
+
+  // 囤太多：消耗速率计算
+  if (item.usageRecords && item.usageRecords.length > 2 && item.shelfLife) {
+    var rate = calcUsageRate(item); // 每月消耗量
+    if (rate > 0 && item.stock > 0) {
+      var monthsToFinish = item.stock / rate;
+      var shelfMonthsLeft = status.daysLeft ? status.daysLeft / 30 : 999;
+      if (monthsToFinish > shelfMonthsLeft && shelfMonthsLeft < 999) {
+        status.overStock = true;
+      }
+    }
+  }
+
+  return status;
+}
+
+// ========== 消耗速率计算 ==========
+function calcUsageRate(item) {
+  if (!item.usageRecords || item.usageRecords.length === 0) return 0;
+  var records = item.usageRecords.filter(function(r) { return r.startDate && r.endDate; });
+  if (records.length === 0) return 0;
+
+  // 计算每条记录的日均消耗，然后汇总
+  var totalQty = 0, totalDays = 0;
+  records.forEach(function(r) {
+    var days = daysBetween(new Date(r.startDate), new Date(r.endDate));
+    if (days < 1) days = 1; // 至少1天
+    totalQty += (r.qty || 1);
+    totalDays += days;
+  });
+  if (totalDays === 0) return 0;
+  var perDay = totalQty / totalDays;
+  return perDay * 30; // 转为月消耗
+}
+
+// ========== AI分析渲染 ==========
+function renderAIAnalysis() {
+  var html = '<div class="section-title">AI 分析</div>';
+  html += '<div class="ai-card">';
+  html += '<div class="ai-header"><span style="font-size:20px">🤖</span>';
+  html += '<span class="ai-title">智能报告</span>';
+  html += '<span class="ai-badge">离线分析</span></div>';
+
+  // 1. 年消耗画像
+  var consumableZone = DB.zones.find(function(z) { return z.type === 'consumable'; });
+  if (consumableZone && consumableZone.items.length > 0) {
+    html += '<div class="ai-section">';
+    html += '<div class="ai-section-title">消耗速率 TOP5</div>';
+    var items = consumableZone.items.map(function(it) {
+      return { name: it.name, rate: calcUsageRate(it), unit: it.unit || '个' };
+    }).filter(function(it) { return it.rate > 0; })
+      .sort(function(a,b) { return b.rate - a.rate; })
+      .slice(0, 5);
+
+    if (items.length > 0) {
+      items.forEach(function(it) {
+        var perYear = (it.rate * 12).toFixed(1);
+        html += '<div class="ai-item"><span>' + escapeHtml(it.name) + '</span>';
+        html += '<span class="ai-val">' + perYear + it.unit + '/年</span></div>';
+      });
+    } else {
+      html += '<div class="ai-item"><span>数据收集中...</span><span>多用几次就有啦</span></div>';
+    }
+    html += '</div>';
+  }
+
+  // 2. 采购建议
+  html += '<div class="ai-section">';
+  html += '<div class="ai-section-title">采购建议</div>';
+  var buySuggestions = [], stopSuggestions = [];
+  DB.zones.forEach(function(zone) {
+    if (zone.type !== 'consumable') return;
+    zone.items.forEach(function(it) {
+      var rate = calcUsageRate(it);
+      var status = getItemStatus(it);
+      if (rate > 0 && it.stock !== undefined) {
+        var monthsLeft = it.stock / rate;
+        if (status.lowStock || monthsLeft < 1) {
+          var suggestQty = Math.ceil(rate * 6); // 建议买半年量
+          buySuggestions.push({ name: it.name, qty: suggestQty, unit: it.unit || '个', reason: '库存仅够' + monthsLeft.toFixed(1) + '月' });
+        }
+      }
+      if (status.overStock) {
+        stopSuggestions.push({ name: it.name, reason: '用到过期也用不完' });
+      }
+    });
+  });
+
+  if (buySuggestions.length > 0) {
+    html += '<div class="ai-suggest">';
+    html += '<strong>✅ 建议买：</strong><br>';
+    buySuggestions.slice(0, 5).forEach(function(s) {
+      html += '· ' + s.name + ' ' + s.qty + s.unit + '（' + s.reason + '）<br>';
+    });
+    html += '</div>';
+  }
+  if (stopSuggestions.length > 0) {
+    html += '<div class="ai-suggest" style="margin-top:8px">';
+    html += '<span class="stop-buy">⛔ 别买了：</span><br>';
+    stopSuggestions.slice(0, 3).forEach(function(s) {
+      html += '· ' + s.name + '（' + s.reason + '）<br>';
+    });
+    html += '</div>';
+  }
+  if (buySuggestions.length === 0 && stopSuggestions.length === 0) {
+    html += '<div class="ai-suggest">暂无采购建议。继续记录使用情况，数据会更准哦。</div>';
+  }
+  html += '</div>';
+
+  // 3. 花费分析
+  html += '<div class="ai-section">';
+  html += '<div class="ai-section-title">花费分析（今年）</div>';
+  var now = new Date();
+  var yearSpend = {};
+  var totalSpend = 0;
+  DB.zones.forEach(function(zone) {
+    zone.items.forEach(function(it) {
+      if (it.priceHistory) {
+        it.priceHistory.forEach(function(p) {
+          if (p.date) {
+            var d = new Date(p.date);
+            if (d.getFullYear() === now.getFullYear()) {
+              var zname = zone.name;
+              if (!yearSpend[zname]) yearSpend[zname] = 0;
+              yearSpend[zname] += (p.totalPrice || 0);
+              totalSpend += (p.totalPrice || 0);
+            }
+          }
+        });
+      }
+    });
+  });
+
+  if (totalSpend > 0) {
+    var sorted = Object.keys(yearSpend).map(function(k) {
+      return { name: k, amount: yearSpend[k] };
+    }).sort(function(a,b) { return b.amount - a.amount; });
+
+    sorted.forEach(function(s) {
+      var pct = (s.amount / totalSpend * 100).toFixed(0);
+      html += '<div class="ai-item"><span>' + s.name + '</span>';
+      html += '<span class="ai-val">¥' + s.amount.toFixed(0) + ' (' + pct + '%)</span></div>';
+    });
+    html += '<div class="ai-item" style="border-top:1px solid rgba(0,105,92,0.2)"><span>总计</span>';
+    html += '<span class="ai-val" style="color:#00695C;font-size:16px">¥' + totalSpend.toFixed(0) + '</span></div>';
+  } else {
+    html += '<div class="ai-suggest">今年还没有花费记录。</div>';
+  }
+  html += '</div>';
+
+  // 4. 大促倒计时
+  html += '<div class="ai-section">';
+  html += '<div class="ai-section-title">大促倒计时</div>';
+  var next618 = getNextPromo(6, 18);
+  var next1111 = getNextPromo(11, 11);
+  html += '<div class="ai-item"><span>618</span><span class="ai-val">' + next618 + '</span></div>';
+  html += '<div class="ai-item"><span>双十一</span><span class="ai-val">' + next1111 + '</span></div>';
+  html += '</div>';
+
+  html += '</div>';
+  return html;
+}
+
+function getNextPromo(month, day) {
+  var now = new Date();
+  var promo = new Date(now.getFullYear(), month - 1, day);
+  if (promo < now) promo = new Date(now.getFullYear() + 1, month - 1, day);
+  var days = Math.ceil((promo - now) / (1000 * 60 * 60 * 24));
+  if (days === 0) return '就是今天！';
+  return '还有' + days + '天';
+}
+
+// ========== 板块页渲染 ==========
+function renderZone() {
+  var zone = getZone(currentZoneId);
+  if (!zone) { showPage('home'); return; }
+  var html = '';
+
+  // 搜索栏
+  html += '<div class="search-bar">';
+  html += '<span class="search-icon">🔍</span>';
+  html += '<input type="text" placeholder="搜索物品..." value="' + escapeHtml(currentSearchQuery) + '" oninput="onSearch(this.value)">';
+  html += '</div>';
+
+  // 拥有量大数字（耐用品）
+  if (zone.type === 'durable') {
+    html += '<div class="zone-overview-num">' + zone.items.length + '</div>';
+    html += '<div class="zone-overview-label">你已拥有 ' + zone.items.length + ' 件' + zone.name + '</div>';
+  }
+
+  // 分类标签
+  html += '<div class="cat-tabs">';
+  html += '<div class="cat-tab ' + (currentCategoryId === 'all' ? 'active' : '') + '" onclick="selectCategory(\'all\')">全部</div>';
+  zone.categories.forEach(function(cat) {
+    html += '<div class="cat-tab ' + (currentCategoryId === cat.id ? 'active' : '') + '" onclick="selectCategory(\'' + cat.id + '\')">';
+    html += escapeHtml(cat.name);
+    html += '</div>';
+  });
+  html += '</div>';
+
+  // 物品网格
+  var items = getItemsByCategory(currentZoneId, currentCategoryId);
+  if (items.length === 0) {
+    html += '<div class="empty-state">';
+    html += '<div class="empty-icon">📦</div>';
+    html += '<div class="empty-text">还没有物品<br>点击右上角＋添加</div>';
+    html += '</div>';
+  } else {
+    html += '<div class="item-grid">';
+    items.forEach(function(it) {
+      html += renderItemCard(it, zone);
+    });
+    html += '</div>';
+  }
+
+  document.getElementById('zone-content').innerHTML = html;
+}
+
+function onSearch(q) {
+  currentSearchQuery = q;
+  renderZone();
+}
+
+function selectCategory(catId) {
+  currentCategoryId = catId;
+  renderZone();
+}
+
+// ========== 物品卡片渲染 ==========
+function renderItemCard(item, zone) {
+  var status = getItemStatus(item);
+  var html = '<div class="item-card" onclick="openCardDetail(\'' + zone.id + '\',\'' + item.id + '\')">';
+  // 照片
+  html += '<div class="card-photo">';
+  if (item.photos && item.photos.length > 0) {
+    html += '<img src="' + item.photos[0] + '">';
+  } else {
+    html += '📦';
+  }
+  html += '</div>';
+
+  // 角标
+  if (status.expired) {
+    html += '<div class="card-badge badge-expire">已过期</div>';
+  } else if (status.expiring) {
+    html += '<div class="card-badge badge-warn">' + status.daysLeft + '天</div>';
+  } else if (status.lowStock) {
+    html += '<div class="card-badge badge-low">告急</div>';
+  } else if (status.overStock) {
+    html += '<div class="card-badge badge-over">囤太多</div>';
+  }
+  // 耐用品闲置
+  if (zone.type === 'durable' && item.lastUsedDate) {
+    var days = daysBetween(new Date(item.lastUsedDate), new Date());
+    if (days > 180) {
+      html += '<div class="card-badge badge-idle">闲置</div>';
+    }
+  }
+  // 使用感受标记
+  if (item.feeling && item.feeling.rating) {
+    if (item.feeling.rating >= 4) {
+      html += '<div class="card-badge badge-good">👍</div>';
+    } else if (item.feeling.rating <= 2) {
+      html += '<div class="card-badge badge-bad">👎</div>';
+    }
+  }
+
+  // 卡片body
+  html += '<div class="card-body">';
+  html += '<div class="card-name">' + escapeHtml(item.name) + '</div>';
+
+  if (zone.type === 'consumable') {
+    // 消耗品正面：库存条 + 保质期
+    if (item.stock !== undefined) {
+      var threshold = item.stockThreshold || 1;
+      var maxBar = Math.max(item.stock, threshold * 3);
+      var pct = maxBar > 0 ? (item.stock / maxBar * 100) : 0;
+      var barClass = 'low';
+      if (status.overStock) barClass = 'over';
+      else if (pct > 60) barClass = 'high';
+      else if (pct > 30) barClass = 'mid';
+      html += '<div class="card-info">' + item.stock + (item.unit || '') + ' · ¥' + (item.currentPrice || 0) + '</div>';
+      html += '<div class="stock-bar ' + barClass + ' card-mini-bar"><div class="stock-fill" style="width:' + pct + '%"></div></div>';
+    }
+    if (status.daysLeft !== null && !status.expired) {
+      var shelfColor = status.daysLeft <= 30 ? 'var(--red)' : (status.daysLeft <= 90 ? 'var(--orange)' : 'var(--green)');
+      html += '<div class="card-info" style="color:' + shelfColor + ';font-weight:600">⏰ ' + status.daysLeft + '天</div>';
+    }
+  } else {
+    // 耐用品正面：存放位置 + 购买日期
+    if (item.location) {
+      html += '<div class="card-info">📍 ' + escapeHtml(item.location) + '</div>';
+    }
+    if (item.lastUsedDate) {
+      var days = daysBetween(new Date(item.lastUsedDate), new Date());
+      if (days > 180) {
+        html += '<div class="card-info" style="color:var(--purple);font-weight:600">🕐 ' + Math.floor(days/30) + '个月没用</div>';
+      }
+    }
+  }
+
+  html += '</div></div>';
+  return html;
+}
+
+// ========== 卡片详情（翻面）==========
+var currentDetailItem = null;
+var currentDetailZone = null;
+
+function openCardDetail(zoneId, itemId) {
+  var zone = getZone(zoneId);
+  var item = getItem(zoneId, itemId);
+  if (!zone || !item) return;
+  currentDetailItem = item;
+  currentDetailZone = zone;
+
+  renderCardFront(item, zone);
+  renderCardBack(item, zone);
+
+  document.getElementById('flip-inner').classList.remove('flipped');
+  document.getElementById('card-detail-overlay').classList.add('show');
+}
+
+function renderCardFront(item, zone) {
+  var html = '<div class="detail-front">';
+  html += '<div class="detail-photo">';
+  if (item.photos && item.photos.length > 0) {
+    html += '<img src="' + item.photos[0] + '">';
+  } else {
+    html += '📦';
+  }
+  html += '</div>';
+  html += '<div class="detail-body">';
+  html += '<div class="detail-name">' + escapeHtml(item.name) + '</div>';
+  var cat = getCategory(zone.id, item.categoryId);
+  html += '<div class="detail-cat">' + zone.icon + ' ' + zone.name + (cat ? ' · ' + cat.name : '') + '</div>';
+
+  if (zone.type === 'consumable') {
+    var status = getItemStatus(item);
+    if (item.stock !== undefined) {
+      var threshold = item.stockThreshold || 1;
+      var maxBar = Math.max(item.stock, threshold * 3);
+      var pct = maxBar > 0 ? (item.stock / maxBar * 100) : 0;
+      var barClass = 'low';
+      if (status.overStock) barClass = 'over';
+      else if (pct > 60) barClass = 'high';
+      else if (pct > 30) barClass = 'mid';
+      html += '<div style="margin-top:14px">';
+      html += '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:13px;color:var(--text-secondary)">库存</span><span style="font-weight:700">' + item.stock + (item.unit||'') + '</span></div>';
+      html += '<div class="stock-bar ' + barClass + '"><div class="stock-fill" style="width:' + pct + '%"></div></div>';
+      html += '</div>';
+    }
+    if (status.daysLeft !== null) {
+      var shelfColor = status.expired ? 'var(--red)' : (status.daysLeft <= 30 ? 'var(--red)' : (status.daysLeft <= 90 ? 'var(--orange)' : 'var(--green)'));
+      html += '<div style="margin-top:10px;text-align:center;padding:10px;border-radius:8px;background:' + shelfColor + '15;color:' + shelfColor + ';font-weight:700">';
+      if (status.expired) html += '⚠️ 已过期';
+      else html += '⏰ 还有 ' + status.daysLeft + ' 天过期';
+      html += '</div>';
+    }
+  } else {
+    // 耐用品正面：拥有量提醒
+    var catItems = zone.items.filter(function(it) { return it.categoryId === item.categoryId; });
+    html += '<div style="margin-top:14px;text-align:center;padding:12px;border-radius:8px;background:rgba(0,122,255,0.08);color:var(--accent);font-weight:700">';
+    html += '同分类已有 ' + catItems.length + ' 件';
+    html += '</div>';
+    if (item.location) {
+      html += '<div style="margin-top:8px;text-align:center;font-size:13px;color:var(--text-secondary)">📍 ' + escapeHtml(item.location) + '</div>';
+    }
+  }
+
+  html += '<div class="detail-tap-hint">👆 点击翻面查看详情</div>';
+  html += '</div></div>';
+  document.getElementById('flip-front').innerHTML = html;
+}
+
+function renderCardBack(item, zone) {
+  var html = '<div class="detail-back">';
+  html += '<div class="back-header">';
+  html += '<div class="back-title">' + escapeHtml(item.name) + '</div>';
+  html += '<button class="back-close" onclick="closeCardDetail()">✕</button>';
+  html += '</div>';
+
+  // === 基本信息 ===
+  html += '<div class="back-section">';
+  html += '<div class="back-section-title">基本信息</div>';
+  if (item.photos && item.photos.length > 1) {
+    html += '<div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:10px;scrollbar-width:none">';
+    item.photos.forEach(function(p) {
+      html += '<img src="' + p + '" style="width:80px;height:80px;border-radius:8px;object-fit:cover;flex-shrink:0">';
+    });
+    html += '</div>';
+  }
+  html += '<div class="back-row"><span class="back-label">分类</span><span class="back-value">' + (getCategory(zone.id, item.categoryId)||{}).name + '</span></div>';
+  if (item.location) html += '<div class="back-row"><span class="back-label">存放位置</span><span class="back-value">' + escapeHtml(item.location) + '</span></div>';
+  if (item.notes) html += '<div class="back-row"><span class="back-label">备注</span><span class="back-value">' + escapeHtml(item.notes) + '</span></div>';
+  html += '<div class="back-row"><span class="back-label">领地类型</span><span class="back-value">' + (zone.type === 'consumable' ? '补给品' : '耐用品') + '</span></div>';
+  html += '</div>';
+
+  // === 库存与价格 ===
+  if (zone.type === 'consumable') {
+    html += '<div class="back-section">';
+    html += '<div class="back-section-title">库存与价格</div>';
+    if (item.stock !== undefined) html += '<div class="back-row"><span class="back-label">当前库存</span><span class="back-value">' + item.stock + (item.unit||'') + '</span></div>';
+    if (item.currentPrice) html += '<div class="back-row"><span class="back-label">当前单价</span><span class="back-value">¥' + item.currentPrice + '</span></div>';
+    if (item.channel) html += '<div class="back-row"><span class="back-label">购买渠道</span><span class="back-value">' + escapeHtml(item.channel) + '</span></div>';
+    if (item.stockThreshold) html += '<div class="back-row"><span class="back-label">告急阈值</span><span class="back-value">' + item.stockThreshold + (item.unit||'') + '</span></div>';
+    if (item.shelfLife) html += '<div class="back-row"><span class="back-label">保质期</span><span class="back-value">' + item.shelfLife + '个月</span></div>';
+    if (item.productionDate) html += '<div class="back-row"><span class="back-label">生产日期</span><span class="back-value">' + formatDate(item.productionDate) + '</span></div>';
+    html += '</div>';
+
+    // === 开封 ===
+    html += '<div class="back-section">';
+    html += '<div class="back-section-title">使用周期</div>';
+    if (item.opened) {
+      if (item.usedUp) {
+        // 已用完
+        html += '<div class="back-row"><span class="back-label">状态</span><span class="back-value" style="color:var(--green)">✓ 已用完</span></div>';
+        if (item.openDate) html += '<div class="back-row"><span class="back-label">开始使用</span><span class="back-value">' + formatDate(item.openDate) + '</span></div>';
+        if (item.finishDate) html += '<div class="back-row"><span class="back-label">用完日期</span><span class="back-value">' + formatDate(item.finishDate) + '</span></div>';
+        if (item.openDate && item.finishDate) {
+          var usedDays = daysBetween(new Date(item.openDate), new Date(item.finishDate));
+          html += '<div class="back-row"><span class="back-label">耗时</span><span class="back-value">' + usedDays + '天</span></div>';
+        }
+        html += '<button class="open-btn done" onclick="openItem(\'' + item.id + '\')">🔓 开封下一个</button>';
+      } else {
+        // 使用中
+        html += '<div class="back-row"><span class="back-label">状态</span><span class="back-value" style="color:var(--orange)">使用中</span></div>';
+        if (item.openDate) html += '<div class="back-row"><span class="back-label">开始使用</span><span class="back-value">' + formatDate(item.openDate) + '</span></div>';
+        if (item.openQty) html += '<div class="back-row"><span class="back-label">开封数量</span><span class="back-value">' + item.openQty + (item.unit||'') + '</span></div>';
+        var usingDays = daysBetween(new Date(item.openDate), new Date());
+        html += '<div class="back-row"><span class="back-label">已使用</span><span class="back-value">' + usingDays + '天</span></div>';
+        html += '<button class="open-btn" onclick="openItem(\'' + item.id + '\')">✅ 用完了</button>';
+      }
+    } else {
+      html += '<div class="back-row"><span class="back-label">状态</span><span class="back-value">未开封</span></div>';
+      html += '<button class="open-btn" onclick="openItem(\'' + item.id + '\')">🔓 点击开封</button>';
+    }
+    html += '</div>';
+
+    // === 使用记录 ===
+    if (item.usageRecords && item.usageRecords.length > 0) {
+      html += '<div class="back-section">';
+      html += '<div class="back-section-title">使用记录 (' + item.usageRecords.length + '次)</div>';
+      var rate = calcUsageRate(item);
+      if (rate > 0) {
+        html += '<div class="back-row"><span class="back-label">月消耗量</span><span class="back-value">' + rate.toFixed(1) + (item.unit||'') + '/月</span></div>';
+        html += '<div class="back-row"><span class="back-label">年消耗量</span><span class="back-value">' + (rate*12).toFixed(1) + (item.unit||'') + '/年</span></div>';
+      }
+      html += '<div class="usage-log" style="margin-top:8px">';
+      item.usageRecords.slice().reverse().slice(0, 5).forEach(function(r) {
+        var startStr = r.startDate ? formatDate(r.startDate) : (r.date ? formatDate(r.date) : '');
+        if (r.endDate) {
+          var days = daysBetween(new Date(r.startDate), new Date(r.endDate));
+          html += '<div class="open-record">📅 ' + startStr + ' → ' + formatDate(r.endDate) + ' · ' + days + '天 · ' + (r.qty||1) + (item.unit||'') + '</div>';
+        } else if (startStr) {
+          html += '<div class="open-record">📅 ' + startStr + ' · 使用中 · ' + (r.qty||1) + (item.unit||'') + '</div>';
+        }
+      });
+      html += '</div>';
+      html += '</div>';
+    }
+
+    // === 价格历史 ===
+    if (item.priceHistory && item.priceHistory.length > 0) {
+      html += '<div class="back-section">';
+      html += '<div class="back-section-title">价格历史 (' + item.priceHistory.length + '次)</div>';
+      var prices = item.priceHistory.map(function(p) { return p.unitPrice || 0; });
+      var minPrice = Math.min.apply(null, prices);
+      var avgPrice = prices.reduce(function(s,p) { return s+p; }, 0) / prices.length;
+      html += '<div class="back-row"><span class="back-label">历史最低</span><span class="back-value" style="color:var(--green)">¥' + minPrice + '</span></div>';
+      html += '<div class="back-row"><span class="back-label">均价</span><span class="back-value">¥' + avgPrice.toFixed(1) + '</span></div>';
+      html += '<div style="margin-top:8px">';
+      item.priceHistory.slice().reverse().slice(0, 5).forEach(function(p) {
+        html += '<div class="open-record">📅 ' + formatDate(p.date) + ' · ' + escapeHtml(p.channel||'') + ' · ¥' + (p.unitPrice||0) + '/' + (item.unit||'个');
+        if (p.notes) html += ' · ' + escapeHtml(p.notes);
+        html += '</div>';
+      });
+      html += '</div>';
+      html += '</div>';
+    }
+  }
+
+  // === 使用感受（可选）===
+  html += '<div class="back-section">';
+  html += '<div class="back-section-title">使用感受（选填）</div>';
+  if (item.feeling) {
+    if (item.feeling.rating) {
+      html += '<div class="back-row"><span class="back-label">评分</span><span class="back-value">';
+      for (var i = 1; i <= 5; i++) html += i <= item.feeling.rating ? '⭐' : '☆';
+      html += '</span></div>';
+    }
+    if (item.feeling.tags && item.feeling.tags.length > 0) {
+      html += '<div class="back-row"><span class="back-label">标签</span><span class="back-value">' + item.feeling.tags.map(escapeHtml).join('、') + '</span></div>';
+    }
+    if (item.feeling.notes) {
+      html += '<div class="back-row"><span class="back-label">心得</span><span class="back-value">' + escapeHtml(item.feeling.notes) + '</span></div>';
+    }
+  } else {
+    html += '<div class="back-row"><span class="back-label" style="color:var(--text-tertiary)">暂无记录</span></div>';
+  }
+  html += '<button class="btn btn-outline btn-sm" style="margin-top:8px;width:100%" onclick="openFeelingForm(\'' + item.id + '\')">✏ 编辑使用感受</button>';
+  html += '</div>';
+
+  // === 耐用品：最后使用 ===
+  if (zone.type === 'durable') {
+    html += '<div class="back-section">';
+    html += '<div class="back-section-title">使用情况</div>';
+    if (item.lastUsedDate) {
+      var days = daysBetween(new Date(item.lastUsedDate), new Date());
+      html += '<div class="back-row"><span class="back-label">最后使用</span><span class="back-value">' + formatDate(item.lastUsedDate) + '</span></div>';
+      if (days > 180) {
+        html += '<div style="padding:8px;border-radius:8px;background:rgba(175,82,222,0.1);color:var(--purple);font-size:13px;font-weight:600;margin-top:4px">🕐 已' + Math.floor(days/30) + '个月没用，考虑断舍离？</div>';
+      }
+    } else {
+      html += '<div class="back-row"><span class="back-label" style="color:var(--text-tertiary)">未记录</span></div>';
+    }
+    html += '<button class="btn btn-outline btn-sm" style="margin-top:8px;width:100%" onclick="markUsed(\'' + item.id + '\')">📍 标记今天用过</button>';
+    html += '</div>';
+  }
+
+  // === 操作按钮 ===
+  html += '<div style="display:flex;gap:8px;margin-top:8px">';
+  html += '<button class="btn btn-outline" style="flex:1" onclick="editItem(\'' + item.id + '\')">✏ 编辑</button>';
+  if (zone.type === 'consumable') {
+    html += '<button class="btn btn-outline" style="flex:1" onclick="openRestockForm(\'' + item.id + '\')">📦 补货</button>';
+  }
+  html += '</div>';
+  html += '<button class="btn btn-danger" style="width:100%;margin-top:8px" onclick="deleteItem(\'' + item.id + '\')">🗑 删除</button>';
+
+  html += '</div>';
+  document.getElementById('flip-back').innerHTML = html;
+}
+
+function flipCard() {
+  document.getElementById('flip-inner').classList.toggle('flipped');
+}
+
+// 点击正面翻面
+document.addEventListener('DOMContentLoaded', function() {
+  loadDB();
+  showPage('home');
+
+  document.getElementById('flip-front').addEventListener('click', function(e) {
+    if (e.target.closest('.back-close')) return;
+    flipCard();
+  });
+  document.getElementById('flip-back').addEventListener('click', function(e) {
+    // 背面点击空白处不翻回，有按钮关闭
+  });
+  document.getElementById('card-detail-overlay').addEventListener('click', function(e) {
+    if (e.target === this) closeCardDetail();
+  });
+  document.getElementById('modal-overlay').addEventListener('click', function(e) {
+    if (e.target === this) closeModal();
+  });
+});
+
+function closeCardDetail() {
+  document.getElementById('card-detail-overlay').classList.remove('show');
+  currentDetailItem = null;
+  currentDetailZone = null;
+}
+
+// ========== 开封 ==========
+function openItem(itemId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  if (item.opened && !item.usedUp) {
+    // 已开封但未用完 → 点"用完了"
+    var html = '<div class="modal-handle"></div>';
+    html += '<div class="modal-title">✅ 用完了</div>';
+    html += '<div style="text-align:center;margin-bottom:16px">';
+    html += '<div style="font-size:16px;font-weight:700">' + escapeHtml(item.name) + '</div>';
+    html += '<div style="font-size:13px;color:var(--text-secondary)">开封日期：' + (item.openDate?formatDate(item.openDate):'') + '</div>';
+    html += '</div>';
+    html += '<div class="form-group">';
+    html += '<label class="form-label">用完日期</label>';
+    html += '<input type="date" class="form-input" id="finish-date" value="' + new Date().toISOString().split('T')[0] + '">';
+    html += '</div>';
+    html += '<button class="btn btn-primary btn-full" onclick="confirmFinish(\'' + itemId + '\')">确认用完</button>';
+
+    document.getElementById('modal-content').innerHTML = html;
+    document.getElementById('modal-overlay').classList.add('show');
+    return;
+  }
+  if (item.usedUp) {
+    // 已经用完了，可以开封下一个
+  }
+
+  // 选择开封数量
+  var maxQty = item.stock || 1;
+  var openQty = 1;
+  var html = '<div class="modal-handle"></div>';
+  html += '<div class="modal-title">🔓 开封使用</div>';
+  html += '<div style="text-align:center;margin-bottom:16px">';
+  html += '<div style="font-size:13px;color:var(--text-secondary)">当前库存：' + item.stock + (item.unit||'') + '</div>';
+  html += '</div>';
+  html += '<div class="stepper" style="margin-bottom:16px">';
+  html += '<button onclick="adjustOpenQty(-1)">−</button>';
+  html += '<span class="stepper-val" id="open-qty-val">1</span>';
+  html += '<button onclick="adjustOpenQty(1)">＋</button>';
+  html += '</div>';
+  html += '<div class="form-group">';
+  html += '<label class="form-label">开始使用日期</label>';
+  html += '<input type="date" class="form-input" id="open-date" value="' + new Date().toISOString().split('T')[0] + '">';
+  html += '</div>';
+  html += '<button class="btn btn-primary btn-full" onclick="confirmOpen(\'' + itemId + '\')">确认开封</button>';
+
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('show');
+
+  window._openQty = 1;
+  window._maxOpenQty = maxQty;
+}
+
+function adjustOpenQty(delta) {
+  window._openQty = Math.max(1, Math.min(window._maxOpenQty, window._openQty + delta));
+  document.getElementById('open-qty-val').textContent = window._openQty;
+}
+
+function confirmOpen(itemId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  var qty = window._openQty || 1;
+  var date = document.getElementById('open-date').value;
+
+  item.opened = true;
+  item.usedUp = false;
+  item.openDate = new Date(date).toISOString();
+  item.openQty = qty;
+  item.stock = Math.max(0, (item.stock || 0) - qty);
+  if (!item.usageRecords) item.usageRecords = [];
+  item.usageRecords.push({ startDate: new Date(date).toISOString(), endDate: null, qty: qty });
+
+  saveDB();
+  closeModal();
+  openCardDetail(currentZoneId, itemId);
+  toast('已开封，库存-' + qty + '。用完后来点「用完了」');
+}
+
+function confirmFinish(itemId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  var date = document.getElementById('finish-date').value;
+
+  item.usedUp = true;
+  item.finishDate = new Date(date).toISOString();
+
+  // 更最近一条使用记录的结束日期
+  if (item.usageRecords && item.usageRecords.length > 0) {
+    var lastRecord = item.usageRecords[item.usageRecords.length - 1];
+    if (!lastRecord.endDate) {
+      lastRecord.endDate = new Date(date).toISOString();
+    }
+  }
+
+  saveDB();
+  closeModal();
+  openCardDetail(currentZoneId, itemId);
+  toast('已记录用完。消耗数据已更新');
+}
+
+// ========== 补货 ==========
+function openRestockForm(itemId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  closeCardDetail();
+
+  var html = '<div class="modal-handle"></div>';
+  html += '<div class="modal-title">📦 补货</div>';
+  html += '<div style="text-align:center;margin-bottom:16px">';
+  html += '<div style="font-size:16px;font-weight:700">' + escapeHtml(item.name) + '</div>';
+  html += '<div style="font-size:13px;color:var(--text-secondary)">当前库存：' + (item.stock||0) + (item.unit||'') + '</div>';
+  html += '</div>';
+
+  // 价格对比
+  if (item.priceHistory && item.priceHistory.length > 0) {
+    var prices = item.priceHistory.map(function(p) { return p.unitPrice || 0; });
+    var minPrice = Math.min.apply(null, prices);
+    var lastPrice = prices[prices.length - 1];
+    html += '<div class="price-compare price-first">历史最低 ¥' + minPrice + ' · 上次 ¥' + lastPrice + '</div>';
+  }
+
+  html += '<div class="form-row">';
+  html += '<div class="form-group"><label class="form-label">补货数量</label><input type="number" class="form-input" id="restock-qty" value="1" min="0" step="0.5"></div>';
+  html += '<div class="form-group"><label class="form-label">单位</label><input type="text" class="form-input" id="restock-unit" value="' + escapeHtml(item.unit||'个') + '"></div>';
+  html += '</div>';
+  html += '<div class="form-row">';
+  html += '<div class="form-group"><label class="form-label">总价</label><input type="number" class="form-input" id="restock-total" value="" placeholder="0"></div>';
+  html += '<div class="form-group"><label class="form-label">单价（自动算）</label><input type="number" class="form-input" id="restock-unit-price" value="" placeholder="自动"></div>';
+  html += '</div>';
+  html += '<div class="form-group"><label class="form-label">购买渠道</label>';
+  html += '<select class="form-select" id="restock-channel">';
+  ['淘宝','京东','拼多多','线下','其他'].forEach(function(c) {
+    html += '<option value="' + c + '"' + (item.channel===c?' selected':'') + '>' + c + '</option>';
+  });
+  html += '</select></div>';
+  html += '<div class="form-group"><label class="form-label">购买日期</label><input type="date" class="form-input" id="restock-date" value="' + new Date().toISOString().split('T')[0] + '"></div>';
+  html += '<div class="form-group"><label class="form-label">价格备注（选填）</label>';
+  html += '<textarea class="form-textarea" id="restock-notes" placeholder="如：双十一满300减50"></textarea></div>';
+  html += '<div class="form-group"><label class="form-label">订单截图（选填）</label>';
+  html += '<div class="photo-upload" id="restock-photos">';
+  html += '<div class="photo-slot" onclick="uploadRestockPhoto()">📷</div>';
+  html += '</div></div>';
+
+  // 实时价格对比
+  html += '<div id="restock-compare"></div>';
+
+  html += '<button class="btn btn-primary btn-full" onclick="confirmRestock(\'' + itemId + '\')">确认补货</button>';
+
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('show');
+
+  // 监听价格变化
+  document.getElementById('restock-total').addEventListener('input', function() { updateRestockCompare(item); });
+  document.getElementById('restock-qty').addEventListener('input', function() { updateRestockCompare(item); });
+}
+
+function updateRestockCompare(item) {
+  var qty = parseFloat(document.getElementById('restock-qty').value) || 0;
+  var total = parseFloat(document.getElementById('restock-total').value) || 0;
+  var unitPrice = qty > 0 ? total / qty : 0;
+  document.getElementById('restock-unit-price').value = unitPrice.toFixed(1);
+
+  var compareDiv = document.getElementById('restock-compare');
+  if (unitPrice > 0 && item.priceHistory && item.priceHistory.length > 0) {
+    var prices = item.priceHistory.map(function(p) { return p.unitPrice || 0; });
+    var minPrice = Math.min.apply(null, prices);
+    var lastPrice = prices[prices.length - 1];
+
+    if (unitPrice < minPrice) {
+      compareDiv.innerHTML = '<div class="price-compare price-cheaper">🎉 新低！比历史最低 ¥' + minPrice + ' 便宜 ¥' + (minPrice - unitPrice).toFixed(1) + '</div>';
+    } else if (unitPrice < lastPrice) {
+      compareDiv.innerHTML = '<div class="price-compare price-cheaper">✓ 比上次 ¥' + lastPrice + ' 便宜</div>';
+    } else if (unitPrice > lastPrice) {
+      compareDiv.innerHTML = '<div class="price-compare price-expensive">⚠ 比上次 ¥' + lastPrice + ' 贵 ¥' + (unitPrice - lastPrice).toFixed(1) + '</div>';
+    } else {
+      compareDiv.innerHTML = '<div class="price-compare price-same">和上次价格相同</div>';
+    }
+  }
+}
+
+var restockPhotos = [];
+function uploadRestockPhoto() {
+  var input = document.getElementById('photo-input');
+  input.onchange = function(e) {
+    var files = e.target.files;
+    for (var i = 0; i < files.length && restockPhotos.length < 3; i++) {
+      compressImage(files[i], function(dataUrl) {
+        restockPhotos.push(dataUrl);
+        renderRestockPhotos();
+      });
+    }
+    input.value = '';
+  };
+  input.click();
+}
+
+function renderRestockPhotos() {
+  var container = document.getElementById('restock-photos');
+  var html = '';
+  restockPhotos.forEach(function(p, i) {
+    html += '<div class="photo-slot has-photo"><img src="' + p + '"><button class="remove-photo" onclick="removeRestockPhoto(' + i + ')">✕</button></div>';
+  });
+  if (restockPhotos.length < 3) {
+    html += '<div class="photo-slot" onclick="uploadRestockPhoto()">📷</div>';
+  }
+  container.innerHTML = html;
+}
+
+function removeRestockPhoto(idx) {
+  restockPhotos.splice(idx, 1);
+  renderRestockPhotos();
+}
+
+function confirmRestock(itemId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  var qty = parseFloat(document.getElementById('restock-qty').value) || 0;
+  var total = parseFloat(document.getElementById('restock-total').value) || 0;
+  var unitPrice = qty > 0 ? total / qty : 0;
+  var channel = document.getElementById('restock-channel').value;
+  var date = document.getElementById('restock-date').value;
+  var notes = document.getElementById('restock-notes').value;
+  var unit = document.getElementById('restock-unit').value;
+
+  if (qty <= 0) { toast('请输入数量'); return; }
+
+  item.unit = unit;
+  item.stock = (item.stock || 0) + qty;
+  item.currentPrice = unitPrice.toFixed(1);
+  item.channel = channel;
+  if (!item.priceHistory) item.priceHistory = [];
+  item.priceHistory.push({
+    date: new Date(date).toISOString(),
+    channel: channel,
+    quantity: qty,
+    totalPrice: total,
+    unitPrice: parseFloat(unitPrice.toFixed(1)),
+    notes: notes,
+    attachments: restockPhotos.slice()
+  });
+
+  saveDB();
+  closeModal();
+  restockPhotos = [];
+  toast('补货成功 +' + qty);
+  renderZone();
+}
+
+// ========== 物品表单 ==========
+var editingItemId = null;
+var itemPhotos = [];
+
+function openItemForm(itemId) {
+  editingItemId = itemId || null;
+  itemPhotos = [];
+  var zone = getZone(currentZoneId);
+  var item = itemId ? getItem(currentZoneId, itemId) : null;
+
+  var html = '<div class="modal-handle"></div>';
+  html += '<div class="modal-title">' + (item ? '编辑物品' : '添加物品') + '</div>';
+
+  // 照片
+  html += '<div class="form-group"><label class="form-label">照片（最多9张）</label>';
+  html += '<div class="photo-upload" id="item-photos">';
+  html += '<div class="photo-slot" onclick="uploadItemPhoto()">📷</div>';
+  html += '</div></div>';
+
+  html += '<div class="form-group"><label class="form-label">名称</label>';
+  html += '<input type="text" class="form-input" id="item-name" value="' + (item?escapeHtml(item.name):'') + '" placeholder="如：洗发水"></div>';
+
+  html += '<div class="form-group"><label class="form-label">分类</label>';
+  html += '<select class="form-select" id="item-category">';
+  zone.categories.forEach(function(c) {
+    html += '<option value="' + c.id + '"' + (item&&item.categoryId===c.id?' selected':'') + '>' + escapeHtml(c.name) + '</option>';
+  });
+  html += '</select></div>';
+
+  html += '<div class="form-row">';
+  html += '<div class="form-group"><label class="form-label">库存数量</label><input type="number" class="form-input" id="item-stock" value="' + (item?(item.stock||0):0) + '" step="0.5"></div>';
+  html += '<div class="form-group"><label class="form-label">单位</label><input type="text" class="form-input" id="item-unit" value="' + (item?escapeHtml(item.unit||''):'个') + '"></div>';
+  html += '</div>';
+
+  html += '<div class="form-row">';
+  html += '<div class="form-group"><label class="form-label">单价</label><input type="number" class="form-input" id="item-price" value="' + (item?(item.currentPrice||''):'') + '"></div>';
+  html += '<div class="form-group"><label class="form-label">购买渠道</label>';
+  html += '<select class="form-select" id="item-channel">';
+  ['','淘宝','京东','拼多多','线下','其他'].forEach(function(c) {
+    html += '<option value="' + c + '"' + (item&&item.channel===c?' selected':'') + '>' + (c||'请选择') + '</option>';
+  });
+  html += '</select></div>';
+  html += '</div>';
+
+  html += '<div class="form-group"><label class="form-label">存放位置（选填）</label>';
+  html += '<input type="text" class="form-input" id="item-location" value="' + (item?escapeHtml(item.location||''):'') + '" placeholder="如：衣柜A层"></div>';
+
+  if (zone.type === 'consumable') {
+    html += '<div class="form-row">';
+    html += '<div class="form-group"><label class="form-label">保质期（月）</label><input type="number" class="form-input" id="item-shelf" value="' + (item?(item.shelfLife||''):'') + '" placeholder="如：12"></div>';
+    html += '<div class="form-group"><label class="form-label">生产日期</label><input type="date" class="form-input" id="item-prod-date" value="' + (item&&item.productionDate?item.productionDate.split('T')[0]:'') + '"></div>';
+    html += '</div>';
+    html += '<div class="form-group"><label class="form-label">库存告急阈值</label><input type="number" class="form-input" id="item-threshold" value="' + (item?(item.stockThreshold||1):1) + '" step="0.5"></div>';
+  }
+
+  html += '<div class="form-group"><label class="form-label">备注（选填）</label>';
+  html += '<textarea class="form-textarea" id="item-notes" placeholder="...">' + (item?escapeHtml(item.notes||''):'') + '</textarea></div>';
+
+  html += '<button class="btn btn-primary btn-full" onclick="saveItem()">' + (item?'保存修改':'添加') + '</button>';
+  if (item) {
+    html += '<button class="btn btn-danger btn-full" style="margin-top:8px" onclick="deleteItem(\'' + item.id + '\')">删除</button>';
+  }
+
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('show');
+
+  if (item && item.photos) {
+    itemPhotos = item.photos.slice();
+    renderItemPhotos();
+  }
+}
+
+function uploadItemPhoto() {
+  var input = document.getElementById('photo-input');
+  input.onchange = function(e) {
+    var files = e.target.files;
+    for (var i = 0; i < files.length && itemPhotos.length < 9; i++) {
+      compressImage(files[i], function(dataUrl) {
+        itemPhotos.push(dataUrl);
+        renderItemPhotos();
+      });
+    }
+    input.value = '';
+  };
+  input.click();
+}
+
+function renderItemPhotos() {
+  var container = document.getElementById('item-photos');
+  var html = '';
+  itemPhotos.forEach(function(p, i) {
+    html += '<div class="photo-slot has-photo"><img src="' + p + '"><button class="remove-photo" onclick="removeItemPhoto(' + i + ')">✕</button></div>';
+  });
+  if (itemPhotos.length < 9) {
+    html += '<div class="photo-slot" onclick="uploadItemPhoto()">📷</div>';
+  }
+  container.innerHTML = html;
+}
+
+function removeItemPhoto(idx) {
+  itemPhotos.splice(idx, 1);
+  renderItemPhotos();
+}
+
+function saveItem() {
+  var zone = getZone(currentZoneId);
+  var name = document.getElementById('item-name').value.trim();
+  if (!name) { toast('请输入名称'); return; }
+
+  var data = {
+    name: name,
+    categoryId: document.getElementById('item-category').value,
+    stock: parseFloat(document.getElementById('item-stock').value) || 0,
+    unit: document.getElementById('item-unit').value || '个',
+    currentPrice: parseFloat(document.getElementById('item-price').value) || 0,
+    channel: document.getElementById('item-channel').value,
+    location: document.getElementById('item-location').value,
+    notes: document.getElementById('item-notes').value,
+    photos: itemPhotos.slice()
+  };
+
+  if (zone.type === 'consumable') {
+    data.shelfLife = parseInt(document.getElementById('item-shelf').value) || null;
+    var prodDate = document.getElementById('item-prod-date').value;
+    data.productionDate = prodDate ? new Date(prodDate).toISOString() : null;
+    data.stockThreshold = parseFloat(document.getElementById('item-threshold').value) || 1;
+  }
+
+  if (editingItemId) {
+    var item = getItem(currentZoneId, editingItemId);
+    Object.assign(item, data);
+  } else {
+    data.id = genId();
+    data.usageRecords = [];
+    data.priceHistory = [];
+    data.createdAt = new Date().toISOString();
+    if (data.currentPrice > 0 && data.stock > 0) {
+      data.priceHistory.push({
+        date: new Date().toISOString(),
+        channel: data.channel,
+        quantity: data.stock,
+        totalPrice: data.currentPrice * data.stock,
+        unitPrice: data.currentPrice,
+        notes: ''
+      });
+    }
+    zone.items.push(data);
+  }
+
+  saveDB();
+  closeModal();
+  renderZone();
+  toast(editingItemId ? '已保存' : '已添加');
+}
+
+function editItem(itemId) {
+  closeCardDetail();
+  openItemForm(itemId);
+}
+
+function deleteItem(itemId) {
+  if (!confirm('确定删除？此操作不可撤销。')) return;
+  var zone = getZone(currentZoneId);
+  zone.items = zone.items.filter(function(it) { return it.id !== itemId; });
+  saveDB();
+  closeModal();
+  closeCardDetail();
+  renderZone();
+  toast('已删除');
+}
+
+// ========== 使用感受 ==========
+function openFeelingForm(itemId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  closeCardDetail();
+
+  var f = item.feeling || { rating: 0, tags: [], notes: '' };
+  var presetTags = ['回购','避雷','冬季款','夏季款','控油','保湿','清爽','滋润','温和','香味好','无味','性价比高','性价比低'];
+
+  var html = '<div class="modal-handle"></div>';
+  html += '<div class="modal-title">✏ 使用感受</div>';
+  html += '<div style="text-align:center;margin-bottom:16px;font-size:16px;font-weight:700">' + escapeHtml(item.name) + '</div>';
+
+  html += '<div class="form-group"><label class="form-label">评分</label>';
+  html += '<div class="stars" id="feeling-stars" style="justify-content:center">';
+  for (var i = 1; i <= 5; i++) {
+    html += '<span class="star ' + (i<=f.rating?'filled':'') + '" onclick="setRating(' + i + ')">★</span>';
+  }
+  html += '</div></div>';
+
+  html += '<div class="form-group"><label class="form-label">标签（点选）</label>';
+  html += '<div class="tag-row" id="feeling-tags">';
+  presetTags.forEach(function(t) {
+    html += '<span class="tag ' + (f.tags.indexOf(t)>=0?'selected':'') + '" onclick="toggleTag(this,\'' + t + '\')">' + t + '</span>';
+  });
+  html += '</div></div>';
+
+  html += '<div class="form-group"><label class="form-label">心得（选填）</label>';
+  html += '<textarea class="form-textarea" id="feeling-notes" placeholder="一句话记录感受...">' + escapeHtml(f.notes) + '</textarea></div>';
+
+  html += '<button class="btn btn-primary btn-full" onclick="saveFeeling(\'' + itemId + '\')">保存</button>';
+  html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">取消</button>';
+
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('show');
+
+  window._feelingRating = f.rating;
+  window._feelingTags = f.tags.slice();
+}
+
+function setRating(n) {
+  window._feelingRating = n;
+  var stars = document.querySelectorAll('#feeling-stars .star');
+  stars.forEach(function(s, i) { s.classList.toggle('filled', i < n); });
+}
+
+function toggleTag(el, tag) {
+  var idx = window._feelingTags.indexOf(tag);
+  if (idx >= 0) { window._feelingTags.splice(idx, 1); el.classList.remove('selected'); }
+  else { window._feelingTags.push(tag); el.classList.add('selected'); }
+}
+
+function saveFeeling(itemId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  item.feeling = {
+    rating: window._feelingRating || 0,
+    tags: window._feelingTags || [],
+    notes: document.getElementById('feeling-notes').value
+  };
+  saveDB();
+  closeModal();
+  openCardDetail(currentZoneId, itemId);
+  toast('感受已保存');
+}
+
+// ========== 标记使用（耐用品）==========
+function markUsed(itemId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  item.lastUsedDate = new Date().toISOString();
+  saveDB();
+  openCardDetail(currentZoneId, itemId);
+  toast('已标记今天用过');
+}
+
+// ========== 分类管理 ==========
+function openCategoryManager() {
+  var zone = getZone(currentZoneId);
+  var html = '<div class="modal-handle"></div>';
+  html += '<div class="modal-title">分类管理</div>';
+  html += '<div id="cat-list">';
+  zone.categories.forEach(function(cat) {
+    var count = zone.items.filter(function(it) { return it.categoryId === cat.id; }).length;
+    html += '<div class="setting-row" style="border-radius:0">';
+    html += '<div><span class="setting-label">' + escapeHtml(cat.name) + '</span><br><span class="setting-value">' + count + '件</span></div>';
+    html += '<div style="display:flex;gap:8px">';
+    html += '<button class="btn btn-outline btn-sm" onclick="editCategory(\'' + cat.id + '\')">改名</button>';
+    html += '<button class="btn btn-danger btn-sm" onclick="deleteCategory(\'' + cat.id + '\')">删</button>';
+    html += '</div></div>';
+  });
+  html += '</div>';
+  html += '<button class="btn btn-primary btn-full" style="margin-top:16px" onclick="addCategory()">＋ 添加分类</button>';
+  html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">完成</button>';
+
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('show');
+}
+
+function addCategory() {
+  var name = prompt('分类名称');
+  if (!name || !name.trim()) return;
+  var zone = getZone(currentZoneId);
+  zone.categories.push({ id: genId(), name: name.trim() });
+  saveDB();
+  openCategoryManager();
+  toast('已添加');
+}
+
+function editCategory(catId) {
+  var zone = getZone(currentZoneId);
+  var cat = getCategory(zone.id, catId);
+  var name = prompt('新名称', cat.name);
+  if (!name || !name.trim()) return;
+  cat.name = name.trim();
+  saveDB();
+  openCategoryManager();
+  toast('已改名');
+}
+
+function deleteCategory(catId) {
+  var zone = getZone(currentZoneId);
+  var count = zone.items.filter(function(it) { return it.categoryId === catId; }).length;
+  if (count > 0) {
+    toast('该分类下还有' + count + '件物品，请先移走');
+    return;
+  }
+  if (!confirm('确定删除此分类？')) return;
+  zone.categories = zone.categories.filter(function(c) { return c.id !== catId; });
+  saveDB();
+  openCategoryManager();
+  toast('已删除');
+}
+
+// ========== 板块管理 ==========
+function openZoneManager() {
+  var html = '<div class="modal-handle"></div>';
+  html += '<div class="modal-title">领地管理</div>';
+  DB.zones.forEach(function(zone) {
+    html += '<div class="setting-row" style="border-radius:0">';
+    html += '<div><span class="setting-label">' + zone.icon + ' ' + escapeHtml(zone.name) + '</span><br><span class="setting-value">' + zone.items.length + '件 · ' + (zone.type==='consumable'?'补给品':'耐用品') + '</span></div>';
+    html += '<div style="display:flex;gap:8px">';
+    html += '<button class="btn btn-outline btn-sm" onclick="editZone(\'' + zone.id + '\')">编辑</button>';
+    html += '<button class="btn btn-danger btn-sm" onclick="deleteZone(\'' + zone.id + '\')">删</button>';
+    html += '</div></div>';
+  });
+  html += '<button class="btn btn-primary btn-full" style="margin-top:16px" onclick="addZone()">＋ 开辟新领地</button>';
+  html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">完成</button>';
+
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('show');
+}
+
+function addZone() {
+  var html = '<div class="modal-handle"></div>';
+  html += '<div class="modal-title">开辟新领地</div>';
+  html += '<div class="form-group"><label class="form-label">名称</label><input type="text" class="form-input" id="zone-name" placeholder="如：化妆品"></div>';
+  html += '<div class="form-group"><label class="form-label">图标（选个可爱的动物）</label>';
+  html += '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:8px">';
+  var icons = ['🐨','🦉','🪼','🦭','🦝','🦫','🦦','🦥','🐿️','🦡','💎','🧸','💠','🐧','🦔','🐰','🐱','🐶'];
+  icons.forEach(function(ic, i) {
+    html += '<div class="photo-slot" style="aspect-ratio:1;font-size:24px;cursor:pointer;text-align:center;line-height:50px" onclick="selectZoneIcon(this,\'' + ic + '\')" data-icon="' + ic + '">' + ic + '</div>';
+  });
+  html += '</div>';
+  html += '<input type="text" class="form-input" id="zone-icon" value="🐨" style="margin-bottom:10px">';
+  html += '</div>';
+  html += '<div class="form-group"><label class="form-label">类型</label>';
+  html += '<select class="form-select" id="zone-type">';
+  html += '<option value="consumable">补给品（会用完、会过期）</option>';
+  html += '<option value="durable">耐用品（服装、首饰等）</option>';
+  html += '</select></div>';
+  html += '<button class="btn btn-primary btn-full" onclick="confirmAddZone()">添加</button>';
+  html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="openZoneManager()">返回</button>';
+
+  document.getElementById('modal-content').innerHTML = html;
+}
+
+function selectZoneIcon(el, icon) {
+  document.querySelectorAll('[data-icon]').forEach(function(e) { e.style.background = ''; e.style.borderColor = ''; });
+  el.style.background = 'rgba(0,122,255,0.1)';
+  el.style.borderColor = 'var(--accent)';
+  document.getElementById('zone-icon').value = icon;
+}
+
+function confirmAddZone() {
+  var name = document.getElementById('zone-name').value.trim();
+  var icon = document.getElementById('zone-icon').value || '🐨';
+  var type = document.getElementById('zone-type').value;
+  if (!name) { toast('请输入名称'); return; }
+  var theme = type === 'consumable' ? 'consumable' : (DB.zones.filter(function(z){return z.type==='durable';}).length >= 1 ? 'durable2' : 'durable');
+  DB.zones.push({
+    id: genId(), name: name, icon: icon, type: type, theme: theme,
+    categories: [], items: []
+  });
+  saveDB();
+  openZoneManager();
+  toast('已开辟新领地');
+}
+
+function editZone(zoneId) {
+  var zone = getZone(zoneId);
+  var name = prompt('领地名称', zone.name);
+  if (!name) return;
+  zone.name = name.trim();
+  var icon = prompt('领地图标（emoji）', zone.icon);
+  if (icon) zone.icon = icon;
+  saveDB();
+  openZoneManager();
+  toast('已保存');
+}
+
+function deleteZone(zoneId) {
+  var zone = getZone(zoneId);
+  if (zone.items.length > 0) {
+    toast('该领地下还有' + zone.items.length + '件物品，请先清空');
+    return;
+  }
+  if (!confirm('确定删除此领地？')) return;
+  DB.zones = DB.zones.filter(function(z) { return z.id !== zoneId; });
+  saveDB();
+  openZoneManager();
+  toast('已删除');
+}
+
+// ========== 目标锁定 ==========
+function renderPool() {
+  var html = '';
+  var activePool = DB.pool.filter(function(p) { return p.status !== 'given-up'; });
+  var givenUp = DB.poolHistory || [];
+
+  // 统计
+  html += '<div class="alert-strip">';
+  html += '<div class="alert-badge alert-yellow"><div class="badge-num">' + DB.pool.filter(function(p){return p.status==='pending';}).length + '</div><div class="badge-label">目标冻结</div></div>';
+  html += '<div class="alert-badge alert-blue"><div class="badge-num">' + DB.pool.filter(function(p){return p.status==='decided';}).length + '</div><div class="badge-label">目标锁定</div></div>';
+  html += '<div class="alert-badge alert-gray"><div class="badge-num">' + givenUp.length + '</div><div class="badge-label">目标解除</div></div>';
+  html += '</div>';
+
+  html += '<div class="section-title">想入手的东西<div class="section-action" onclick="openPoolForm()">＋ 添加</div></div>';
+
+  if (activePool.length === 0) {
+    html += '<div class="empty-state"><div class="empty-icon">🎯</div><div class="empty-text">目标锁定是空的<br>想买什么先放这里考虑一下</div></div>';
+  } else {
+    activePool.forEach(function(p) {
+      html += renderPoolItem(p);
+    });
+  }
+
+  if (givenUp.length > 0) {
+    html += '<div class="section-title">目标解除记录</div>';
+    givenUp.slice(-10).forEach(function(p) {
+      html += '<div class="pool-item" style="opacity:0.6">';
+      html += '<div class="pool-header"><div><div class="pool-name">' + escapeHtml(p.name) + '</div>';
+      html += '<div class="pool-meta">¥' + (p.price||0) + ' · ' + formatDate(p.date) + '解除</div></div>';
+      html += '<span class="pool-status status-given-up">已解除</span></div>';
+      html += '</div>';
+    });
+  }
+
+  document.getElementById('pool-content').innerHTML = html;
+}
+
+function renderPoolItem(p) {
+  var html = '<div class="pool-item">';
+  html += '<div class="pool-header">';
+  html += '<div><div class="pool-name">' + escapeHtml(p.name) + '</div>';
+  var meta = '';
+  if (p.zoneId) {
+    var zone = getZone(p.zoneId);
+    if (zone) meta += zone.icon + ' ' + zone.name;
+  }
+  if (p.categoryId) {
+    var cat = getCategory(p.zoneId, p.categoryId);
+    if (cat) meta += ' · ' + cat.name;
+  }
+  if (p.date) meta += ' · ' + formatDate(p.date);
+  html += '<div class="pool-meta">' + meta + '</div></div>';
+  html += '<div class="pool-price">¥' + (p.price||0) + '</div>';
+  html += '</div>';
+
+  html += '<div style="margin-top:4px"><span class="pool-status status-' + (p.status==='pending'?'pending':'decided') + '">' + (p.status==='pending'?'目标冻结':'目标锁定') + '</span></div>';
+
+  if (p.notes) {
+    html += '<div style="font-size:13px;color:var(--text-secondary);margin-top:6px">' + escapeHtml(p.notes) + '</div>';
+  }
+
+  // 库存对比提醒
+  if (p.zoneId && p.categoryId) {
+    var zone = getZone(p.zoneId);
+    if (zone) {
+      var existing = zone.items.filter(function(it) { return it.categoryId === p.categoryId; });
+      if (existing.length > 0) {
+        if (zone.type === 'durable') {
+          html += '<div class="pool-warn">⚠️ 你已经有 ' + existing.length + ' 件同类物品了，确定要买吗？</div>';
+        } else {
+          var totalStock = existing.reduce(function(s,it){return s+(it.stock||0);},0);
+          html += '<div class="pool-warn">⚠️ 同类已有 ' + totalStock + '件库存</div>';
+        }
+      } else {
+        html += '<div class="pool-ok">✓ 同类暂无库存，可以买</div>';
+      }
+    }
+  }
+
+  if (p.photos && p.photos.length > 0) {
+    html += '<div style="display:flex;gap:6px;margin-top:8px;overflow-x:auto;scrollbar-width:none">';
+    p.photos.forEach(function(ph) {
+      html += '<img src="' + ph + '" style="width:60px;height:60px;border-radius:8px;object-fit:cover;flex-shrink:0">';
+    });
+    html += '</div>';
+  }
+
+  // 操作按钮
+  html += '<div class="pool-actions">';
+  if (p.status === 'pending') {
+    html += '<button class="btn btn-primary btn-sm" style="flex:1" onclick="poolDecide(\'' + p.id + '\')">🎯 锁定目标</button>';
+  }
+  html += '<button class="btn btn-success btn-sm" style="flex:1" onclick="poolToItem(\'' + p.id + '\')">📦 已入手</button>';
+  html += '<button class="btn btn-outline btn-sm" onclick="poolGiveUp(\'' + p.id + '\')">解除</button>';
+  html += '<button class="btn btn-outline btn-sm" onclick="poolDelete(\'' + p.id + '\')">删</button>';
+  html += '</div>';
+
+  html += '</div>';
+  return html;
+}
+
+var poolPhotos = [];
+function openPoolForm() {
+  poolPhotos = [];
+  var html = '<div class="modal-handle"></div>';
+  html += '<div class="modal-title">添加到目标锁定</div>';
+
+  html += '<div class="form-group"><label class="form-label">截图存档（选填）</label>';
+  html += '<div class="photo-upload" id="pool-photos">';
+  html += '<div class="photo-slot" onclick="uploadPoolPhoto()">📷</div>';
+  html += '</div></div>';
+
+  html += '<div class="form-group"><label class="form-label">名称</label>';
+  html += '<input type="text" class="form-input" id="pool-name" placeholder="想买的东西"></div>';
+
+  html += '<div class="form-row">';
+  html += '<div class="form-group"><label class="form-label">价格</label><input type="number" class="form-input" id="pool-price" placeholder="0"></div>';
+  html += '<div class="form-group"><label class="form-label">数量</label><input type="number" class="form-input" id="pool-qty" value="1" min="1"></div>';
+  html += '</div>';
+
+  html += '<div class="form-group"><label class="form-label">归类到领地</label>';
+  html += '<select class="form-select" id="pool-zone" onchange="updatePoolCategories()"><option value="">不归类</option>';
+  DB.zones.forEach(function(z) {
+    html += '<option value="' + z.id + '">' + z.icon + ' ' + escapeHtml(z.name) + '</option>';
+  });
+  html += '</select></div>';
+
+  html += '<div class="form-group" id="pool-cat-group" style="display:none"><label class="form-label">分类</label>';
+  html += '<select class="form-select" id="pool-category"></select></div>';
+
+  html += '<div class="form-group"><label class="form-label">备注（选填）</label>';
+  html += '<textarea class="form-textarea" id="pool-notes" placeholder="买的理由是什么？"></textarea></div>';
+
+  html += '<button class="btn btn-primary btn-full" onclick="savePoolItem()">加入目标锁定</button>';
+
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('show');
+}
+
+function uploadPoolPhoto() {
+  var input = document.getElementById('photo-input');
+  input.onchange = function(e) {
+    var files = e.target.files;
+    for (var i = 0; i < files.length && poolPhotos.length < 9; i++) {
+      compressImage(files[i], function(dataUrl) {
+        poolPhotos.push(dataUrl);
+        renderPoolPhotos();
+      });
+    }
+    input.value = '';
+  };
+  input.click();
+}
+
+function renderPoolPhotos() {
+  var container = document.getElementById('pool-photos');
+  var html = '';
+  poolPhotos.forEach(function(p, i) {
+    html += '<div class="photo-slot has-photo"><img src="' + p + '"><button class="remove-photo" onclick="removePoolPhoto(' + i + ')">✕</button></div>';
+  });
+  if (poolPhotos.length < 9) {
+    html += '<div class="photo-slot" onclick="uploadPoolPhoto()">📷</div>';
+  }
+  container.innerHTML = html;
+}
+
+function removePoolPhoto(idx) {
+  poolPhotos.splice(idx, 1);
+  renderPoolPhotos();
+}
+
+function updatePoolCategories() {
+  var zoneId = document.getElementById('pool-zone').value;
+  var group = document.getElementById('pool-cat-group');
+  var select = document.getElementById('pool-category');
+  if (!zoneId) { group.style.display = 'none'; return; }
+  group.style.display = 'block';
+  var zone = getZone(zoneId);
+  select.innerHTML = '';
+  zone.categories.forEach(function(c) {
+    select.innerHTML += '<option value="' + c.id + '">' + escapeHtml(c.name) + '</option>';
+  });
+}
+
+function savePoolItem() {
+  var name = document.getElementById('pool-name').value.trim();
+  if (!name) { toast('请输入名称'); return; }
+  var zoneId = document.getElementById('pool-zone').value;
+  var item = {
+    id: genId(),
+    name: name,
+    price: parseFloat(document.getElementById('pool-price').value) || 0,
+    qty: parseInt(document.getElementById('pool-qty').value) || 1,
+    zoneId: zoneId,
+    categoryId: zoneId ? document.getElementById('pool-category').value : null,
+    notes: document.getElementById('pool-notes').value,
+    photos: poolPhotos.slice(),
+    status: 'pending',
+    date: new Date().toISOString()
+  };
+  DB.pool.push(item);
+  saveDB();
+  closeModal();
+  poolPhotos = [];
+  renderPool();
+  toast('已加入目标锁定');
+}
+
+function poolDecide(itemId) {
+  var item = DB.pool.find(function(p) { return p.id === itemId; });
+  if (item) { item.status = 'decided'; saveDB(); renderPool(); toast('已锁定目标'); }
+}
+
+function poolGiveUp(itemId) {
+  if (!confirm('确定解除这个目标？会保留记录用于反思。')) return;
+  var idx = DB.pool.findIndex(function(p) { return p.id === itemId; });
+  if (idx >= 0) {
+    var item = DB.pool[idx];
+    item.status = 'given-up';
+    item.giveUpDate = new Date().toISOString();
+    if (!DB.poolHistory) DB.poolHistory = [];
+    DB.poolHistory.push(item);
+    DB.pool.splice(idx, 1);
+    saveDB();
+    renderPool();
+    toast('目标已解除（保留记录）');
+  }
+}
+
+function poolDelete(itemId) {
+  if (!confirm('彻底删除？不留记录。')) return;
+  DB.pool = DB.pool.filter(function(p) { return p.id !== itemId; });
+  saveDB();
+  renderPool();
+  toast('已删除');
+}
+
+function poolToItem(itemId) {
+  var item = DB.pool.find(function(p) { return p.id === itemId; });
+  if (!item) return;
+  if (!item.zoneId) {
+    toast('请先编辑该物品，选择归类领地');
+    return;
+  }
+  var zone = getZone(item.zoneId);
+  var newItem = {
+    id: genId(),
+    name: item.name,
+    categoryId: item.categoryId,
+    stock: item.qty || 1,
+    unit: '个',
+    currentPrice: item.price || 0,
+    channel: '',
+    location: '',
+    notes: item.notes || '',
+    photos: item.photos || [],
+    usageRecords: [],
+    priceHistory: item.price ? [{
+      date: new Date().toISOString(),
+      channel: '',
+      quantity: item.qty || 1,
+      totalPrice: (item.price||0) * (item.qty||1),
+      unitPrice: item.price || 0,
+      notes: '从目标锁定转入'
+    }] : [],
+    createdAt: new Date().toISOString()
+  };
+  if (zone.type === 'consumable') {
+    newItem.shelfLife = null;
+    newItem.productionDate = null;
+    newItem.stockThreshold = 1;
+  }
+  zone.items.push(newItem);
+  DB.pool = DB.pool.filter(function(p) { return p.id !== itemId; });
+  saveDB();
+  renderPool();
+  toast('已转入库存');
+}
+function renderSettings() {
+  var html = '';
+
+  // 数据管理
+  html += '<div class="section-title">数据管理</div>';
+  html += '<div class="setting-group">';
+  html += '<div class="setting-row" onclick="exportJSON()"><div class="setting-label">📤 导出数据（JSON）</div><div class="setting-value">备份到文件</div></div>';
+  html += '<div class="setting-row" onclick="document.getElementById(\'import-input\').click()"><div class="setting-label">📥 导入数据</div><div class="setting-value">从文件恢复</div></div>';
+  html += '<div class="setting-row" onclick="backupToGitHub()"><div class="setting-label">☁️ 备份到GitHub</div><div class="setting-value">' + (DB.settings.lastBackup?formatDate(DB.settings.lastBackup):'未备份') + '</div></div>';
+  html += '</div>';
+
+  // GitHub配置
+  html += '<div class="section-title">GitHub备份配置</div>';
+  html += '<div class="setting-group">';
+  html += '<div class="setting-row" onclick="editGitHubSetting(\'githubRepo\')"><div class="setting-label">仓库</div><div class="setting-value">' + escapeHtml(DB.settings.githubRepo||'未设置') + '</div></div>';
+  html += '<div class="setting-row" onclick="editGitHubSetting(\'githubPath\')"><div class="setting-label">文件路径</div><div class="setting-value">' + escapeHtml(DB.settings.githubPath||'jiayou-backup.json') + '</div></div>';
+  html += '<div class="setting-row" onclick="editGitHubToken()"><div class="setting-label">Token</div><div class="setting-value">' + (DB.settings.githubToken?'已设置':'未设置') + '</div></div>';
+  html += '</div>';
+
+  // 板块管理
+  html += '<div class="section-title">领地管理</div>';
+  html += '<button class="btn btn-outline btn-full" onclick="openZoneManager()">管理领地</button>';
+
+  // 统计
+  html += '<div class="section-title">数据统计</div>';
+  html += '<div class="setting-group">';
+  var totalItems = 0;
+  DB.zones.forEach(function(z) { totalItems += z.items.length; });
+  html += '<div class="setting-row"><div class="setting-label">领地数</div><div class="setting-value">' + DB.zones.length + '</div></div>';
+  html += '<div class="setting-row"><div class="setting-label">物品总数</div><div class="setting-value">' + totalItems + '</div></div>';
+  html += '<div class="setting-row"><div class="setting-label">目标锁定</div><div class="setting-value">' + DB.pool.length + '件</div></div>';
+  html += '<div class="setting-row"><div class="setting-label">放弃记录</div><div class="setting-value">' + (DB.poolHistory||[]).length + '件</div></div>';
+  html += '</div>';
+
+  // 关于
+  html += '<div style="text-align:center;padding:20px;color:var(--text-tertiary);font-size:13px">';
+  html += '家有 v1.0<br>让每件物品都有归处';
+  html += '</div>';
+
+  document.getElementById('settings-content').innerHTML = html;
+}
+
+function editGitHubSetting(key) {
+  var labels = { githubRepo: '仓库名（如：username/repo）', githubPath: '文件路径' };
+  var val = prompt(labels[key] || key, DB.settings[key] || '');
+  if (val !== null) {
+    DB.settings[key] = val.trim();
+    saveDB();
+    renderSettings();
+  }
+}
+
+function editGitHubToken() {
+  var val = prompt('GitHub Token（ghp_开头）', DB.settings.githubToken || '');
+  if (val !== null) {
+    DB.settings.githubToken = val.trim();
+    saveDB();
+    renderSettings();
+    toast('Token已保存');
+  }
+}
+
+// ========== 数据导入导出 ==========
+function exportJSON() {
+  var data = JSON.stringify(DB, null, 2);
+  var blob = new Blob([data], { type: 'application/json' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = '家有-备份-' + new Date().toISOString().split('T')[0] + '.json';
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('已导出');
+}
+
+function importJSON(file) {
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      var data = JSON.parse(e.target.result);
+      if (!data.zones) { toast('文件格式不对'); return; }
+      if (!confirm('导入会覆盖当前数据，确定？')) return;
+      DB = mergeDB({
+        zones: [], pool: [], poolHistory: [],
+        settings: { githubToken:'', githubRepo:'', githubPath:'jiayou-backup.json', lastBackup:null },
+        version: 1
+      }, data);
+      saveDB();
+      showPage('home');
+      toast('导入成功');
+    } catch(err) {
+      toast('文件解析失败');
+    }
+  };
+  reader.readAsText(file);
+}
+
+function backupToGitHub() {
+  if (!DB.settings.githubToken || !DB.settings.githubRepo) {
+    toast('请先设置Token和仓库');
+    return;
+  }
+
+  toast('正在备份...');
+
+  var repo = DB.settings.githubRepo;
+  var path = DB.settings.githubPath || 'jiayou-backup.json';
+  var token = DB.settings.githubToken;
+  var content = btoa(unescape(encodeURIComponent(JSON.stringify(DB, null, 2))));
+
+  // 先尝试获取现有文件（获取sha用于更新）
+  var getUrl = 'https://api.github.com/repos/' + repo + '/contents/' + path;
+  fetch(getUrl, {
+    headers: { 'Authorization': 'token ' + token, 'Accept': 'application/vnd.github.v3+json' }
+  }).then(function(r) {
+    if (r.status === 404) return null;
+    return r.json();
+  }).then(function(existing) {
+    var body = {
+      message: '家有备份 ' + new Date().toISOString(),
+      content: content
+    };
+    if (existing && existing.sha) body.sha = existing.sha;
+
+    return fetch(getUrl, {
+      method: 'PUT',
+      headers: {
+        'Authorization': 'token ' + token,
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body)
+    });
+  }).then(function(r) {
+    if (r.ok) {
+      DB.settings.lastBackup = new Date().toISOString();
+      saveDB();
+      toast('✓ 备份成功');
+      renderSettings();
+    } else {
+      return r.json().then(function(err) {
+        throw new Error(err.message || '备份失败');
+      });
+    }
+  }).catch(function(err) {
+    toast('备份失败：' + err.message);
+  });
+}
+
+// ========== 工具函数 ==========
+function daysBetween(d1, d2) {
+  return Math.floor((d2 - d1) / (1000 * 60 * 60 * 24));
+}
+
+function formatDate(iso) {
+  if (!iso) return '';
+  var d = new Date(iso);
+  return d.getFullYear() + '.' + String(d.getMonth()+1).padStart(2,'0') + '.' + String(d.getDate()).padStart(2,'0');
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function toast(msg) {
+  var t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(window._toastTimer);
+  window._toastTimer = setTimeout(function() { t.classList.remove('show'); }, 2500);
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('show');
+}
+
+// 图片压缩
+function compressImage(file, callback) {
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    var img = new Image();
+    img.onload = function() {
+      var canvas = document.createElement('canvas');
+      var maxDim = 800;
+      var w = img.width, h = img.height;
+      if (w > maxDim || h > maxDim) {
+        if (w > h) { h = h * maxDim / w; w = maxDim; }
+        else { w = w * maxDim / h; h = maxDim; }
+      }
+      canvas.width = w;
+      canvas.height = h;
+      var ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      callback(canvas.toDataURL('image/jpeg', 0.75));
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+// 导入文件监听
+document.getElementById('import-input').addEventListener('change', function(e) {
+  if (e.target.files[0]) importJSON(e.target.files[0]);
+  e.target.value = '';
+});
+
+// ========== 预警详情弹窗 ==========
+function showAlertDetail(type) {
+  var title = '', items = [];
+  if (type === 'expired') {
+    title = '🔴 已过期';
+    DB.zones.forEach(function(zone) {
+      if (zone.type !== 'consumable') return;
+      zone.items.forEach(function(it) {
+        if (getItemStatus(it).expired) items.push({item: it, zone: zone});
+      });
+    });
+  } else if (type === 'expiring') {
+    title = '🟡 即将过期（30天内）';
+    DB.zones.forEach(function(zone) {
+      if (zone.type !== 'consumable') return;
+      zone.items.forEach(function(it) {
+        if (getItemStatus(it).expiring) items.push({item: it, zone: zone});
+      });
+    });
+  } else if (type === 'lowStock') {
+    title = '🟡 库存告急';
+    DB.zones.forEach(function(zone) {
+      if (zone.type !== 'consumable') return;
+      zone.items.forEach(function(it) {
+        if (getItemStatus(it).lowStock) items.push({item: it, zone: zone});
+      });
+    });
+  } else if (type === 'overStock') {
+    title = '🔵 囤太多（用到过期也用不完）';
+    DB.zones.forEach(function(zone) {
+      if (zone.type !== 'consumable') return;
+      zone.items.forEach(function(it) {
+        if (getItemStatus(it).overStock) items.push({item: it, zone: zone});
+      });
+    });
+  } else if (type === 'idle') {
+    title = '🟣 闲置中（超过6个月没用）';
+    DB.zones.forEach(function(zone) {
+      if (zone.type !== 'durable') return;
+      zone.items.forEach(function(it) {
+        if (it.lastUsedDate) {
+          var days = daysBetween(new Date(it.lastUsedDate), new Date());
+          if (days > 180) items.push({item: it, zone: zone, days: days});
+        }
+      });
+    });
+  }
+
+  var html = '<div class="modal-handle"></div>';
+  html += '<div class="modal-title">' + title + '</div>';
+  if (items.length === 0) {
+    html += '<div class="empty-state"><div class="empty-icon">✓</div><div class="empty-text">没有需要关注的</div></div>';
+  } else {
+    html += '<div style="margin-bottom:16px;font-size:13px;color:var(--text-secondary)">共 ' + items.length + ' 件</div>';
+    items.forEach(function(entry) {
+      var it = entry.item, zone = entry.zone;
+      var status = getItemStatus(it);
+      var bgColor = '#fff';
+      if (type === 'expired') bgColor = 'rgba(255,59,48,0.06)';
+      else if (type === 'expiring') bgColor = 'rgba(255,149,0,0.06)';
+      else if (type === 'lowStock') bgColor = 'rgba(255,149,0,0.06)';
+      else if (type === 'overStock') bgColor = 'rgba(90,200,250,0.06)';
+      else if (type === 'idle') bgColor = 'rgba(175,82,222,0.06)';
+
+      html += '<div style="display:flex;gap:10px;padding:12px;border-radius:10px;background:' + bgColor + ';margin-bottom:8px;cursor:pointer" onclick="closeModal();setTimeout(function(){enterZone(\'' + zone.id + '\')},200)">';
+      // 照片
+      html += '<div style="width:50px;height:50px;border-radius:8px;overflow:hidden;flex-shrink:0;background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:24px">';
+      if (it.photos && it.photos.length > 0) {
+        html += '<img src="' + it.photos[0] + '" style="width:100%;height:100%;object-fit:cover">';
+      } else {
+        html += '📦';
+      }
+      html += '</div>';
+      // 信息
+      html += '<div style="flex:1;min-width:0">';
+      html += '<div style="font-weight:700;font-size:15px">' + escapeHtml(it.name) + '</div>';
+      html += '<div style="font-size:12px;color:var(--text-secondary)">' + zone.icon + ' ' + escapeHtml(zone.name) + '</div>';
+      if (type === 'expired') {
+        html += '<div style="font-size:13px;color:var(--red);font-weight:600;margin-top:2px">⚠️ 已过期' + (status.daysLeft!==null?'（超期'+Math.abs(status.daysLeft)+'天）':'') + '</div>';
+      } else if (type === 'expiring') {
+        html += '<div style="font-size:13px;color:var(--orange);font-weight:600;margin-top:2px">⏰ 还剩 ' + status.daysLeft + ' 天过期</div>';
+      } else if (type === 'lowStock') {
+        html += '<div style="font-size:13px;color:var(--orange);font-weight:600;margin-top:2px">📦 库存仅剩 ' + it.stock + (it.unit||'') + '（告急阈值' + (it.stockThreshold||1) + '）</div>';
+      } else if (type === 'overStock') {
+        var rate = calcUsageRate(it);
+        var monthsLeft = rate > 0 ? (it.stock / rate).toFixed(1) : '?';
+        html += '<div style="font-size:13px;color:var(--blue);font-weight:600;margin-top:2px">📦 库存' + it.stock + (it.unit||'') + '，按消耗速率够用' + monthsLeft + '月</div>';
+      } else if (type === 'idle') {
+        html += '<div style="font-size:13px;color:var(--purple);font-weight:600;margin-top:2px">🕐 已' + Math.floor(entry.days/30) + '个月没用</div>';
+      }
+      html += '</div>';
+      html += '</div>';
+    });
+  }
+  html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">关闭</button>';
+
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('show');
+}
+
+// ========== 首页过滤快捷（改为弹窗显示详情）==========
+function filterExpired() { showAlertDetail('expired'); }
+function filterExpiring() { showAlertDetail('expiring'); }
+function filterLowStock() { showAlertDetail('lowStock'); }
+function filterOverStock() { showAlertDetail('overStock'); }
+function filterIdle() { showAlertDetail('idle'); }
+</script>
+</body>
+</html>
