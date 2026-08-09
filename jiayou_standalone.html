@@ -1446,18 +1446,7 @@ function renderItemCard(item, zone) {
   var isDurable = zone.type !== 'consumable';
   var variantCount = (item.variants && item.variants.length) ? item.variants.length : (isDurable ? 1 : 0);
 
-  var html = '<div class="item-card' + (isDurable ? ' item-card-compact' : '') + '" onclick="openCardDetail(\'' + zone.id + '\',\'' + item.id + '\')">';
-
-  if (!isDurable) {
-    // 补给品：显示照片
-    html += '<div class="card-photo">';
-    if (item.photos && item.photos.length > 0) {
-      html += '<img src="' + item.photos[0] + '">';
-    } else {
-      html += '📦';
-    }
-    html += '</div>';
-  }
+  var html = '<div class="item-card item-card-compact" onclick="openCardDetail(\'' + zone.id + '\',\'' + item.id + '\')">';
 
   // 角标
   if (status.expired) {
@@ -1545,27 +1534,18 @@ function openCardDetail(zoneId, itemId) {
   renderCardFront(item, zone);
   renderCardBack(item, zone);
 
-  document.getElementById('flip-inner').classList.remove('flipped');
+  // 默认直接显示背面（翻转状态），无需点两次
+  document.getElementById('flip-inner').classList.add('flipped');
   document.getElementById('card-detail-overlay').classList.add('show');
 }
 
 function renderCardFront(item, zone) {
   var isDurable = zone.type !== 'consumable';
   var html = '<div class="detail-front">';
-  if (!isDurable) {
-    html += '<div class="detail-photo">';
-    if (item.photos && item.photos.length > 0) {
-      html += '<img src="' + item.photos[0] + '">';
-    } else {
-      html += '📦';
-    }
-    html += '</div>';
-  } else {
-    // 耐用品：隐私模式，不显示照片，用图标占位
-    html += '<div class="detail-photo" style="background:var(--bg);">';
-    html += '👕';
-    html += '</div>';
-  }
+  // 所有类型都用紧凑模式，不显示大照片区
+  html += '<div class="detail-photo" style="background:var(--bg);">';
+  html += isDurable ? '👕' : '📦';
+  html += '</div>';
   html += '<div class="detail-body">';
   html += '<div class="detail-name">' + escapeHtml(item.name) + '</div>';
   var cat = getCategory(zone.id, item.categoryId);
@@ -2349,14 +2329,6 @@ function openItemForm(itemId) {
   var html = '<div class="modal-handle"></div>';
   html += '<div class="modal-title">' + (item ? '编辑物品' : '添加物品') + '</div>';
 
-  // 照片（仅补给品在顶部上传；耐用品的照片在件数编辑器中按件上传）
-  if (zone.type === 'consumable') {
-    html += '<div class="form-group"><label class="form-label">照片（最多9张）</label>';
-    html += '<div class="photo-upload" id="item-photos">';
-    html += '<div class="photo-slot" onclick="uploadItemPhoto()">📷</div>';
-    html += '</div></div>';
-  }
-
   html += '<div class="form-group"><label class="form-label">名称</label>';
   html += '<input type="text" class="form-input" id="item-name" value="' + (item?escapeHtml(item.name):'') + '" placeholder="如：洗发水"></div>';
 
@@ -2391,17 +2363,18 @@ function openItemForm(itemId) {
   html += '<input type="text" class="form-input" id="item-location" value="' + (item?escapeHtml(item.location||''):'') + '" placeholder="如：衣柜A层"></div>';
 
   if (zone.type === 'consumable') {
-    // 品牌变体区域
+    // 品牌变体区域（带照片上传）
     html += '<div class="form-group"><label class="form-label">品牌变体</label>';
     html += '<div id="variant-list">';
     var variants = (item && item.variants && item.variants.length > 0) ? item.variants : [];
-    if (variants.length === 0) variants = [{ id: genId(), brand: item?item.name:'', stock: item?(item.stock||0):0, price: item?(item.currentPrice||0):0 }];
+    if (variants.length === 0) variants = [{ id: genId(), brand: item?item.name:'', stock: item?(item.stock||0):0, price: item?(item.currentPrice||0):0, photos: [] }];
     window._editVariants = variants.map(function(v) {
-      return { id: v.id, brand: v.brand||'', stock: v.stock||0, price: v.price||0 };
+      return { id: v.id, brand: v.brand||'', stock: v.stock||0, price: v.price||0, photos: (v.photos||[]).slice() };
     });
-    html += renderVariantEditorRows();
+    window._editVariantPhotos = variants.map(function(v) { return (v.photos||[]).slice(); });
+    html += renderConsumableVariantRows();
     html += '</div>';
-    html += '<button class="btn btn-outline btn-sm" style="margin-top:6px;width:100%" onclick="addVariantRow()">＋ 添加品牌</button>';
+    html += '<button class="btn btn-outline btn-sm" style="margin-top:6px;width:100%" onclick="addConsumableVariantRow()">＋ 添加品牌</button>';
     html += '</div>';
 
     html += '<div class="form-row">';
@@ -2424,11 +2397,6 @@ function openItemForm(itemId) {
 
   document.getElementById('modal-content').innerHTML = html;
   document.getElementById('modal-overlay').classList.add('show');
-
-  if (item && item.photos && zone.type === 'consumable') {
-    itemPhotos = item.photos.slice();
-    renderItemPhotos();
-  }
 }
 
 function uploadItemPhoto() {
@@ -2464,7 +2432,106 @@ function removeItemPhoto(idx) {
   renderItemPhotos();
 }
 
-// ========== 品牌变体编辑辅助 ==========
+// ========== 补给品品牌变体编辑器（带照片） ==========
+function renderConsumableVariantRows() {
+  var html = '';
+  var variants = window._editVariants || [];
+  var photos = window._editVariantPhotos || [];
+  variants.forEach(function(v, i) {
+    html += '<div class="consumable-variant-row" style="border:1px solid var(--separator);border-radius:10px;padding:10px;margin-bottom:8px">';
+    html += '<div style="display:flex;gap:8px;align-items:flex-start">';
+    // 照片上传区
+    html += '<div class="consumable-photo-slot" onclick="uploadConsumableVariantPhoto(' + i + ')" style="width:56px;height:56px;border-radius:8px;background:var(--bg);display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden;cursor:pointer;position:relative">';
+    if (photos[i] && photos[i].length > 0) {
+      html += '<img src="' + photos[i][0] + '" style="width:100%;height:100%;object-fit:cover;border-radius:8px">';
+      html += '<div style="position:absolute;bottom:0;right:0;background:rgba(0,0,0,0.6);color:#fff;font-size:10px;padding:1px 4px;border-radius:4px 0 8px 0">' + (photos[i].length > 1 ? '+' + photos[i].length : '') + '</div>';
+    } else {
+      html += '<span style="font-size:20px;color:var(--text-tertiary)">📷</span>';
+    }
+    html += '</div>';
+    // 品牌名+库存+单价
+    html += '<div style="flex:1;display:flex;flex-direction:column;gap:4px">';
+    html += '<input type="text" class="form-input" style="font-size:14px" placeholder="品牌名" value="' + escapeHtml(v.brand) + '" onchange="updateConsumableVariantField(' + i + ',\'brand\',this.value)">';
+    html += '<div style="display:flex;gap:6px">';
+    html += '<input type="number" class="form-input" style="font-size:14px;flex:1" placeholder="库存" value="' + (v.stock||0) + '" onchange="updateConsumableVariantField(' + i + ',\'stock\',parseFloat(this.value)||0)" step="0.5">';
+    html += '<input type="number" class="form-input" style="font-size:14px;flex:1" placeholder="单价" value="' + (v.price||0) + '" onchange="updateConsumableVariantField(' + i + ',\'price\',parseFloat(this.value)||0)">';
+    html += '</div>';
+    html += '</div>';
+    // 删除按钮
+    if (variants.length > 1) {
+      html += '<button class="btn btn-danger btn-sm" style="flex-shrink:0;padding:6px 8px;font-size:12px" onclick="removeConsumableVariantRow(' + i + ')">✕</button>';
+    }
+    html += '</div>';
+    // 已有照片缩略图列表
+    if (photos[i] && photos[i].length > 0) {
+      html += '<div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap">';
+      photos[i].forEach(function(p, pi) {
+        html += '<div style="position:relative;width:40px;height:40px">';
+        html += '<img src="' + p + '" style="width:40px;height:40px;border-radius:6px;object-fit:cover">';
+        html += '<button onclick="removeConsumableVariantPhoto(' + i + ',' + pi + ')" style="position:absolute;top:-4px;right:-4px;width:16px;height:16px;border-radius:50%;background:var(--red);color:#fff;border:none;font-size:10px;line-height:16px;cursor:pointer">✕</button>';
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+    html += '</div>';
+  });
+  return html;
+}
+function updateConsumableVariantField(idx, field, val) {
+  if (window._editVariants && window._editVariants[idx]) {
+    window._editVariants[idx][field] = val;
+  }
+}
+function addConsumableVariantRow() {
+  window._editVariants = window._editVariants || [];
+  window._editVariantPhotos = window._editVariantPhotos || [];
+  window._editVariants.push({ id: genId(), brand: '', stock: 0, price: 0, photos: [] });
+  window._editVariantPhotos.push([]);
+  document.getElementById('variant-list').innerHTML = renderConsumableVariantRows();
+}
+function removeConsumableVariantRow(idx) {
+  if (window._editVariants.length <= 1) {
+    toast('至少保留一个品牌');
+    return;
+  }
+  window._editVariants.splice(idx, 1);
+  window._editVariantPhotos.splice(idx, 1);
+  document.getElementById('variant-list').innerHTML = renderConsumableVariantRows();
+}
+function uploadConsumableVariantPhoto(idx) {
+  var input = document.getElementById('photo-input');
+  input.onchange = function(e) {
+    var files = e.target.files;
+    var count = 0;
+    var maxPhotos = 5;
+    var currentPhotos = window._editVariantPhotos[idx] || [];
+    var remaining = maxPhotos - currentPhotos.length;
+    var toProcess = Math.min(files.length, remaining);
+    function processNext(fileIdx) {
+      if (fileIdx >= toProcess) {
+        input.value = '';
+        document.getElementById('variant-list').innerHTML = renderConsumableVariantRows();
+        if (count === 0) toast('每个品牌最多' + maxPhotos + '张照片');
+        return;
+      }
+      compressImage(files[fileIdx], function(dataUrl) {
+        window._editVariantPhotos[idx].push(dataUrl);
+        count++;
+        processNext(fileIdx + 1);
+      });
+    }
+    processNext(0);
+  };
+  input.click();
+}
+function removeConsumableVariantPhoto(variantIdx, photoIdx) {
+  if (window._editVariantPhotos && window._editVariantPhotos[variantIdx]) {
+    window._editVariantPhotos[variantIdx].splice(photoIdx, 1);
+    document.getElementById('variant-list').innerHTML = renderConsumableVariantRows();
+  }
+}
+
+// ========== 品牌变体编辑辅助（旧版，保留兼容） ==========
 function renderVariantEditorRows() {
   var html = '';
   (window._editVariants || []).forEach(function(v, i) {
@@ -2674,13 +2741,12 @@ function saveItem() {
         usedUp: false, openQty: 0, feeling: null, shelfLife: null, productionDate: null
       };
     });
-    // 合并变体照片 + 顶级照片，用于首页卡片展示
-    var topPhotos = itemPhotos.slice();
+    // 合并变体照片，用于卡片展示
     var variantPhotos = [];
     data.variants.forEach(function(v) { variantPhotos = variantPhotos.concat(v.photos); });
     var seenP = {};
     var allP = [];
-    topPhotos.concat(variantPhotos).forEach(function(p) { if (p && !seenP[p]) { seenP[p] = true; allP.push(p); } });
+    variantPhotos.forEach(function(p) { if (p && !seenP[p]) { seenP[p] = true; allP.push(p); } });
     data.photos = allP;
     data.stock = data.variants.reduce(function(s,v) { return s + (v.stock||0); }, 0);
     data.currentPrice = data.variants.length > 0 ? data.variants[0].price : 0;
