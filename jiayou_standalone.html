@@ -255,6 +255,53 @@ body {
 .item-card .card-info { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
 .item-card .card-mini-bar { margin-top: 6px; }
 
+/* 耐用品紧凑卡片（无大照片区，隐私模式） */
+.item-card-compact {
+  min-height: 80px;
+  display: flex; flex-direction: column; justify-content: center;
+}
+.item-card-compact .card-body { padding: 16px 14px; }
+.item-card-compact .card-name { font-size: 16px; }
+
+/* 变体缩略图网格（卡片背面） */
+.variant-thumb-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:8px; }
+.variant-thumb { position:relative; border-radius:10px; overflow:hidden; background:var(--bg); }
+.variant-thumb img { width:100%; aspect-ratio:1; object-fit:cover; display:block; cursor:pointer; }
+.variant-thumb-no-photo { width:100%; aspect-ratio:1; display:flex; align-items:center; justify-content:center; font-size:28px; color:var(--text-tertiary); background:var(--bg); }
+.variant-thumb .variant-label { padding:6px 8px; font-size:12px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.variant-thumb .variant-sub { padding:0 8px 8px; font-size:11px; color:var(--text-secondary); }
+.variant-thumb .variant-del {
+  position:absolute; top:6px; right:6px;
+  width:24px; height:24px; border-radius:50%;
+  background:rgba(0,0,0,0.5); color:#fff;
+  border:none; font-size:13px; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  z-index:2;
+}
+
+/* 全屏照片查看器 */
+.photo-viewer {
+  position:fixed; inset:0; z-index:500; background:#000;
+  display:flex; align-items:center; justify-content:center;
+  overflow:hidden;
+}
+.photo-viewer img {
+  max-width:100%; max-height:100%; object-fit:contain;
+  touch-action:none; will-change:transform;
+}
+.photo-viewer-close {
+  position:absolute; top:16px; right:16px; z-index:501;
+  width:40px; height:40px; border-radius:50%;
+  background:rgba(255,255,255,0.2); color:#fff;
+  border:none; font-size:20px; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+}
+.photo-viewer-counter {
+  position:absolute; bottom:24px; left:50%; transform:translateX(-50%);
+  color:#fff; font-size:14px; font-weight:600; z-index:501;
+  background:rgba(0,0,0,0.4); padding:6px 16px; border-radius:20px;
+}
+
 /* 卡片角标 */
 .card-badge {
   position: absolute; top: 8px; right: 8px;
@@ -847,6 +894,24 @@ function syncItemFromVariants(item) {
   }
 }
 
+// 耐用品：从variants同步到item级别
+function syncDurableFromVariants(item) {
+  if (!item.variants || item.variants.length === 0) {
+    item.variants = [{ id: genId(), brand: item.name || '第1件', stock: 1, price: item.currentPrice || 0, photos: item.photos || [] }];
+  }
+  item.stock = item.variants.length;
+  item.unit = '件';
+  // 合并所有variant照片到item级别（用于兼容旧逻辑）
+  var allPhotos = [];
+  item.variants.forEach(function(v) {
+    if (v.photos && v.photos.length > 0) {
+      allPhotos = allPhotos.concat(v.photos);
+    }
+  });
+  item.photos = allPhotos;
+  item.currentPrice = item.variants[0].price || 0;
+}
+
 // ========== 页面切换 ==========
 var currentZoneId = null;
 var currentCategoryId = null;
@@ -1007,29 +1072,6 @@ function renderHome() {
   });
   html += '</div>';
 
-  // === 耐用品拥有量概览 ===
-  if (durableZones.length > 0) {
-    html += '<div class="section-title">资源储备</div>';
-    html += '<div class="own-summary">';
-    durableZones.forEach(function(zone) {
-      var total = zone.items.length;
-      var idleCount = 0;
-      zone.items.forEach(function(it) {
-        if (it.lastUsedDate) {
-          if (daysBetween(new Date(it.lastUsedDate), new Date()) > 180) idleCount++;
-        }
-      });
-      html += '<div class="own-card" onclick="enterZone(\'' + zone.id + '\')">';
-      html += '<div class="own-icon">' + zone.icon + '</div>';
-      html += '<div class="own-name">' + zone.name + '</div>';
-      html += '<div><span class="own-num">' + total + '</span><span class="own-unit">件</span></div>';
-      if (idleCount > 0) {
-        html += '<div class="own-idle">' + idleCount + '件闲置中</div>';
-      }
-      html += '</div>';
-    });
-    html += '</div>';
-  }
 
   // === AI分析 ===
   html += renderAIAnalysis();
@@ -1309,15 +1351,21 @@ function selectCategory(catId) {
 // ========== 物品卡片渲染 ==========
 function renderItemCard(item, zone) {
   var status = getItemStatus(item);
-  var html = '<div class="item-card" onclick="openCardDetail(\'' + zone.id + '\',\'' + item.id + '\')">';
-  // 照片
-  html += '<div class="card-photo">';
-  if (item.photos && item.photos.length > 0) {
-    html += '<img src="' + item.photos[0] + '">';
-  } else {
-    html += '📦';
+  var isDurable = zone.type !== 'consumable';
+  var variantCount = (item.variants && item.variants.length) ? item.variants.length : (isDurable ? 1 : 0);
+
+  var html = '<div class="item-card' + (isDurable ? ' item-card-compact' : '') + '" onclick="openCardDetail(\'' + zone.id + '\',\'' + item.id + '\')">';
+
+  if (!isDurable) {
+    // 补给品：显示照片
+    html += '<div class="card-photo">';
+    if (item.photos && item.photos.length > 0) {
+      html += '<img src="' + item.photos[0] + '">';
+    } else {
+      html += '📦';
+    }
+    html += '</div>';
   }
-  html += '</div>';
 
   // 角标
   if (status.expired) {
@@ -1330,7 +1378,7 @@ function renderItemCard(item, zone) {
     html += '<div class="card-badge badge-over">囤太多</div>';
   }
   // 耐用品闲置
-  if (zone.type === 'durable' && item.lastUsedDate) {
+  if (isDurable && item.lastUsedDate) {
     var days = daysBetween(new Date(item.lastUsedDate), new Date());
     if (days > 180) {
       html += '<div class="card-badge badge-idle">闲置</div>';
@@ -1348,11 +1396,26 @@ function renderItemCard(item, zone) {
   // 卡片body
   html += '<div class="card-body">';
   html += '<div class="card-name">' + escapeHtml(item.name) + '</div>';
-  if (item.variants && item.variants.length > 1) {
-    html += '<div class="card-info" style="color:var(--accent);font-weight:500">' + item.variants.length + '个品牌</div>';
-  }
 
-  if (zone.type === 'consumable') {
+  if (isDurable) {
+    // 耐用品正面：显示件数（隐私模式，不显示照片）
+    if (variantCount > 1) {
+      html += '<div class="card-info" style="color:var(--accent);font-weight:600">' + variantCount + '件</div>';
+    }
+    if (item.location) {
+      html += '<div class="card-info">📍 ' + escapeHtml(item.location) + '</div>';
+    }
+    if (item.lastUsedDate) {
+      var dDays = daysBetween(new Date(item.lastUsedDate), new Date());
+      if (dDays > 180) {
+        html += '<div class="card-info" style="color:var(--purple);font-weight:600">🕐 ' + Math.floor(dDays/30) + '个月没用</div>';
+      }
+    }
+  } else {
+    // 补给品品牌变体数
+    if (item.variants && item.variants.length > 1) {
+      html += '<div class="card-info" style="color:var(--accent);font-weight:500">' + item.variants.length + '个品牌</div>';
+    }
     // 消耗品正面：库存条 + 保质期
     var totalStock = getTotalStock(item);
     if (totalStock !== undefined) {
@@ -1369,17 +1432,6 @@ function renderItemCard(item, zone) {
     if (status.daysLeft !== null && !status.expired) {
       var shelfColor = status.daysLeft <= 30 ? 'var(--red)' : (status.daysLeft <= 90 ? 'var(--orange)' : 'var(--green)');
       html += '<div class="card-info" style="color:' + shelfColor + ';font-weight:600">⏰ ' + status.daysLeft + '天</div>';
-    }
-  } else {
-    // 耐用品正面：存放位置 + 购买日期
-    if (item.location) {
-      html += '<div class="card-info">📍 ' + escapeHtml(item.location) + '</div>';
-    }
-    if (item.lastUsedDate) {
-      var days = daysBetween(new Date(item.lastUsedDate), new Date());
-      if (days > 180) {
-        html += '<div class="card-info" style="color:var(--purple);font-weight:600">🕐 ' + Math.floor(days/30) + '个月没用</div>';
-      }
     }
   }
 
@@ -1406,14 +1458,22 @@ function openCardDetail(zoneId, itemId) {
 }
 
 function renderCardFront(item, zone) {
+  var isDurable = zone.type !== 'consumable';
   var html = '<div class="detail-front">';
-  html += '<div class="detail-photo">';
-  if (item.photos && item.photos.length > 0) {
-    html += '<img src="' + item.photos[0] + '">';
+  if (!isDurable) {
+    html += '<div class="detail-photo">';
+    if (item.photos && item.photos.length > 0) {
+      html += '<img src="' + item.photos[0] + '">';
+    } else {
+      html += '📦';
+    }
+    html += '</div>';
   } else {
-    html += '📦';
+    // 耐用品：隐私模式，不显示照片，用图标占位
+    html += '<div class="detail-photo" style="background:var(--bg);">';
+    html += '👕';
+    html += '</div>';
   }
-  html += '</div>';
   html += '<div class="detail-body">';
   html += '<div class="detail-name">' + escapeHtml(item.name) + '</div>';
   var cat = getCategory(zone.id, item.categoryId);
@@ -1443,17 +1503,17 @@ function renderCardFront(item, zone) {
       html += '</div>';
     }
   } else {
-    // 耐用品正面：拥有量提醒
-    var catItems = zone.items.filter(function(it) { return it.categoryId === item.categoryId; });
-    html += '<div style="margin-top:14px;text-align:center;padding:12px;border-radius:8px;background:rgba(0,122,255,0.08);color:var(--accent);font-weight:700">';
-    html += '同分类已有 ' + catItems.length + ' 件';
+    // 耐用品正面：件数 + 位置（隐私模式，不显示照片）
+    var variantCount = (item.variants && item.variants.length) ? item.variants.length : 1;
+    html += '<div style="margin-top:14px;text-align:center;padding:16px;border-radius:10px;background:rgba(0,122,255,0.08);color:var(--accent);font-weight:700">';
+    html += '共 ' + variantCount + ' 件';
     html += '</div>';
     if (item.location) {
       html += '<div style="margin-top:8px;text-align:center;font-size:13px;color:var(--text-secondary)">📍 ' + escapeHtml(item.location) + '</div>';
     }
   }
 
-  html += '<div class="detail-tap-hint">👆 点击翻面查看详情</div>';
+  html += '<div class="detail-tap-hint">👆 点击翻面查看全部</div>';
   html += '</div></div>';
   document.getElementById('flip-front').innerHTML = html;
 }
@@ -1613,15 +1673,42 @@ function renderCardBack(item, zone) {
   html += '<button class="btn btn-outline btn-sm" style="margin-top:8px;width:100%" onclick="openFeelingForm(\'' + item.id + '\')">✏ 编辑使用感受</button>';
   html += '</div>';
 
-  // === 耐用品：最后使用 ===
+  // === 耐用品：件数清单 + 使用情况 ===
   if (zone.type === 'durable') {
+    ensureVariants(item);
+    var variants = item.variants || [];
+    html += '<div class="back-section">';
+    html += '<div class="back-section-title">件数清单 (' + variants.length + '件)</div>';
+    if (variants.length > 0) {
+      html += '<div class="variant-thumb-grid">';
+      variants.forEach(function(v, vi) {
+        var vPhotos = v.photos || [];
+        html += '<div class="variant-thumb">';
+        // 删除按钮
+        html += '<button class="variant-del" onclick="event.stopPropagation();deleteVariant(\'' + item.id + '\',\'' + v.id + '\')">✕</button>';
+        if (vPhotos.length > 0) {
+          // 收集所有照片用于全屏查看
+          var allPhotos = vPhotos.map(function(p){ return p.replace(/"/g,'&quot;'); }).join('||');
+          html += '<img src="' + vPhotos[0] + '" onclick="openPhotoViewer([\'' + vPhotos.join("','") + '\'],0)">';
+        } else {
+          html += '<div class="variant-thumb-no-photo">📷</div>';
+        }
+        html += '<div class="variant-label">' + escapeHtml(v.brand || ('第' + (vi+1) + '件')) + '</div>';
+        if (v.price) html += '<div class="variant-sub">¥' + v.price + '</div>';
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+    html += '</div>';
+
+    // 使用情况
     html += '<div class="back-section">';
     html += '<div class="back-section-title">使用情况</div>';
     if (item.lastUsedDate) {
-      var days = daysBetween(new Date(item.lastUsedDate), new Date());
+      var dDays2 = daysBetween(new Date(item.lastUsedDate), new Date());
       html += '<div class="back-row"><span class="back-label">最后使用</span><span class="back-value">' + formatDate(item.lastUsedDate) + '</span></div>';
-      if (days > 180) {
-        html += '<div style="padding:8px;border-radius:8px;background:rgba(175,82,222,0.1);color:var(--purple);font-size:13px;font-weight:600;margin-top:4px">🕐 已' + Math.floor(days/30) + '个月没用，考虑断舍离？</div>';
+      if (dDays2 > 180) {
+        html += '<div style="padding:8px;border-radius:8px;background:rgba(175,82,222,0.1);color:var(--purple);font-size:13px;font-weight:600;margin-top:4px">🕐 已' + Math.floor(dDays2/30) + '个月没用，考虑断舍离？</div>';
       }
     } else {
       html += '<div class="back-row"><span class="back-label" style="color:var(--text-tertiary)">未记录</span></div>';
@@ -1645,6 +1732,146 @@ function renderCardBack(item, zone) {
 
 function flipCard() {
   document.getElementById('flip-inner').classList.toggle('flipped');
+}
+
+// ========== 全屏照片查看器 ==========
+var _viewerPhotos = [];
+var _viewerIndex = 0;
+var _viewerScale = 1;
+var _viewerStartX = 0;
+var _viewerStartY = 0;
+var _viewerLastDist = 0;
+
+function openPhotoViewer(photos, index) {
+  if (!photos || photos.length === 0) return;
+  _viewerPhotos = photos;
+  _viewerIndex = index || 0;
+  _viewerScale = 1;
+
+  var html = '<div class="photo-viewer" id="photoViewer">';
+  html += '<button class="photo-viewer-close" onclick="closePhotoViewer()">✕</button>';
+  html += '<img id="viewerImg" src="' + photos[_viewerIndex] + '">';
+  if (photos.length > 1) {
+    html += '<div class="photo-viewer-counter" id="viewerCounter">' + (_viewerIndex+1) + ' / ' + photos.length + '</div>';
+  }
+  html += '</div>';
+
+  // 移除旧的
+  var old = document.getElementById('photoViewer');
+  if (old) old.remove();
+
+  document.body.insertAdjacentHTML('beforeend', html);
+
+  var img = document.getElementById('viewerImg');
+  var viewer = document.getElementById('photoViewer');
+
+  // 单击关闭
+  viewer.addEventListener('click', function(e) {
+    if (e.target === viewer) closePhotoViewer();
+  });
+
+  // 左右滑动切换
+  var touchStartX = 0, touchStartY = 0, touchMoved = false;
+  img.addEventListener('touchstart', function(e) {
+    if (e.touches.length === 1) {
+      touchStartX = e.touches[0].clientX;
+      touchStartY = e.touches[0].clientY;
+      touchMoved = false;
+    }
+    if (e.touches.length === 2) {
+      _viewerLastDist = getTouchDist(e);
+    }
+  }, { passive: true });
+
+  img.addEventListener('touchmove', function(e) {
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      var dist = getTouchDist(e);
+      if (_viewerLastDist > 0) {
+        _viewerScale = Math.max(0.5, Math.min(4, _viewerScale * (dist / _viewerLastDist)));
+        img.style.transform = 'scale(' + _viewerScale + ')';
+      }
+      _viewerLastDist = dist;
+    } else if (e.touches.length === 1 && _viewerScale <= 1) {
+      var dx = e.touches[0].clientX - touchStartX;
+      var dy = e.touches[0].clientY - touchStartY;
+      if (Math.abs(dx) > 10 || Math.abs(dy) > 10) touchMoved = true;
+    }
+  }, { passive: false });
+
+  img.addEventListener('touchend', function(e) {
+    if (_viewerScale > 1) return; // 缩放状态下不切换
+    if (!touchMoved) return;
+    var touch = e.changedTouches[0];
+    var dx = touch.clientX - touchStartX;
+    var dy = touch.clientY - touchStartY;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
+      if (dx > 0 && _viewerIndex > 0) {
+        _viewerIndex--;
+        updateViewerImg();
+      } else if (dx < 0 && _viewerIndex < _viewerPhotos.length - 1) {
+        _viewerIndex++;
+        updateViewerImg();
+      }
+    }
+    _viewerScale = 1;
+    img.style.transform = 'scale(1)';
+  }, { passive: true });
+}
+
+function getTouchDist(e) {
+  var dx = e.touches[0].clientX - e.touches[1].clientX;
+  var dy = e.touches[0].clientY - e.touches[1].clientY;
+  return Math.sqrt(dx*dx + dy*dy);
+}
+
+function updateViewerImg() {
+  var img = document.getElementById('viewerImg');
+  var counter = document.getElementById('viewerCounter');
+  if (img) {
+    img.src = _viewerPhotos[_viewerIndex];
+    img.style.transform = 'scale(1)';
+    _viewerScale = 1;
+  }
+  if (counter) counter.textContent = (_viewerIndex+1) + ' / ' + _viewerPhotos.length;
+}
+
+function closePhotoViewer() {
+  var v = document.getElementById('photoViewer');
+  if (v) v.remove();
+}
+
+// ========== 删除单件变体 ==========
+function deleteVariant(itemId, variantId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item || !item.variants) return;
+  var v = item.variants.find(function(v) { return v.id === variantId; });
+  if (!v) return;
+  var label = v.brand || '这件';
+  if (item.variants.length <= 1) {
+    // 最后一件
+    if (confirm('这是最后一件「' + label + '」，删除后整个卡片将移除。确定？')) {
+      var zone = getZone(currentZoneId);
+      zone.items = zone.items.filter(function(it) { return it.id !== itemId; });
+      saveDB();
+      closeCardDetail();
+      renderZone();
+      toast('已删除');
+    }
+    return;
+  }
+  if (confirm('删除「' + label + '」？此操作不可撤销。')) {
+    item.variants = item.variants.filter(function(v) { return v.id !== variantId; });
+    var zone = getZone(currentZoneId);
+    if (zone && zone.type !== 'consumable') {
+      syncDurableFromVariants(item);
+    } else {
+      syncItemFromVariants(item);
+    }
+    saveDB();
+    renderCardBack(item, zone);
+    toast('已删除1件');
+  }
 }
 
 // 点击正面翻面
@@ -2012,11 +2239,13 @@ function openItemForm(itemId) {
   var html = '<div class="modal-handle"></div>';
   html += '<div class="modal-title">' + (item ? '编辑物品' : '添加物品') + '</div>';
 
-  // 照片
-  html += '<div class="form-group"><label class="form-label">照片（最多9张）</label>';
-  html += '<div class="photo-upload" id="item-photos">';
-  html += '<div class="photo-slot" onclick="uploadItemPhoto()">📷</div>';
-  html += '</div></div>';
+  // 照片（仅补给品在顶部上传；耐用品的照片在件数编辑器中按件上传）
+  if (zone.type === 'consumable') {
+    html += '<div class="form-group"><label class="form-label">照片（最多9张）</label>';
+    html += '<div class="photo-upload" id="item-photos">';
+    html += '<div class="photo-slot" onclick="uploadItemPhoto()">📷</div>';
+    html += '</div></div>';
+  }
 
   html += '<div class="form-group"><label class="form-label">名称</label>';
   html += '<input type="text" class="form-input" id="item-name" value="' + (item?escapeHtml(item.name):'') + '" placeholder="如：洗发水"></div>';
@@ -2028,20 +2257,23 @@ function openItemForm(itemId) {
   });
   html += '</select></div>';
 
-  // 补给品：品牌变体（在下面）；耐用品：直接库存+单价
+  // 耐用品：件数编辑器（每件=描述+照片+可选价格）
   if (zone.type !== 'consumable') {
-    html += '<div class="form-row">';
-    html += '<div class="form-group"><label class="form-label">库存数量</label><input type="number" class="form-input" id="item-stock" value="' + (item?(item.stock||0):0) + '" step="0.5"></div>';
-    html += '<div class="form-group"><label class="form-label">单位</label><input type="text" class="form-input" id="item-unit" value="' + (item?escapeHtml(item.unit||''):'个') + '"></div>';
+    html += '<div class="form-group"><label class="form-label">件数清单</label>';
+    html += '<div id="variant-list">';
+    var dVariants = [];
+    if (item && item.variants && item.variants.length > 0) {
+      dVariants = item.variants.map(function(v) {
+        return { id: v.id, brand: v.brand||'', photos: (v.photos||[]).slice(), price: v.price||0 };
+      });
+    } else {
+      dVariants = [{ id: genId(), brand: '', photos: [], price: 0 }];
+    }
+    window._editVariants = dVariants;
+    window._editVariantPhotos = dVariants.map(function(v) { return v.photos.slice(); });
+    html += renderDurableVariantRows();
     html += '</div>';
-    html += '<div class="form-row">';
-    html += '<div class="form-group"><label class="form-label">单价</label><input type="number" class="form-input" id="item-price" value="' + (item?(item.currentPrice||''):'') + '"></div>';
-    html += '<div class="form-group"><label class="form-label">购买渠道</label>';
-    html += '<select class="form-select" id="item-channel">';
-    ['','淘宝','京东','拼多多','线下','其他'].forEach(function(c) {
-      html += '<option value="' + c + '"' + (item&&item.channel===c?' selected':'') + '>' + (c||'请选择') + '</option>';
-    });
-    html += '</select></div>';
+    html += '<button class="btn btn-outline btn-sm" style="margin-top:6px;width:100%" onclick="addDurableVariantRow()">＋ 添加一件</button>';
     html += '</div>';
   }
 
@@ -2083,7 +2315,7 @@ function openItemForm(itemId) {
   document.getElementById('modal-content').innerHTML = html;
   document.getElementById('modal-overlay').classList.add('show');
 
-  if (item && item.photos) {
+  if (item && item.photos && zone.type === 'consumable') {
     itemPhotos = item.photos.slice();
     renderItemPhotos();
   }
@@ -2106,6 +2338,7 @@ function uploadItemPhoto() {
 
 function renderItemPhotos() {
   var container = document.getElementById('item-photos');
+  if (!container) return;
   var html = '';
   itemPhotos.forEach(function(p, i) {
     html += '<div class="photo-slot has-photo"><img src="' + p + '"><button class="remove-photo" onclick="removeItemPhoto(' + i + ')">✕</button></div>';
@@ -2149,6 +2382,101 @@ function addVariantRow() {
 function removeVariantRow(idx) {
   window._editVariants.splice(idx, 1);
   document.getElementById('variant-list').innerHTML = renderVariantEditorRows();
+}
+
+// ========== 耐用品件数编辑器 ==========
+function renderDurableVariantRows() {
+  var html = '';
+  var variants = window._editVariants || [];
+  var photos = window._editVariantPhotos || [];
+  variants.forEach(function(v, i) {
+    html += '<div class="durable-variant-row" style="border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:8px">';
+    html += '<div style="display:flex;gap:8px;align-items:flex-start">';
+    // 照片上传区
+    html += '<div class="durable-photo-slot" onclick="uploadDurableVariantPhoto(' + i + ')" style="width:56px;height:56px;border-radius:8px;background:var(--bg);display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden;cursor:pointer;position:relative">';
+    if (photos[i] && photos[i].length > 0) {
+      html += '<img src="' + photos[i][0] + '" style="width:100%;height:100%;object-fit:cover;border-radius:8px">';
+      html += '<div style="position:absolute;bottom:0;right:0;background:rgba(0,0,0,0.6);color:#fff;font-size:10px;padding:1px 4px;border-radius:4px 0 8px 0">' + (photos[i].length > 1 ? '+' + photos[i].length : '') + '</div>';
+    } else {
+      html += '<span style="font-size:20px;color:var(--text-tertiary)">📷</span>';
+    }
+    html += '</div>';
+    // 描述+价格
+    html += '<div style="flex:1;display:flex;flex-direction:column;gap:4px">';
+    html += '<input type="text" class="form-input" style="font-size:14px" placeholder="描述（如：白色圆领）" value="' + escapeHtml(v.brand) + '" onchange="updateDurableVariantField(' + i + ',\'brand\',this.value)">';
+    html += '<input type="number" class="form-input" style="font-size:14px" placeholder="价格（选填）" value="' + (v.price||'') + '" onchange="updateDurableVariantField(' + i + ',\'price\',parseFloat(this.value)||0)">';
+    html += '</div>';
+    // 删除按钮
+    html += '<button class="btn btn-danger btn-sm" style="flex-shrink:0;padding:6px 8px;font-size:12px" onclick="removeDurableVariantRow(' + i + ')">✕</button>';
+    html += '</div>';
+    // 已有照片缩略图列表
+    if (photos[i] && photos[i].length > 0) {
+      html += '<div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap">';
+      photos[i].forEach(function(p, pi) {
+        html += '<div style="position:relative;width:40px;height:40px">';
+        html += '<img src="' + p + '" style="width:40px;height:40px;border-radius:6px;object-fit:cover">';
+        html += '<button onclick="removeDurableVariantPhoto(' + i + ',' + pi + ')" style="position:absolute;top:-4px;right:-4px;width:16px;height:16px;border-radius:50%;background:var(--red);color:#fff;border:none;font-size:10px;line-height:16px;cursor:pointer">✕</button>';
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+    html += '</div>';
+  });
+  return html;
+}
+function updateDurableVariantField(idx, field, val) {
+  if (window._editVariants && window._editVariants[idx]) {
+    window._editVariants[idx][field] = val;
+  }
+}
+function addDurableVariantRow() {
+  window._editVariants = window._editVariants || [];
+  window._editVariantPhotos = window._editVariantPhotos || [];
+  window._editVariants.push({ id: genId(), brand: '', photos: [], price: 0 });
+  window._editVariantPhotos.push([]);
+  document.getElementById('variant-list').innerHTML = renderDurableVariantRows();
+}
+function removeDurableVariantRow(idx) {
+  if (window._editVariants.length <= 1) {
+    toast('至少保留一件');
+    return;
+  }
+  window._editVariants.splice(idx, 1);
+  window._editVariantPhotos.splice(idx, 1);
+  document.getElementById('variant-list').innerHTML = renderDurableVariantRows();
+}
+function uploadDurableVariantPhoto(idx) {
+  var input = document.getElementById('photo-input');
+  input.onchange = function(e) {
+    var files = e.target.files;
+    var count = 0;
+    var maxPhotos = 5;
+    var currentPhotos = window._editVariantPhotos[idx] || [];
+    var remaining = maxPhotos - currentPhotos.length;
+    var toProcess = Math.min(files.length, remaining);
+    
+    function processNext(fileIdx) {
+      if (fileIdx >= toProcess) {
+        input.value = '';
+        document.getElementById('variant-list').innerHTML = renderDurableVariantRows();
+        if (count === 0) toast('每件最多' + maxPhotos + '张照片');
+        return;
+      }
+      compressImage(files[fileIdx], function(dataUrl) {
+        window._editVariantPhotos[idx].push(dataUrl);
+        count++;
+        processNext(fileIdx + 1);
+      });
+    }
+    processNext(0);
+  };
+  input.click();
+}
+function removeDurableVariantPhoto(variantIdx, photoIdx) {
+  if (window._editVariantPhotos && window._editVariantPhotos[variantIdx]) {
+    window._editVariantPhotos[variantIdx].splice(photoIdx, 1);
+    document.getElementById('variant-list').innerHTML = renderDurableVariantRows();
+  }
 }
 
 // variant使用感受（在卡片背面点"感受"按钮）
@@ -2242,16 +2570,32 @@ function saveItem() {
     data.productionDate = prodDate ? new Date(prodDate).toISOString() : null;
     data.stockThreshold = parseFloat(document.getElementById('item-threshold').value) || 1;
   } else {
-    data.stock = parseFloat(document.getElementById('item-stock').value) || 0;
-    data.unit = document.getElementById('item-unit').value || '个';
-    data.currentPrice = parseFloat(document.getElementById('item-price').value) || 0;
-    data.channel = document.getElementById('item-channel').value;
+    // 耐用品：从件数编辑器读取
+    var dEditVariants = window._editVariants || [];
+    var dEditPhotos = window._editVariantPhotos || [];
+    data.variants = dEditVariants.map(function(ev, i) {
+      return {
+        id: ev.id,
+        brand: ev.brand || ('第' + (i+1) + '件'),
+        stock: 1,
+        price: ev.price || 0,
+        channel: '',
+        photos: (dEditPhotos[i] || []).slice(),
+        opened: false, openDate: null, finishDate: null,
+        usedUp: false, openQty: 0, feeling: null,
+        shelfLife: null, productionDate: null
+      };
+    });
+    data.stock = data.variants.length;
+    data.unit = '件';
+    data.currentPrice = data.variants.length > 0 ? data.variants[0].price : 0;
+    data.channel = '';
   }
 
   if (editingItemId) {
     var item = getItem(currentZoneId, editingItemId);
     if (zone.type === 'consumable') {
-      // 保留已有的variant使用数据
+      // 补给品：保留已有的variant使用数据
       var oldVariants = item.variants || [];
       var newVariants = data.variants;
       newVariants.forEach(function(nv) {
@@ -2268,21 +2612,24 @@ function saveItem() {
           nv.photos = old.photos;
         }
       });
+    } else {
+      // 耐用品：保留已有的variant使用感受
+      var oldDVariants = item.variants || [];
+      data.variants.forEach(function(nv) {
+        var old = oldDVariants.find(function(ov) { return ov.id === nv.id; });
+        if (old) {
+          nv.feeling = old.feeling;
+        }
+      });
     }
     Object.assign(item, data);
     if (zone.type === 'consumable') syncItemFromVariants(item);
+    else syncDurableFromVariants(item);
   } else {
     data.id = genId();
     data.usageRecords = [];
     data.priceHistory = [];
     data.createdAt = new Date().toISOString();
-    if (zone.type !== 'consumable' && data.currentPrice > 0 && data.stock > 0) {
-      data.priceHistory.push({
-        date: new Date().toISOString(), channel: data.channel,
-        quantity: data.stock, totalPrice: data.currentPrice * data.stock,
-        unitPrice: data.currentPrice, notes: ''
-      });
-    }
     zone.items.push(data);
   }
 
