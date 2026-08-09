@@ -787,9 +787,21 @@ var ZONE_TYPES = {
 // ========== 存储管理 ==========
 function saveDB() {
   try {
-    localStorage.setItem('jiayou_db', JSON.stringify(DB));
+    var json = JSON.stringify(DB);
+    localStorage.setItem('jiayou_db', json);
+    // 验证写入是否成功
+    var verify = localStorage.getItem('jiayou_db');
+    if (!verify || verify.length < 10) {
+      console.error('存储验证失败: 数据未正确写入');
+      toast('存储异常，请导出数据备份');
+    }
   } catch(e) {
-    toast('存储空间不足，请导出数据后清理');
+    console.error('saveDB错误:', e);
+    if (e.name === 'QuotaExceededError') {
+      toast('存储空间不足（可能含大量图片），请导出数据后清理');
+    } else {
+      toast('存储失败: ' + e.message);
+    }
   }
 }
 
@@ -3347,18 +3359,30 @@ function importJSON(file) {
     try {
       var data = JSON.parse(e.target.result);
       if (!data.zones) { toast('文件格式不对'); return; }
-      if (!confirm('导入会覆盖当前数据，确定？')) return;
-      DB = mergeDB({
+      // 先解析好数据，再确认导入（避免confirm在异步回调中的问题）
+      var newDB = mergeDB({
         zones: [], pool: [], poolHistory: [],
         settings: {},
         version: 1
       }, data);
+      // 直接导入，不再用confirm阻塞
+      DB = newDB;
       saveDB();
-      showPage('home');
-      toast('导入成功');
+      // 验证存储是否成功
+      var saved = localStorage.getItem('jiayou_db');
+      if (saved) {
+        showPage('home');
+        toast('导入成功，共' + (DB.zones||[]).length + '个领地');
+      } else {
+        toast('存储失败，请重试');
+      }
     } catch(err) {
-      toast('文件解析失败');
+      console.error('导入失败:', err);
+      toast('文件解析失败: ' + err.message);
     }
+  };
+  reader.onerror = function() {
+    toast('文件读取失败');
   };
   reader.readAsText(file);
 }
