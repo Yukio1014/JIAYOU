@@ -848,6 +848,20 @@ function loadDB() {
     ];
     saveDB();
   }
+  // 数据迁移：为耐用品计算 totalPrice（兼容旧数据）
+  if (DB.zones) {
+    DB.zones.forEach(function(zone) {
+      if (zone.type !== 'consumable' && zone.items) {
+        zone.items.forEach(function(item) {
+          if (item.variants && item.variants.length > 0) {
+            if (item.totalPrice === undefined) {
+              item.totalPrice = item.variants.reduce(function(s, v) { return s + (parseFloat(v.price) || 0); }, 0);
+            }
+          }
+        });
+      }
+    });
+  }
 }
 
 function mergeDB(defaults, loaded) {
@@ -928,6 +942,8 @@ function syncDurableFromVariants(item) {
   });
   item.photos = allPhotos;
   item.currentPrice = item.variants[0].price || 0;
+  // 计算总金额（所有变体 price 之和）
+  item.totalPrice = item.variants.reduce(function(s, v) { return s + (parseFloat(v.price) || 0); }, 0);
 }
 
 // ========== 页面切换 ==========
@@ -1416,9 +1432,17 @@ function renderItemCard(item, zone) {
   html += '<div class="card-name">' + escapeHtml(item.name) + '</div>';
 
   if (isDurable) {
-    // 耐用品正面：显示件数（隐私模式，不显示照片）
+    // 耐用品正面：件数 + 总金额（隐私模式，不显示照片）
+    var totalPrice = item.totalPrice || 0;
     if (variantCount > 1) {
-      html += '<div class="card-info" style="color:var(--accent);font-weight:600">' + variantCount + '件</div>';
+      html += '<div class="card-info" style="display:flex;justify-content:space-between;align-items:baseline">';
+      html += '<span style="color:var(--accent);font-weight:600">' + variantCount + '件</span>';
+      if (totalPrice > 0) {
+        html += '<span style="color:var(--green);font-weight:700;font-size:15px">¥' + totalPrice + '</span>';
+      }
+      html += '</div>';
+    } else if (totalPrice > 0) {
+      html += '<div class="card-info" style="color:var(--green);font-weight:600">¥' + totalPrice + '</div>';
     }
     if (item.location) {
       html += '<div class="card-info">📍 ' + escapeHtml(item.location) + '</div>';
@@ -1521,10 +1545,14 @@ function renderCardFront(item, zone) {
       html += '</div>';
     }
   } else {
-    // 耐用品正面：件数 + 位置（隐私模式，不显示照片）
+    // 耐用品正面：件数 + 总金额（隐私模式，不显示照片）
     var variantCount = (item.variants && item.variants.length) ? item.variants.length : 1;
+    var dTotalPrice = item.totalPrice || 0;
     html += '<div style="margin-top:14px;text-align:center;padding:16px;border-radius:10px;background:rgba(0,122,255,0.08);color:var(--accent);font-weight:700">';
     html += '共 ' + variantCount + ' 件';
+    if (dTotalPrice > 0) {
+      html += '<div style="margin-top:6px;font-size:18px;color:var(--green)">合计 ¥' + dTotalPrice + '</div>';
+    }
     html += '</div>';
     if (item.location) {
       html += '<div style="margin-top:8px;text-align:center;font-size:13px;color:var(--text-secondary)">📍 ' + escapeHtml(item.location) + '</div>';
@@ -2663,6 +2691,7 @@ function saveItem() {
     data.stock = data.variants.length;
     data.unit = '件';
     data.currentPrice = data.variants.length > 0 ? data.variants[0].price : 0;
+    data.totalPrice = data.variants.reduce(function(s, v) { return s + (parseFloat(v.price) || 0); }, 0);
     data.channel = '';
   }
 
