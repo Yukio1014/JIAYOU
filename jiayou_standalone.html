@@ -880,6 +880,12 @@ function calcDurableTotalPrice(item) {
   return item.variants.reduce(function(s, v) { return s + (v.price || 0); }, 0);
 }
 
+// 耐用品：计算单件物品的实际件数（所有variant数量之和）
+function calcDurableItemCount(item) {
+  if (!item.variants || item.variants.length === 0) return 0;
+  return item.variants.length;
+}
+
 // 耐用品：计算整个板块的总金额
 function calcZoneTotalPrice(zone) {
   if (!zone || !zone.items) return 0;
@@ -1092,7 +1098,13 @@ function renderHome() {
   html += '<div class="section-title">领地分布<div class="section-action" onclick="openZoneManager()">管理</div></div>';
   html += '<div>';
   DB.zones.forEach(function(zone) {
-    var count = zone.items.length;
+    var count;
+    // 耐用品：统计所有variant的实际件数总和；补给品：按物品卡片数量
+    if (zone.type === 'durable') {
+      count = zone.items.reduce(function(s, it) { return s + calcDurableItemCount(it); }, 0);
+    } else {
+      count = zone.items.length;
+    }
     var themeClass = 'zone-theme-' + (zone.theme || (zone.type === 'consumable' ? 'consumable' : 'durable'));
     html += '<div class="zone-card ' + themeClass + '" onclick="enterZone(\'' + zone.id + '\')">';
     html += '<div class="zone-icon">' + zone.icon + '</div>';
