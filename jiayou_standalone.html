@@ -12,6 +12,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
 <title>家有</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.1/dist/umd/supabase.min.js"></script>
 <style>
 /* ========== 设计系统 ========== */
 :root {
@@ -56,7 +57,20 @@ body {
   display: flex; align-items: center; justify-content: space-between;
 }
 .navbar h1 { font-size: 28px; font-weight: 700; letter-spacing: -0.5px; }
-.navbar .nav-actions { display: flex; gap: 8px; }
+.navbar .nav-actions { display: flex; gap: 8px; align-items: center; }
+.cloud-status {
+  font-size: 12px; font-weight: 600;
+  padding: 5px 10px; border-radius: 12px;
+  background: rgba(0,122,255,0.08); color: var(--accent);
+  white-space: nowrap; cursor: pointer;
+  transition: opacity 0.15s;
+}
+.cloud-status:active { opacity: 0.6; }
+.cloud-status.synced { background: rgba(52,199,89,0.12); color: var(--green); }
+.cloud-status.syncing { background: rgba(0,122,255,0.12); color: var(--accent); }
+.cloud-status.pending { background: rgba(255,149,0,0.12); color: var(--orange); }
+.cloud-status.offline { background: rgba(142,142,147,0.12); color: var(--text-secondary); }
+.cloud-status.error { background: rgba(255,59,48,0.12); color: var(--red); }
 .nav-btn {
   width: 32px; height: 32px;
   border-radius: 50%; border: none;
@@ -682,6 +696,7 @@ body {
 <div class="navbar" id="nav-home">
   <h1>家有</h1>
   <div class="nav-actions">
+    <div class="cloud-status" id="cloud-status" onclick="manualSync()">☁️ 初始化...</div>
     <button class="nav-btn" onclick="openSettings()">⚙</button>
   </div>
 </div>
@@ -769,6 +784,280 @@ body {
    家有 App - 核心逻辑
    ================================================================ */
 
+// ========== Supabase 云同步配置 ==========
+const SUPABASE_URL = 'https://pnahlubyqqzcjrzhnzfa.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_UpBLW71YgaQCcm6YGCrGsw_urK1cVTd';
+const BUCKET_NAME = 'jiayou-photos';
+const CLOUD_SYNC_DEBOUNCE_MS = 2500;
+
+var supabaseClient = null;
+var currentUser = null;
+var cloudSyncState = { status: 'idle', message: '', lastSyncAt: null, pending: false };
+var cloudSyncTimer = null;
+var cloudSyncInProgress = false;
+
+try {
+  if (window.supabase && window.supabase.createClient) {
+    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+      auth: { persistSession: true, autoRefreshToken: true }
+    });
+  }
+} catch(e) { console.error('Supabase初始化失败', e); }
+
+// 生成稳定设备ID（用于匿名用户识别）
+function getDeviceId() {
+  var id = localStorage.getItem('jiayou_device_id');
+  if (!id) {
+    id = 'dev_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    localStorage.setItem('jiayou_device_id', id);
+  }
+  return id;
+}
+
+// 尝试匿名登录；失败则使用设备本地模式（仍可用，只是不同步）
+async function initAuth() {
+  if (!supabaseClient) return;
+  try {
+    var { data: { session }, error } = await supabaseClient.auth.getSession();
+    if (error) throw error;
+    if (session && session.user) {
+      currentUser = session.user;
+      updateCloudUI();
+      return;
+    }
+    // 尝试匿名登录
+    var { data, error: signErr } = await supabaseClient.auth.signInAnonymously();
+    if (signErr) {
+      // 某些项目未启用匿名登录，降级为邮箱+随机密码
+      await fallbackAnonymousLogin();
+      return;
+    }
+    currentUser = data.user;
+    localStorage.setItem('jiayou_anon_email', data.user.email || '');
+    updateCloudUI();
+  } catch(e) {
+    console.error('认证初始化失败', e);
+    await fallbackAnonymousLogin();
+  }
+}
+
+async function fallbackAnonymousLogin() {
+  if (!supabaseClient) return;
+  var deviceId = getDeviceId();
+  var email = localStorage.getItem('jiayou_anon_email');
+  var password = localStorage.getItem('jiayou_anon_password');
+  if (!email) {
+    email = deviceId + '@jiayou.local';
+    password = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+  }
+  try {
+    // 先尝试登录，如果账户不存在再注册
+    var { data: signInData, error: signInErr } = await supabaseClient.auth.signInWithPassword({ email: email, password: password });
+    if (!signInErr && signInData.user) {
+      currentUser = signInData.user;
+      updateCloudUI();
+      return;
+    }
+    var { data: signUpData, error: signUpErr } = await supabaseClient.auth.signUp({ email: email, password: password });
+    if (signUpErr) throw signUpErr;
+    currentUser = signUpData.user;
+    localStorage.setItem('jiayou_anon_email', email);
+    localStorage.setItem('jiayou_anon_password', password);
+    updateCloudUI();
+  } catch(e) {
+    console.error('降级认证失败', e);
+    updateCloudUI();
+  }
+}
+
+function updateCloudUI() {
+  var el = document.getElementById('cloud-status');
+  var settingsEl = document.getElementById('settings-cloud-status');
+  var text = '☁️ 未登录', cls = 'cloud-status offline';
+  if (!currentUser) {
+    text = '☁️ 未登录'; cls = 'cloud-status offline';
+  } else if (cloudSyncInProgress) {
+    text = '🔄 同步中...'; cls = 'cloud-status syncing';
+  } else if (cloudSyncState.pending) {
+    text = '⏳ 待同步'; cls = 'cloud-status pending';
+  } else if (cloudSyncState.lastSyncAt) {
+    var t = new Date(cloudSyncState.lastSyncAt);
+    text = '✓ 已同步 ' + String(t.getHours()).padStart(2,'0') + ':' + String(t.getMinutes()).padStart(2,'0');
+    cls = 'cloud-status synced';
+  } else {
+    text = '☁️ 已登录'; cls = 'cloud-status online';
+  }
+  if (el) { el.textContent = text; el.className = cls; }
+  if (settingsEl) { settingsEl.textContent = text.replace(/^[^\s]+\s/, ''); }
+}
+
+function setCloudStatus(status, message) {
+  cloudSyncState.status = status;
+  if (message) cloudSyncState.message = message;
+  updateCloudUI();
+}
+
+// 从本地数据中提取所有照片（base64），上传到 Storage，替换为 URL
+async function uploadAllLocalPhotos() {
+  if (!supabaseClient || !currentUser) return;
+  var uploads = [];
+  DB.zones.forEach(function(zone) {
+    zone.items.forEach(function(item) {
+      (item.photos || []).forEach(function(photo, idx) {
+        if (photo && photo.startsWith && photo.startsWith('data:')) {
+          uploads.push({ zoneId: zone.id, itemId: item.id, field: 'photos', idx: idx, data: photo });
+        }
+      });
+      (item.variants || []).forEach(function(v, vidx) {
+        (v.photos || []).forEach(function(photo, pidx) {
+          if (photo && photo.startsWith && photo.startsWith('data:')) {
+            uploads.push({ zoneId: zone.id, itemId: item.id, field: 'variant_photos', vidx: vidx, pidx: pidx, data: photo });
+          }
+        });
+      });
+    });
+  });
+  if (uploads.length === 0) return;
+  setCloudStatus('syncing', '上传照片中...');
+  for (var i = 0; i < uploads.length; i++) {
+    var u = uploads[i];
+    try {
+      var url = await uploadPhotoToStorage(u.data, u.zoneId, u.itemId);
+      if (url) {
+        if (u.field === 'photos') {
+          var item = findItemByIds(u.zoneId, u.itemId);
+          if (item && item.photos && item.photos[u.idx]) item.photos[u.idx] = url;
+        } else {
+          var item = findItemByIds(u.zoneId, u.itemId);
+          if (item && item.variants && item.variants[u.vidx] && item.variants[u.vidx].photos) {
+            item.variants[u.vidx].photos[u.pidx] = url;
+          }
+        }
+      }
+    } catch(e) { console.error('照片上传失败', e); }
+  }
+}
+
+function findItemByIds(zoneId, itemId) {
+  var zone = DB.zones.find(function(z) { return z.id === zoneId; });
+  if (!zone) return null;
+  return zone.items.find(function(it) { return it.id === itemId; }) || null;
+}
+
+async function uploadPhotoToStorage(base64Data, zoneId, itemId) {
+  if (!supabaseClient || !currentUser) return null;
+  try {
+    var arr = base64Data.split(',');
+    var mime = arr[0].match(/:(.*?);/)[1];
+    var bstr = atob(arr[1]);
+    var n = bstr.length;
+    var u8arr = new Uint8Array(n);
+    for (var i = 0; i < n; i++) u8arr[i] = bstr.charCodeAt(i);
+    var ext = mime.split('/')[1] || 'jpg';
+    var fileName = currentUser.id + '/' + zoneId + '/' + itemId + '/' + Date.now() + '_' + Math.random().toString(36).slice(2) + '.' + ext;
+    var file = new File([u8arr], fileName.split('/').pop(), { type: mime });
+    var { data, error } = await supabaseClient.storage.from(BUCKET_NAME).upload(fileName, file, { upsert: true });
+    if (error) throw error;
+    var { data: urlData } = supabaseClient.storage.from(BUCKET_NAME).getPublicUrl(fileName);
+    return urlData.publicUrl;
+  } catch(e) {
+    console.error('上传照片到Storage失败', e);
+    return null;
+  }
+}
+
+// 保存数据到云端
+async function syncToCloud(force) {
+  if (!supabaseClient || !currentUser) return;
+  if (cloudSyncInProgress) {
+    cloudSyncState.pending = true;
+    updateCloudUI();
+    return;
+  }
+  cloudSyncInProgress = true;
+  cloudSyncState.pending = false;
+  setCloudStatus('syncing', '正在同步...');
+  try {
+    // 先上传本地 base64 照片
+    await uploadAllLocalPhotos();
+    // 保存元数据
+    var payload = {
+      user_id: currentUser.id,
+      data: DB,
+      updated_at: new Date().toISOString(),
+      version: (DB.version || 1)
+    };
+    var { error } = await supabaseClient
+      .from('app_data')
+      .upsert(payload, { onConflict: 'user_id' });
+    if (error) throw error;
+    cloudSyncState.lastSyncAt = Date.now();
+    setCloudStatus('synced', '同步完成');
+  } catch(e) {
+    console.error('同步到云端失败', e);
+    cloudSyncState.pending = true;
+    setCloudStatus('error', '同步失败');
+  } finally {
+    cloudSyncInProgress = false;
+    updateCloudUI();
+    // 如果有排队中的同步，debounce 后重试
+    if (cloudSyncState.pending) {
+      clearTimeout(cloudSyncTimer);
+      cloudSyncTimer = setTimeout(function() { syncToCloud(true); }, CLOUD_SYNC_DEBOUNCE_MS);
+    }
+  }
+}
+
+function queueCloudSync() {
+  if (!supabaseClient || !currentUser) return;
+  cloudSyncState.pending = true;
+  updateCloudUI();
+  clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = setTimeout(function() { syncToCloud(true); }, CLOUD_SYNC_DEBOUNCE_MS);
+}
+
+// 从云端拉取数据
+async function syncFromCloud() {
+  if (!supabaseClient || !currentUser) return false;
+  setCloudStatus('syncing', '从云端恢复...');
+  try {
+    var { data, error } = await supabaseClient
+      .from('app_data')
+      .select('data, updated_at')
+      .eq('user_id', currentUser.id)
+      .single();
+    if (error) {
+      if (error.code === 'PGRST116') {
+        // 云端没有数据，把本地数据推上去
+        await syncToCloud(true);
+        return true;
+      }
+      throw error;
+    }
+    if (!data || !data.data) return false;
+    // 合并云端数据到本地（云端优先）
+    DB = mergeDB(DB, data.data);
+    cloudSyncState.lastSyncAt = Date.now();
+    setCloudStatus('synced', '恢复完成');
+    return true;
+  } catch(e) {
+    console.error('从云端恢复失败', e);
+    setCloudStatus('error', '恢复失败');
+    return false;
+  }
+}
+
+// 手动触发同步按钮
+function manualSync() {
+  if (!navigator.onLine) { toast('当前离线，恢复网络后自动同步'); return; }
+  if (!currentUser) { toast('未登录，无法同步'); return; }
+  toast('开始同步...');
+  syncToCloud(true).then(function() {
+    renderAll();
+    toast('同步完成');
+  });
+}
+
 // ========== 数据层 ==========
 var DB = {
   zones: [],
@@ -842,6 +1131,8 @@ function saveDB() {
     localStorage.setItem('jiayou_db', json);
     // 同时保存到 IndexedDB（iOS PWA 更可靠）
     saveDBIndexed().catch(function(e) { console.error('IndexedDB保存失败', e); });
+    // 排队同步到 Supabase 云端
+    queueCloudSync();
   } catch(e) {
     console.error('saveDB错误:', e);
     if (e.name === 'QuotaExceededError') {
@@ -2049,9 +2340,22 @@ function deleteVariant(itemId, variantId) {
 }
 
 // 点击正面翻面
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', async function() {
   loadDB();
   showPage('home');
+
+  // 初始化认证并尝试从云端同步（在后台完成，不阻塞首页渲染）
+  try {
+    await initAuth();
+    if (currentUser) {
+      var cloudChanged = await syncFromCloud();
+      if (cloudChanged) {
+        renderAll();
+      }
+    }
+  } catch(e) {
+    console.error('云端初始化失败', e);
+  }
 
   document.getElementById('flip-front').addEventListener('click', function(e) {
     if (e.target.closest('.back-close')) return;
@@ -2065,6 +2369,15 @@ document.addEventListener('DOMContentLoaded', function() {
   });
   document.getElementById('modal-overlay').addEventListener('click', function(e) {
     if (e.target === this) closeModal();
+  });
+
+  // 网络恢复时自动同步
+  window.addEventListener('online', function() {
+    updateCloudUI();
+    if (currentUser) queueCloudSync();
+  });
+  window.addEventListener('offline', function() {
+    updateCloudUI();
   });
 });
 
@@ -3464,6 +3777,23 @@ function poolToItem(itemId) {
 function renderSettings() {
   var html = '';
 
+  // 云同步状态
+  html += '<div class="section-title">云同步</div>';
+  html += '<div class="setting-group">';
+  var statusText = '未登录';
+  if (currentUser) {
+    if (cloudSyncInProgress) statusText = '同步中...';
+    else if (cloudSyncState.pending) statusText = '待同步';
+    else if (cloudSyncState.lastSyncAt) statusText = '已同步 ' + formatDateTime(cloudSyncState.lastSyncAt);
+    else statusText = '已登录';
+  }
+  html += '<div class="setting-row" onclick="manualSync()"><div class="setting-label">☁️ 同步状态</div><div class="setting-value" id="settings-cloud-status">' + statusText + '</div></div>';
+  if (currentUser && currentUser.email && !currentUser.email.endsWith('@jiayou.local')) {
+    html += '<div class="setting-row"><div class="setting-label">📧 已绑定邮箱</div><div class="setting-value">' + escapeHtml(currentUser.email) + '</div></div>';
+  }
+  html += '<button class="btn btn-primary btn-full" style="margin-top:10px;" onclick="manualSync()">立即同步</button>';
+  html += '</div>';
+
   // 数据管理
   html += '<div class="section-title">数据管理</div>';
   html += '<div class="setting-group">';
@@ -3550,6 +3880,12 @@ function formatDate(iso) {
   if (!iso) return '';
   var d = new Date(iso);
   return d.getFullYear() + '.' + String(d.getMonth()+1).padStart(2,'0') + '.' + String(d.getDate()).padStart(2,'0');
+}
+
+function formatDateTime(ts) {
+  if (!ts) return '';
+  var d = new Date(ts);
+  return String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0') + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
 }
 
 function escapeHtml(str) {
