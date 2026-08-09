@@ -12,7 +12,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
 <title>家有</title>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.1/dist/umd/supabase.min.js"></script>
+<script src="supabase.js"></script>
 <style>
 /* ========== 设计系统 ========== */
 :root {
@@ -801,8 +801,14 @@ try {
     supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
       auth: { persistSession: true, autoRefreshToken: true }
     });
+  } else {
+    console.error('window.supabase 不存在');
+    toast('Supabase 库未加载，请检查网络');
   }
-} catch(e) { console.error('Supabase初始化失败', e); }
+} catch(e) {
+  console.error('Supabase初始化失败', e);
+  toast('Supabase初始化失败: ' + (e.message || e));
+}
 
 // 生成稳定设备ID（用于匿名用户识别）
 function getDeviceId() {
@@ -816,7 +822,10 @@ function getDeviceId() {
 
 // 尝试匿名登录；失败则使用设备本地模式（仍可用，只是不同步）
 async function initAuth() {
-  if (!supabaseClient) return;
+  if (!supabaseClient) {
+    toast('未连接云端服务');
+    return;
+  }
   try {
     var { data: { session }, error } = await supabaseClient.auth.getSession();
     if (error) throw error;
@@ -828,7 +837,7 @@ async function initAuth() {
     // 尝试匿名登录
     var { data, error: signErr } = await supabaseClient.auth.signInAnonymously();
     if (signErr) {
-      // 某些项目未启用匿名登录，降级为邮箱+随机密码
+      console.log('匿名登录失败，尝试邮箱降级:', signErr.message);
       await fallbackAnonymousLogin();
       return;
     }
@@ -837,6 +846,7 @@ async function initAuth() {
     updateCloudUI();
   } catch(e) {
     console.error('认证初始化失败', e);
+    toast('认证失败: ' + (e.message || e));
     await fallbackAnonymousLogin();
   }
 }
@@ -846,26 +856,53 @@ async function fallbackAnonymousLogin() {
   var deviceId = getDeviceId();
   var email = localStorage.getItem('jiayou_anon_email');
   var password = localStorage.getItem('jiayou_anon_password');
+  var isNew = false;
   if (!email) {
     email = deviceId + '@jiayou.app';
     password = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    isNew = true;
   }
   try {
-    // 先尝试登录，如果账户不存在再注册
-    var { data: signInData, error: signInErr } = await supabaseClient.auth.signInWithPassword({ email: email, password: password });
+    if (isNew) {
+      // 新设备：直接注册
+      var { data: signUpData, error: signUpErr } = await supabaseClient.auth.signUp({
+        email: email,
+        password: password,
+        options: { data: { source: 'jiayou_app' } }
+      });
+      if (signUpErr) throw signUpErr;
+      if (!signUpData.user) throw new Error('注册后未返回用户');
+      currentUser = signUpData.user;
+      localStorage.setItem('jiayou_anon_email', email);
+      localStorage.setItem('jiayou_anon_password', password);
+      updateCloudUI();
+      toast('已创建云端账号');
+      return;
+    }
+    // 已有账号：尝试登录
+    var { data: signInData, error: signInErr } = await supabaseClient.auth.signInWithPassword({
+      email: email,
+      password: password
+    });
     if (!signInErr && signInData.user) {
       currentUser = signInData.user;
       updateCloudUI();
       return;
     }
-    var { data: signUpData, error: signUpErr } = await supabaseClient.auth.signUp({ email: email, password: password });
-    if (signUpErr) throw signUpErr;
-    currentUser = signUpData.user;
-    localStorage.setItem('jiayou_anon_email', email);
-    localStorage.setItem('jiayou_anon_password', password);
+    // 登录失败：可能账号被删或密码错，重新注册
+    var { data: signUpData2, error: signUpErr2 } = await supabaseClient.auth.signUp({
+      email: email,
+      password: password,
+      options: { data: { source: 'jiayou_app' } }
+    });
+    if (signUpErr2) throw signUpErr2;
+    if (!signUpData2.user) throw new Error('重新注册后未返回用户');
+    currentUser = signUpData2.user;
     updateCloudUI();
+    toast('已创建云端账号');
   } catch(e) {
     console.error('降级认证失败', e);
+    toast('云端登录失败: ' + (e.message || e));
     updateCloudUI();
   }
 }
