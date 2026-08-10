@@ -1183,48 +1183,55 @@ function loadDBIndexed() {
 function saveDB() {
   try {
     var json = JSON.stringify(DB);
-    localStorage.setItem('jiayou_db', json);
-    // 同时保存到 IndexedDB（iOS PWA 更可靠）
+    // 主存：IndexedDB（容量大，可存数十MB）
     saveDBIndexed().catch(function(e) { console.error('IndexedDB保存失败', e); });
-    // 排队同步到 Supabase 云端
+    // 次存：localStorage（5-10MB限制，存不下会失败但不阻塞）
+    try { localStorage.setItem('jiayou_db', json); } catch(lsErr) { console.warn('localStorage保存失败', lsErr); }
+    // 排队同步到 Supabase 云端（最可靠）
     queueCloudSync();
   } catch(e) {
     console.error('saveDB错误:', e);
     if (e.name === 'QuotaExceededError') {
-      toast('存储空间不足（可能含大量图片），请导出数据后清理');
+      toast('本地存储空间不足（云端已存）');
     } else {
       toast('存储失败: ' + e.message);
     }
   }
 }
 
-function loadDB() {
-  // 优先从 IndexedDB 读取（iOS PWA 更稳定），回退到 localStorage
+async function loadDB() {
   var loaded = false;
-  var raw = localStorage.getItem('jiayou_db');
-  if (raw) {
+  var localRaw = null, idbData = null;
+  // 先读 localStorage（5MB 限制可能失败）
+  try {
+    localRaw = localStorage.getItem('jiayou_db');
+  } catch(e) { console.warn('读 localStorage 失败', e); }
+  if (localRaw) {
     try {
-      var parsed = JSON.parse(raw);
-      DB = mergeDB(DB, parsed);
-      loaded = true;
+      var parsed = JSON.parse(localRaw);
+      if (parsed && parsed.zones && parsed.zones.length > 0) {
+        DB = mergeDB(DB, parsed);
+        loaded = true;
+      }
     } catch(e) {
-      console.error('localStorage数据加载失败', e);
+      console.warn('localStorage数据加载失败', e);
     }
   }
-
-  // 尝试从 IndexedDB 恢复
-  loadDBIndexed().then(function(idbData) {
-    if (idbData && idbData.zones) {
-      DB = mergeDB(DB, idbData);
-      // 如果 IndexedDB 有数据但 localStorage 没有/损坏，同步回 localStorage
-      if (!loaded) {
-        try { localStorage.setItem('jiayou_db', JSON.stringify(DB)); } catch(e) {}
-        showPage('home');
+  // 再读 IndexedDB（容量大）
+  try {
+    idbData = await loadDBIndexed();
+    if (idbData && idbData.zones && idbData.zones.length > 0) {
+      var idbItemCount = idbData.zones.reduce(function(s,z){return s+(z.items?z.items.length:0);}, 0);
+      var localItemCount = (DB.zones||[]).reduce(function(s,z){return s+(z.items?z.items.length:0);}, 0);
+      if (idbItemCount > localItemCount) {
+        DB = mergeDB(DB, idbData);
+        loaded = true;
+      } else if (!loaded) {
+        DB = mergeDB(DB, idbData);
+        loaded = true;
       }
     }
-  }).catch(function(e) {
-    console.error('IndexedDB加载失败', e);
-  });
+  } catch(e) { console.error('IndexedDB加载失败', e); }
 
   // 首次使用：创建默认板块
   if (!DB.zones || DB.zones.length === 0) {
@@ -1261,7 +1268,7 @@ function loadDB() {
       }
     ];
     // 注意：首次创建默认板块时不立即 saveDB，避免空默认数据覆盖云端真实数据
-    // 等 syncFromCloud 拉取后会被云端数据覆盖（如果云端有数据）
+    // 等 syncFromCloud 拉取后会被云端数据覆盖
   }
 }
 
@@ -2397,7 +2404,7 @@ function deleteVariant(itemId, variantId) {
 
 // 点击正面翻面
 document.addEventListener('DOMContentLoaded', async function() {
-  loadDB();
+  await loadDB();
   showPage('home');
 
   // 初始化认证并尝试从云端同步（在后台完成，不阻塞首页渲染）
