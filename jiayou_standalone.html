@@ -1072,8 +1072,26 @@ async function syncFromCloud() {
       throw error;
     }
     if (!data || !data.data) return false;
-    // 合并云端数据到本地（云端优先）
-    DB = mergeDB(DB, data.data);
+    // 合并云端数据到本地
+    var cloudData = data.data;
+    var localZones = (DB.zones || []);
+    var cloudZones = (cloudData.zones || []);
+    var localItemsCount = localZones.reduce(function(s, z) { return s + (z.items ? z.items.length : 0); }, 0);
+    var cloudItemsCount = cloudZones.reduce(function(s, z) { return s + (z.items ? z.items.length : 0); }, 0);
+    if (cloudItemsCount > 0) {
+      // 云端有真实数据，用云端覆盖
+      DB = mergeDB(DB, cloudData);
+      // 立即同步到本地存储
+      try { localStorage.setItem('jiayou_db', JSON.stringify(DB)); } catch(e) {}
+      saveDBIndexed().catch(function(){});
+    } else if (localItemsCount > 0) {
+      // 本地有数据但云端没有，推送到云端
+      await syncToCloud(true);
+      return true;
+    } else {
+      // 双方都空，用云端（默认空）
+      DB = mergeDB(DB, cloudData);
+    }
     cloudSyncState.lastSyncAt = Date.now();
     setCloudStatus('synced', '恢复完成');
     return true;
@@ -1242,7 +1260,8 @@ function loadDB() {
         items: []
       }
     ];
-    saveDB();
+    // 注意：首次创建默认板块时不立即 saveDB，避免空默认数据覆盖云端真实数据
+    // 等 syncFromCloud 拉取后会被云端数据覆盖（如果云端有数据）
   }
 }
 
