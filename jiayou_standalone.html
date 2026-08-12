@@ -12,7 +12,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
 <title>家有</title>
-<script src="supabase.js"></script>
+<script src="supabase.js" defer></script>
 <style>
 /* ========== 设计系统 ========== */
 :root {
@@ -2147,7 +2147,7 @@ function renderCardBack(item, zone) {
         if (item.openQty) html += '<div class="back-row"><span class="back-label">开封数量</span><span class="back-value">' + item.openQty + (item.unit||'') + '</span></div>';
         var usingDays = daysBetween(new Date(item.openDate), new Date());
         html += '<div class="back-row"><span class="back-label">已使用</span><span class="back-value">' + usingDays + '天</span></div>';
-        html += '<button class="open-btn" onclick="openItem(\'' + item.id + '\')">✅ 用完了</button>';
+        html += '<button class="open-btn" onclick="finishCurrentVariant(\'' + item.id + '\')">✅ 用完了</button>';
       }
     } else {
       var foodBtnText = isFoodItem(item, currentZoneId) ? '🍴 开封食用' : '🔓 点击开封';
@@ -2428,20 +2428,28 @@ function deleteVariant(itemId, variantId) {
 // 点击正面翻面
 document.addEventListener('DOMContentLoaded', async function() {
   await loadDB();
+  // 立即用本地数据渲染首页（不等待网络，秒开）
   showPage('home');
 
-  // 初始化认证并尝试从云端同步（在后台完成，不阻塞首页渲染）
-  try {
-    await initAuth();
-    if (currentUser) {
-      var cloudChanged = await syncFromCloud();
-      if (cloudChanged) {
-        renderAll();
+  // 初始化认证 + 云端同步，全部后台进行，不阻塞界面
+  setTimeout(async function() {
+    try {
+      await initAuth();
+      if (currentUser) {
+        var cloudChanged = await syncFromCloud();
+        if (cloudChanged) {
+          renderAll();
+        }
       }
+    } catch(e) {
+      console.error('云端初始化失败', e);
     }
-  } catch(e) {
-    console.error('云端初始化失败', e);
-  }
+  }, 50);
+
+  // 清理无用的临时变量/缓存标记（如果有）
+  try { delete window._openVariantId; } catch(e) {}
+  try { delete window._openQty; } catch(e) {}
+  try { delete window._maxOpenQty; } catch(e) {}
 
   document.getElementById('flip-front').addEventListener('click', function(e) {
     if (e.target.closest('.back-close')) return;
@@ -2638,6 +2646,19 @@ function finishVariant(itemId, variantId) {
   saveDB();
   openCardDetail(currentZoneId, itemId);
   toast('已记录用完');
+}
+
+// 单品牌物品：标记当前使用中的变体为用完
+function finishCurrentVariant(itemId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  ensureVariants(item);
+  var active = item.variants.find(function(v) { return v.opened && !v.usedUp; });
+  if (!active) {
+    toast('没有使用中的记录');
+    return;
+  }
+  finishVariant(itemId, active.id);
 }
 
 // ========== 补货 ==========
