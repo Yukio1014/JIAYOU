@@ -1422,6 +1422,28 @@ function getCategory(zoneId, catId) {
   }
   return null;
 }
+
+// 判断是否为食品类（开封即用完）
+function isFoodItem(item, zoneId) {
+  if (!item) return false;
+  // 优先看分类名
+  if (zoneId && item.categoryId) {
+    var cat = getCategory(zoneId, item.categoryId);
+    if (cat && cat.name) {
+      var catName = cat.name.toLowerCase();
+      if (catName.indexOf('食品') >= 0 || catName.indexOf('食物') >= 0 || catName.indexOf('吃的') >= 0) return true;
+    }
+  }
+  // 其次看物品名
+  var name = (item.name || '').toLowerCase();
+  var foodKeywords = ['食品', '零食', '饮料', '水果', '蔬菜', '肉', '鱼', '蛋', '奶', '面包', '蛋糕', '饼干', '巧克力', '糖果', '咖啡', '茶', '果汁', '酸奶', '奶酪', '黄油', '面粉', '米', '面', '油', '调味', '酱', '罐头', '速食', '方便面', '麦片', '果干', '坚果'];
+  for (var i = 0; i < foodKeywords.length; i++) {
+    if (name.indexOf(foodKeywords[i]) >= 0) return true;
+  }
+  // 用户自定义标记
+  if (item.oneShot === true) return true;
+  return false;
+}
 function getItem(zoneId, itemId) {
   var zone = getZone(zoneId);
   if (!zone) return null;
@@ -2128,8 +2150,9 @@ function renderCardBack(item, zone) {
         html += '<button class="open-btn" onclick="openItem(\'' + item.id + '\')">✅ 用完了</button>';
       }
     } else {
+      var foodBtnText = isFoodItem(item, currentZoneId) ? '🍴 开封食用' : '🔓 点击开封';
       html += '<div class="back-row"><span class="back-label">状态</span><span class="back-value">未开封</span></div>';
-      html += '<button class="open-btn" onclick="openItem(\'' + item.id + '\')">🔓 点击开封</button>';
+      html += '<button class="open-btn" onclick="openItem(\'' + item.id + '\')">' + foodBtnText + '</button>';
     }
     html += '</div>';
 
@@ -2465,9 +2488,13 @@ function openItem(itemId) {
 
   if (item.variants.length > 1) {
     // 多个品牌 → 先选品牌（支持同时开封多个）
+    var isFood = isFoodItem(item, currentZoneId);
     var html = '<div class="modal-handle"></div>';
-    html += '<div class="modal-title">🔓 开封 - 选品牌</div>';
+    html += '<div class="modal-title">' + (isFood ? '🍴 开封即用完' : '🔓 开封 - 选品牌') + '</div>';
     html += '<div style="text-align:center;margin-bottom:12px;font-size:14px;font-weight:600">' + escapeHtml(item.name) + '</div>';
+    if (isFood) {
+      html += '<div style="text-align:center;margin-bottom:10px;font-size:12px;color:var(--text-secondary)">食品类开封后自动标记为已用完</div>';
+    }
     available.forEach(function(v) {
       var statusBadge = '';
       if (v.opened && !v.usedUp) statusBadge = ' <span style="color:var(--orange);font-size:11px">· 使用中</span>';
@@ -2491,6 +2518,23 @@ function openVariantItem(itemId, variantId) {
   if (!item) return;
   var v = item.variants.find(function(v) { return v.id === variantId; });
   if (!v) return;
+
+  // 食品类：开封即用完，直接完成，不弹窗
+  if (isFoodItem(item, currentZoneId)) {
+    var now = new Date().toISOString();
+    v.opened = true;
+    v.usedUp = true;
+    v.openDate = now;
+    v.finishDate = now;
+    v.openQty = v.stock || 1;
+    v.stock = 0;
+    if (!item.usageRecords) item.usageRecords = [];
+    item.usageRecords.push({ startDate: now, endDate: now, qty: v.openQty, variantId: variantId, brand: v.brand });
+    syncItemFromVariants(item);
+    saveDB();
+    toast('已开封并标记用完：' + escapeHtml(v.brand));
+    return;
+  }
 
   var maxQty = v.stock || 1;
   var html = '<div class="modal-handle"></div>';
