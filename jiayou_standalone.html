@@ -2573,6 +2573,29 @@ function confirmFinish(itemId, variantId) {
   toast('已记录用完。消耗数据已更新');
 }
 
+// 直接标记某个变体用完（用于多变体的"用完了"按钮，食品类直接完成）
+function finishVariant(itemId, variantId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  var v = item.variants.find(function(vv) { return vv.id === variantId; });
+  if (!v) return;
+
+  v.usedUp = true;
+  v.finishDate = v.finishDate || new Date().toISOString();
+
+  if (item.usageRecords && item.usageRecords.length > 0) {
+    var lastRecord = item.usageRecords[item.usageRecords.length - 1];
+    if (lastRecord && !lastRecord.endDate && lastRecord.variantId === variantId) {
+      lastRecord.endDate = v.finishDate;
+    }
+  }
+
+  syncItemFromVariants(item);
+  saveDB();
+  openCardDetail(currentZoneId, itemId);
+  toast('已记录用完');
+}
+
 // ========== 补货 ==========
 function openRestockForm(itemId) {
   var item = getItem(currentZoneId, itemId);
