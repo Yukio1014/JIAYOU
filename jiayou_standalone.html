@@ -2125,6 +2125,8 @@ function renderCardBack(item, zone) {
         if (v.openDate) html += '<div style="font-size:12px;color:var(--text-secondary)">📅 ' + formatDate(v.openDate) + (v.usedUp && v.finishDate ? ' → ' + formatDate(v.finishDate) : ' · ' + daysBetween(new Date(v.openDate), new Date()) + '天') + '</div>';
         if (!v.usedUp) {
           html += '<button class="btn btn-outline btn-sm" style="margin-top:4px;font-size:11px" onclick="finishVariant(\'' + item.id + '\',\'' + v.id + '\')">✅ 用完了</button>';
+        } else {
+          html += '<button class="btn btn-outline btn-sm" style="margin-top:4px;font-size:11px" onclick="undoFinishVariant(\'' + item.id + '\',\'' + v.id + '\')">↩️ 撤销</button>';
         }
         html += '</div>';
       });
@@ -2139,7 +2141,10 @@ function renderCardBack(item, zone) {
           var usedDays = daysBetween(new Date(item.openDate), new Date(item.finishDate));
           html += '<div class="back-row"><span class="back-label">耗时</span><span class="back-value">' + usedDays + '天</span></div>';
         }
-        html += '<button class="open-btn done" onclick="openItem(\'' + item.id + '\')">🔓 开封下一个</button>';
+        html += '<div style="display:flex;gap:8px;margin-top:8px">';
+        html += '<button class="open-btn done" style="flex:1" onclick="openItem(\'' + item.id + '\')">🔓 开封下一个</button>';
+        html += '<button class="btn btn-outline btn-sm" style="flex:0 0 auto" onclick="undoFinish(\'' + item.id + '\')">↩️ 撤销</button>';
+        html += '</div>';
       } else {
         // 使用中
         html += '<div class="back-row"><span class="back-label">状态</span><span class="back-value" style="color:var(--orange)">使用中</span></div>';
@@ -2199,30 +2204,40 @@ function renderCardBack(item, zone) {
     }
   }
 
-  // === 使用感受（可选）===
-  // 补给品且有多变体时，感受在每个变体旁独立编辑；只有单品或耐用品才用顶层感受
+  // === 使用感受（可选）/ 耐用品备注 ===
+  // 补给品且有多变体时，感受在每个变体旁独立编辑；补给品单品用顶层感受；耐用品用备注
   var hasMultipleVariants = item.variants && item.variants.length > 1 && zone.type === 'consumable';
   if (!hasMultipleVariants) {
     html += '<div class="back-section">';
-    html += '<div class="back-section-title">使用感受（选填）</div>';
-    if (item.feeling) {
-      if (item.feeling.rating) {
-        html += '<div class="back-row"><span class="back-label">评分</span><span class="back-value">';
-        for (var i = 1; i <= 5; i++) html += i <= item.feeling.rating ? '⭐' : '☆';
-        html += '</span></div>';
+    if (zone.type === 'durable') {
+      html += '<div class="back-section-title">备注</div>';
+      if (item.notes) {
+        html += '<div style="font-size:14px;line-height:1.5;color:var(--text);white-space:pre-wrap">' + escapeHtml(item.notes) + '</div>';
+      } else {
+        html += '<div class="back-row"><span class="back-label" style="color:var(--text-tertiary)">暂无备注</span></div>';
       }
-      if (item.feeling.tags && item.feeling.tags.length > 0) {
-        html += '<div class="back-row"><span class="back-label">标签</span><span class="back-value">' + item.feeling.tags.map(escapeHtml).join('、') + '</span></div>';
+      html += '<button class="btn btn-outline btn-sm" style="margin-top:8px;width:100%" onclick="openNotesForm(\'' + item.id + '\')">✏ 编辑备注</button>';
+    } else {
+      html += '<div class="back-section-title">使用感受（选填）</div>';
+      if (item.feeling) {
+        if (item.feeling.rating) {
+          html += '<div class="back-row"><span class="back-label">评分</span><span class="back-value">';
+          for (var i = 1; i <= 5; i++) html += i <= item.feeling.rating ? '⭐' : '☆';
+          html += '</span></div>';
+        }
+        if (item.feeling.tags && item.feeling.tags.length > 0) {
+          html += '<div class="back-row"><span class="back-label">标签</span><span class="back-value">' + item.feeling.tags.map(escapeHtml).join('、') + '</span></div>';
+        }
+        if (item.feeling.notes) {
+          html += '<div class="back-row"><span class="back-label">心得</span><span class="back-value">' + escapeHtml(item.feeling.notes) + '</span></div>';
+        }
+      } else {
+        html += '<div class="back-row"><span class="back-label" style="color:var(--text-tertiary)">暂无记录</span></div>';
       }
-      if (item.feeling.notes) {
-        html += '<div class="back-row"><span class="back-label">心得</span><span class="back-value">' + escapeHtml(item.feeling.notes) + '</span></div>';
-      }
-  } else {
-    html += '<div class="back-row"><span class="back-label" style="color:var(--text-tertiary)">暂无记录</span></div>';
+      html += '<button class="btn btn-outline btn-sm" style="margin-top:8px;width:100%" onclick="openFeelingForm(\'' + item.id + '\')">✏ 编辑使用感受</button>';
+    }
+    html += '</div>';
   }
-  html += '<button class="btn btn-outline btn-sm" style="margin-top:8px;width:100%" onclick="openFeelingForm(\'' + item.id + '\')">✏ 编辑使用感受</button>';
-  html += '</div>';
-  } // end if (!hasMultipleVariants)
 
   // === 耐用品：件数清单 + 使用情况 ===
   if (zone.type === 'durable') {
@@ -3445,6 +3460,89 @@ function saveFeeling(itemId) {
   closeModal();
   openCardDetail(currentZoneId, itemId);
   toast('感受已保存');
+}
+
+// 耐用品备注编辑
+function openNotesForm(itemId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  var html = '<div class="modal-handle"></div>';
+  html += '<div class="modal-title">✏ 编辑备注</div>';
+  html += '<div style="text-align:center;margin-bottom:16px;font-size:16px;font-weight:700">' + escapeHtml(item.name) + '</div>';
+  html += '<div class="form-group"><textarea class="form-textarea" id="item-notes" placeholder="记录购买渠道、保养方式、存放位置等...">' + escapeHtml(item.notes || '') + '</textarea></div>';
+  html += '<button class="btn btn-primary btn-full" onclick="saveNotes(\'' + itemId + '\')">保存</button>';
+  html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">取消</button>';
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('show');
+}
+
+function saveNotes(itemId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  item.notes = document.getElementById('item-notes').value;
+  saveDB();
+  closeModal();
+  openCardDetail(currentZoneId, itemId);
+  toast('备注已保存');
+}
+
+// 撤销单品牌/顶层用完状态
+function undoFinish(itemId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  ensureVariants(item);
+  // 找到最近一个已用完的变体，恢复为使用中
+  var lastFinished = null;
+  for (var i = item.variants.length - 1; i >= 0; i--) {
+    var v = item.variants[i];
+    if (v.usedUp) { lastFinished = v; break; }
+  }
+  if (!lastFinished) {
+    toast('没有可撤销的用完记录');
+    return;
+  }
+  lastFinished.usedUp = false;
+  lastFinished.finishDate = null;
+  // 恢复使用记录
+  if (item.usageRecords && item.usageRecords.length > 0) {
+    for (var j = item.usageRecords.length - 1; j >= 0; j--) {
+      var r = item.usageRecords[j];
+      if (r.variantId === lastFinished.id && r.endDate) {
+        r.endDate = null;
+        break;
+      }
+    }
+  }
+  syncItemFromVariants(item);
+  saveDB();
+  openCardDetail(currentZoneId, itemId);
+  toast('已撤销用完');
+}
+
+// 撤销多变体某个变体的用完状态
+function undoFinishVariant(itemId, variantId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  var v = item.variants.find(function(vv) { return vv.id === variantId; });
+  if (!v || !v.usedUp) {
+    toast('该变体未标记用完');
+    return;
+  }
+  v.usedUp = false;
+  v.finishDate = null;
+  if (item.usageRecords && item.usageRecords.length > 0) {
+    for (var i = item.usageRecords.length - 1; i >= 0; i--) {
+      var r = item.usageRecords[i];
+      if (r.variantId === variantId && r.endDate) {
+        r.endDate = null;
+        break;
+      }
+    }
+  }
+  syncItemFromVariants(item);
+  saveDB();
+  openCardDetail(currentZoneId, itemId);
+  toast('已撤销用完');
 }
 
 // ========== 标记使用（耐用品）==========
