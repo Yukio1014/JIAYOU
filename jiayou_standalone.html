@@ -1477,7 +1477,7 @@ function renderHome() {
   });
 
   // === 消耗品预警 ===
-  var expired = [], expiring = [], lowStock = [], overStock = [];
+  var expired = [], expiring = [], lowStock = [], lowStockSoft = [], overStock = [];
   DB.zones.forEach(function(zone) {
     if (zone.type !== 'consumable') return;
     zone.items.forEach(function(it) {
@@ -1485,6 +1485,7 @@ function renderHome() {
       if (status.expired) expired.push({item: it, zone: zone});
       if (status.expiring) expiring.push({item: it, zone: zone});
       if (status.lowStock) lowStock.push({item: it, zone: zone});
+      else if (status.lowStockSoft) lowStockSoft.push({item: it, zone: zone});
       if (status.overStock) overStock.push({item: it, zone: zone});
     });
   });
@@ -1517,6 +1518,11 @@ function renderHome() {
     html += '<div class="alert-badge alert-yellow" onclick="filterLowStock()">';
     html += '<div class="badge-num">' + lowStock.length + '</div>';
     html += '<div class="badge-label">库存告急</div></div>';
+  }
+  if (lowStockSoft.length > 0) {
+    html += '<div class="alert-badge alert-blue" onclick="filterLowStockSoft()">';
+    html += '<div class="badge-num">' + lowStockSoft.length + '</div>';
+    html += '<div class="badge-label">余量较少</div></div>';
   }
   if (overStock.length > 0) {
     html += '<div class="alert-badge alert-blue" onclick="filterOverStock()">';
@@ -1577,8 +1583,8 @@ function renderHome() {
 function getItemStatus(item) {
   var status = {
     expired: false, expiring: false,
-    lowStock: false, overStock: false,
-    shelfPercent: 100, daysLeft: null
+    lowStock: false, lowStockSoft: false, overStock: false,
+    shelfPercent: 100, daysLeft: null, estDaysLeft: null
   };
 
   var totalStock = getTotalStock(item);
@@ -1610,26 +1616,39 @@ function getItemStatus(item) {
     else if (earliestDaysLeft <= 30) status.expiring = true;
   }
 
-  // 库存（使用总库存）
-  if (item.stockThreshold && totalStock !== undefined) {
-    if (totalStock > 0) {
-      // 有库存：维持原逻辑
-      if (totalStock <= item.stockThreshold) status.lowStock = true;
+  // === 库存告急判断（基于消耗速率预估） ===
+  if (totalStock > 0) {
+    // 有库存：基于历史消耗速率预估剩余可用天数
+    var estDays = estimateStockDaysLeft(item, totalStock, variants);
+    status.estDaysLeft = estDays;
+    var threshold = item.stockThreshold || 1;
+    if (estDays !== null) {
+      // 有历史数据：预估 ≤ 30 天才真正告急（黄色）
+      if (estDays <= 30) status.lowStock = true;
+      // 预估 ≤ 90 天但 > 30 天：温和提示（浅蓝色）
+      else if (estDays <= 90 && totalStock <= threshold) status.lowStockSoft = true;
     } else {
-      // 库存为0：检查是否有"使用中"的变体
-      var hasOpenedInUse = variants.some(function(v) { return v.opened && !v.usedUp; });
-      if (hasOpenedInUse) {
-        // 有使用中的变体：按消耗速率预估，没到预估用完时间不告急
-        var estDaysLeft = estimateOpenedDaysLeft(item, variants);
-        if (estDaysLeft !== null && estDaysLeft <= 0) {
-          // 已超过预估使用周期，该补货了
-          status.lowStock = true;
-        }
-        // estDaysLeft === null 表示没有足够历史数据，不告急（给宽容期）
-      } else {
-        // 没有使用中的变体（全部用完或从未开封），库存为0，触发告急
+      // 没有历史数据：库存 ≤ 阈值，用温和提示（浅蓝色），不显示黄色告急
+      if (totalStock <= threshold) status.lowStockSoft = true;
+    }
+  } else {
+    // 库存为 0
+    var hasOpenedInUse = variants.some(function(v) { return v.opened && !v.usedUp; });
+    if (hasOpenedInUse) {
+      // 有使用中的变体：按消耗速率预估
+      var openedEstDays = estimateOpenedDaysLeft(item, variants);
+      status.estDaysLeft = openedEstDays;
+      if (openedEstDays !== null && openedEstDays <= 0) {
+        // 已超过预估使用周期，真正告急
         status.lowStock = true;
+      } else if (openedEstDays !== null && openedEstDays <= 30) {
+        // 接近预估用完，温和提示
+        status.lowStockSoft = true;
       }
+      // openedEstDays === null 或 > 30：不告急
+    } else {
+      // 没有使用中的变体，库存为 0，真正告急
+      status.lowStock = true;
     }
   }
 
@@ -1646,6 +1665,32 @@ function getItemStatus(item) {
   }
 
   return status;
+}
+
+// 预估当前总库存还能用多少天（基于历史消耗速率）
+function estimateStockDaysLeft(item, totalStock, variants) {
+  if (!item.usageRecords || item.usageRecords.length === 0) return null;
+  var records = item.usageRecords.filter(function(r) { return r.startDate && r.endDate; });
+  if (records.length === 0) return null;
+  // 计算历史平均使用周期（天/个）
+  var totalDays = 0, totalQty = 0;
+  records.forEach(function(r) {
+    var days = daysBetween(new Date(r.startDate), new Date(r.endDate));
+    if (days < 1) days = 1;
+    totalDays += days;
+    totalQty += (r.qty || 1);
+  });
+  if (totalQty === 0) return null;
+  var avgDaysPerUnit = totalDays / totalQty;
+  // 如果有使用中的变体，减去已用天数
+  var activeVariant = variants.find(function(v) { return v.opened && !v.usedUp; });
+  var remainingStock = totalStock;
+  if (activeVariant && activeVariant.openDate) {
+    var usedDays = daysBetween(new Date(activeVariant.openDate), new Date());
+    var remainingInCurrent = Math.max(0, avgDaysPerUnit - usedDays);
+    return Math.round(remainingInCurrent + (remainingStock - 1) * avgDaysPerUnit);
+  }
+  return Math.round(remainingStock * avgDaysPerUnit);
 }
 
 // ========== 消耗速率计算 ==========
@@ -4212,6 +4257,14 @@ function showAlertDetail(type) {
         if (getItemStatus(it).lowStock) items.push({item: it, zone: zone});
       });
     });
+  } else if (type === 'lowStockSoft') {
+    title = '🔵 余量较少';
+    DB.zones.forEach(function(zone) {
+      if (zone.type !== 'consumable') return;
+      zone.items.forEach(function(it) {
+        if (getItemStatus(it).lowStockSoft) items.push({item: it, zone: zone});
+      });
+    });
   } else if (type === 'overStock') {
     title = '🔵 囤太多（用到过期也用不完）';
     DB.zones.forEach(function(zone) {
@@ -4246,6 +4299,7 @@ function showAlertDetail(type) {
       if (type === 'expired') bgColor = 'rgba(255,59,48,0.06)';
       else if (type === 'expiring') bgColor = 'rgba(255,149,0,0.06)';
       else if (type === 'lowStock') bgColor = 'rgba(255,149,0,0.06)';
+      else if (type === 'lowStockSoft') bgColor = 'rgba(90,200,250,0.06)';
       else if (type === 'overStock') bgColor = 'rgba(90,200,250,0.06)';
       else if (type === 'idle') bgColor = 'rgba(175,82,222,0.06)';
 
@@ -4289,6 +4343,7 @@ function showAlertDetail(type) {
 function filterExpired() { showAlertDetail('expired'); }
 function filterExpiring() { showAlertDetail('expiring'); }
 function filterLowStock() { showAlertDetail('lowStock'); }
+function filterLowStockSoft() { showAlertDetail('lowStockSoft'); }
 function filterOverStock() { showAlertDetail('overStock'); }
 function filterIdle() { showAlertDetail('idle'); }
 </script>
