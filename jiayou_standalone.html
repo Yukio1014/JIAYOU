@@ -1672,15 +1672,17 @@ function estimateStockDaysLeft(item, totalStock, variants) {
   if (!item.usageRecords || item.usageRecords.length === 0) return null;
   var records = item.usageRecords.filter(function(r) { return r.startDate && r.endDate; });
   if (records.length === 0) return null;
-  // 计算历史平均使用周期（天/个）
-  var totalDays = 0, totalQty = 0;
+  // 统计总消耗量和首次使用日期
+  var totalQty = 0, earliestDate = null;
   records.forEach(function(r) {
-    var days = daysBetween(new Date(r.startDate), new Date(r.endDate));
-    if (days < 1) days = 1;
-    totalDays += days;
     totalQty += (r.qty || 1);
+    var start = new Date(r.startDate);
+    if (!earliestDate || start < earliestDate) earliestDate = start;
   });
   if (totalQty === 0) return null;
+  // 从首次使用到今天经过多少天
+  var totalDays = daysBetween(earliestDate, new Date());
+  if (totalDays < 1) totalDays = 1;
   var avgDaysPerUnit = totalDays / totalQty;
   // 如果有使用中的变体，减去已用天数
   var activeVariant = variants.find(function(v) { return v.opened && !v.usedUp; });
@@ -1694,40 +1696,49 @@ function estimateStockDaysLeft(item, totalStock, variants) {
 }
 
 // ========== 消耗速率计算 ==========
+// 基于"首次使用日期到今天"的总时间跨度，计算平均月/年消耗
 function calcUsageRate(item) {
   if (!item.usageRecords || item.usageRecords.length === 0) return 0;
   var records = item.usageRecords.filter(function(r) { return r.startDate && r.endDate; });
   if (records.length === 0) return 0;
 
-  // 计算每条记录的日均消耗，然后汇总
-  var totalQty = 0, totalDays = 0;
+  // 统计总消耗量
+  var totalQty = 0;
+  var earliestDate = null;
   records.forEach(function(r) {
-    var days = daysBetween(new Date(r.startDate), new Date(r.endDate));
-    if (days < 1) days = 1; // 至少1天
     totalQty += (r.qty || 1);
-    totalDays += days;
+    var start = new Date(r.startDate);
+    if (!earliestDate || start < earliestDate) earliestDate = start;
   });
-  if (totalDays === 0) return 0;
+  if (totalQty === 0) return 0;
+
+  // 从首次使用到今天经过了多少天
+  var today = new Date();
+  var totalDays = daysBetween(earliestDate, today);
+  if (totalDays < 1) totalDays = 1; // 至少1天
+
   var perDay = totalQty / totalDays;
-  return perDay * 30; // 转为月消耗
+  return perDay * 30; // 月消耗
 }
 
 // ========== 预估使用中变体的剩余天数 ==========
-// 基于历史使用记录的平均使用周期，预估当前使用中变体还能用多少天
-// 返回 null 表示没有足够历史数据无法预估
+// 基于"首次使用到今天"的总时间跨度，预估剩余可用天数
 function estimateOpenedDaysLeft(item, variants) {
   if (!item.usageRecords || item.usageRecords.length === 0) return null;
   var records = item.usageRecords.filter(function(r) { return r.startDate && r.endDate; });
   if (records.length === 0) return null;
 
-  // 计算历史平均使用周期（天）
-  var totalDays = 0;
+  // 统计总消耗量和首次使用日期
+  var totalQty = 0, earliestDate = null;
   records.forEach(function(r) {
-    var days = daysBetween(new Date(r.startDate), new Date(r.endDate));
-    if (days < 1) days = 1;
-    totalDays += days;
+    totalQty += (r.qty || 1);
+    var start = new Date(r.startDate);
+    if (!earliestDate || start < earliestDate) earliestDate = start;
   });
-  var avgCycleDays = totalDays / records.length;
+  if (totalQty === 0) return null;
+  var totalDays = daysBetween(earliestDate, new Date());
+  if (totalDays < 1) totalDays = 1;
+  var avgDaysPerUnit = totalDays / totalQty;
 
   // 找到当前使用中的变体
   var activeVariant = variants.find(function(v) { return v.opened && !v.usedUp; });
@@ -1736,7 +1747,7 @@ function estimateOpenedDaysLeft(item, variants) {
   // 已使用天数
   var usedDays = daysBetween(new Date(activeVariant.openDate), new Date());
   // 预估剩余天数 = 平均周期 - 已使用天数
-  return Math.round(avgCycleDays - usedDays);
+  return Math.round(avgDaysPerUnit - usedDays);
 }
 
 // ========== AI分析渲染 ==========
