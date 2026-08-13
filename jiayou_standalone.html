@@ -1805,10 +1805,11 @@ function renderAIAnalysis() {
 
   if (buySuggestions.length > 0) {
     html += '<div class="ai-suggest">';
-    html += '<strong>✅ 建议买：</strong><br>';
-    buySuggestions.slice(0, 5).forEach(function(s) {
-      html += '· ' + s.name + ' ' + s.qty + s.unit + '（' + s.reason + '）<br>';
+    html += '<strong>✅ 建议关注（详情见各卡片）：</strong><br>';
+    buySuggestions.slice(0, 6).forEach(function(s) {
+      html += '· ' + s.name + '（' + s.reason + '）<br>';
     });
+    html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px">点开卡片可查看建议采购量（半年/一年）</div>';
     html += '</div>';
   }
   if (stopSuggestions.length > 0) {
@@ -2239,6 +2240,34 @@ function renderCardBack(item, zone) {
       html += '</div>';
       html += '</div>';
     }
+
+    // === 采购建议 + 盘点 ===
+    html += '<div class="back-section">';
+    html += '<div class="back-section-title">📊 消耗与采购</div>';
+    var rate2 = calcUsageRate(item);
+    var totalStock2 = getTotalStock(item);
+    if (rate2 > 0) {
+      var halfQty = Math.max(1, Math.ceil(rate2 * 6));
+      var yearQty = Math.max(1, Math.ceil(rate2 * 12));
+      html += '<div class="back-row"><span class="back-label">预估月消耗</span><span class="back-value">' + rate2.toFixed(1) + (item.unit||'个') + '/月</span></div>';
+      html += '<div style="margin-top:8px;padding:10px;border-radius:10px;background:#F0F7FF">';
+      html += '<div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px">🛒 建议采购</div>';
+      html += '<div style="font-size:13px;line-height:1.7">';
+      html += '· 半年量：<strong>' + halfQty + (item.unit||'个') + '</strong><br>';
+      html += '· 一年量：<strong>' + yearQty + (item.unit||'个') + '</strong><br>';
+      if (rate2 > 0) {
+        var monthEst = Math.ceil((totalStock2 || 0) / rate2);
+        html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">当前库存约够用 ' + monthEst + ' 个月</div>';
+      }
+      html += '</div></div>';
+    } else {
+      html += '<div class="back-row"><span class="back-label" style="color:var(--text-tertiary)">数据不足，暂无法估算</span></div>';
+      html += '<div style="font-size:12px;color:var(--text-tertiary);margin-top:4px">记录几次使用后会给出采购建议</div>';
+    }
+    html += '<div style="display:flex;gap:8px;margin-top:10px">';
+    html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="openStockAuditForm(\'' + item.id + '\')">📦 盘点库存</button>';
+    html += '</div>';
+    html += '</div>';
 
     // === 价格历史 ===
     if (item.priceHistory && item.priceHistory.length > 0) {
@@ -3627,6 +3656,93 @@ function markUsed(itemId) {
   saveDB();
   openCardDetail(currentZoneId, itemId);
   toast('已标记今天用过');
+}
+
+// ========== 库存盘点（方案A） ==========
+function openStockAuditForm(itemId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  var currentStock = getTotalStock(item);
+  var html = '<div class="modal-handle"></div>';
+  html += '<div class="modal-title">📦 库存盘点</div>';
+  html += '<div style="text-align:center;margin-bottom:16px">';
+  html += '<div style="font-size:16px;font-weight:700">' + escapeHtml(item.name) + '</div>';
+  html += '<div style="font-size:13px;color:var(--text-secondary);margin-top:4px">当前记录：' + currentStock + (item.unit||'个') + '</div>';
+  html += '</div>';
+  html += '<div class="form-group"><label class="form-label">实际数量（清点实物）</label>';
+  html += '<input type="number" class="form-input" id="audit-stock" value="' + currentStock + '" min="0" step="0.5" style="font-size:24px;text-align:center;font-weight:700"></div>';
+  html += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">按实物清点后填写，用于校正共用物品的消耗。</div>';
+  html += '<button class="btn btn-primary btn-full" onclick="saveStockAudit(\'' + itemId + '\')">确认盘点</button>';
+  html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">取消</button>';
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('show');
+}
+
+function saveStockAudit(itemId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  var input = document.getElementById('audit-stock');
+  var actual = parseFloat(input ? input.value : NaN);
+  if (isNaN(actual) || actual < 0) { toast('请输入有效数量'); return; }
+  var recorded = getTotalStock(item);
+  var diff = recorded - actual; // 正数=实际用得更快
+
+  if (!item.auditHistory) item.auditHistory = [];
+  item.auditHistory.push({
+    date: new Date().toISOString(),
+    recorded: recorded,
+    actual: actual,
+    diff: diff
+  });
+
+  // 校正库存：把差异按消耗速率摊回使用记录
+  if (diff > 0) {
+    // 实际少于记录（用得更快），差异记入消耗总量
+    var rate = calcUsageRate(item);
+    if (rate > 0) {
+      // 生成一条"盘点差异"使用记录，qty=差异量，endDate=今天，摊回消耗
+      if (!item.usageRecords) item.usageRecords = [];
+      item.usageRecords.push({
+        startDate: item.auditHistory.length > 1 ? item.auditHistory[item.auditHistory.length-2].date : new Date(Date.now() - 30*86400000).toISOString(),
+        endDate: new Date().toISOString(),
+        qty: diff,
+        variantId: null,
+        brand: '盘点差异(共用)',
+        isAudit: true
+      });
+    }
+  }
+
+  // 更新所有变体库存使总数=实际数量（按比例分摊到未用变体）
+  var variants = item.variants && item.variants.length > 0 ? item.variants : [];
+  if (variants.length > 0) {
+    var unused = variants.filter(function(v) { return !v.opened || v.usedUp; });
+    var active = variants.filter(function(v) { return v.opened && !v.usedUp; });
+    if (unused.length > 0) {
+      // 把实际数量分配到未开封/已用完的变体
+      var perUnit = actual / unused.length;
+      unused.forEach(function(v) { v.stock = Math.round(perUnit * 100) / 100; });
+      // 使用中变体库存归0（正在使用的不算库存）
+      active.forEach(function(v) { v.stock = 0; });
+    } else if (active.length > 0) {
+      // 没有未用变体，全部放第一个使用中
+      active[0].stock = actual;
+    }
+  } else {
+    item.stock = actual;
+  }
+
+  syncItemFromVariants(item);
+  saveDB();
+  closeModal();
+  openCardDetail(currentZoneId, itemId);
+  if (diff === 0) {
+    toast('盘点完成，数量一致');
+  } else if (diff > 0) {
+    toast('盘点完成，差异 ' + diff + (item.unit||'个') + '（实际用得更快）已校正');
+  } else {
+    toast('盘点完成，实际比记录多 ' + Math.abs(diff) + (item.unit||'个'));
+  }
 }
 
 // ========== 分类管理 ==========
