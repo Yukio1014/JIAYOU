@@ -2587,20 +2587,29 @@ function openVariantItem(itemId, variantId) {
   var v = item.variants.find(function(v) { return v.id === variantId; });
   if (!v) return;
 
-  // 食品类：开封即用完，直接完成，不弹窗
+  // 食品类：弹一个小弹窗选数量（默认 1），确认后直接标记用完
   if (isFoodItem(item, currentZoneId)) {
-    var now = new Date().toISOString();
-    v.opened = true;
-    v.usedUp = true;
-    v.openDate = now;
-    v.finishDate = now;
-    v.openQty = v.stock || 1;
-    v.stock = 0;
-    if (!item.usageRecords) item.usageRecords = [];
-    item.usageRecords.push({ startDate: now, endDate: now, qty: v.openQty, variantId: variantId, brand: v.brand });
-    syncItemFromVariants(item);
-    saveDB();
-    toast('已开封并标记用完：' + escapeHtml(v.brand));
+    var maxStock = v.stock || 1;
+    var html = '<div class="modal-handle"></div>';
+    html += '<div class="modal-title">🍴 开封食用</div>';
+    html += '<div style="text-align:center;margin-bottom:16px">';
+    html += '<div style="font-size:16px;font-weight:700">' + escapeHtml(item.name) + '</div>';
+    html += '<div style="font-size:14px;color:var(--accent)">' + escapeHtml(v.brand) + '</div>';
+    html += '<div style="font-size:13px;color:var(--text-secondary)">库存：' + v.stock + (item.unit||'') + '</div>';
+    html += '</div>';
+    html += '<div class="form-group"><label class="form-label">本次吃几个</label>';
+    html += '<div class="stepper" style="justify-content:center">';
+    html += '<button onclick="adjustOpenQty(-1)">−</button>';
+    html += '<span class="stepper-val" id="open-qty-val">1</span>';
+    html += '<button onclick="adjustOpenQty(1)">＋</button>';
+    html += '</div></div>';
+    html += '<button class="btn btn-primary btn-full" onclick="confirmOpen(\'' + itemId + '\',\'' + variantId + '\',true)">确认吃掉</button>';
+    html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">取消</button>';
+    document.getElementById('modal-content').innerHTML = html;
+    document.getElementById('modal-overlay').classList.add('show');
+    window._openQty = 1;
+    window._maxOpenQty = maxStock;
+    window._openVariantId = variantId;
     return;
   }
 
@@ -2637,28 +2646,37 @@ function adjustOpenQty(delta) {
   if (valEl) valEl.textContent = window._openQty;
 }
 
-function confirmOpen(itemId, variantId) {
+function confirmOpen(itemId, variantId, markAsUsed) {
   var item = getItem(currentZoneId, itemId);
   if (!item) return;
   var v = item.variants.find(function(v) { return v.id === variantId; });
   if (!v) return;
   var qty = window._openQty || 1;
-  var date = document.getElementById('open-date').value;
+  var dateInput = document.getElementById('open-date');
+  var date = dateInput ? dateInput.value : new Date().toISOString().split('T')[0];
+  var nowISO = new Date(date).toISOString();
 
   v.opened = true;
-  v.usedUp = false;
-  v.openDate = new Date(date).toISOString();
+  v.usedUp = !!markAsUsed;
+  v.openDate = nowISO;
   v.openQty = qty;
   v.stock = Math.max(0, (v.stock || 0) - qty);
+  if (markAsUsed) v.finishDate = nowISO;
 
   if (!item.usageRecords) item.usageRecords = [];
-  item.usageRecords.push({ startDate: new Date(date).toISOString(), endDate: null, qty: qty, variantId: variantId, brand: v.brand });
+  item.usageRecords.push({
+    startDate: nowISO,
+    endDate: markAsUsed ? nowISO : null,
+    qty: qty,
+    variantId: variantId,
+    brand: v.brand
+  });
 
   syncItemFromVariants(item);
   saveDB();
   closeModal();
   openCardDetail(currentZoneId, itemId);
-  toast('已开封 ' + escapeHtml(v.brand) + '，库存-' + qty);
+  toast('已' + (markAsUsed ? '开封并吃完' : '开封') + ' ' + escapeHtml(v.brand) + '，库存-' + qty);
 }
 
 function confirmFinish(itemId, variantId) {
