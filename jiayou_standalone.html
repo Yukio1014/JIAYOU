@@ -841,7 +841,8 @@ function getDeviceId() {
 // 尝试匿名登录；失败则使用设备本地模式（仍可用，只是不同步）
 async function initAuth() {
   if (!supabaseClient) {
-    toast('未连接云端服务');
+    cloudSyncState.message = 'Supabase 库未加载（检查 supabase.js 是否存在）';
+    updateCloudUI();
     return;
   }
   try {
@@ -849,6 +850,7 @@ async function initAuth() {
     if (error) throw error;
     if (session && session.user) {
       currentUser = session.user;
+      cloudSyncState.message = '';
       updateCloudUI();
       return;
     }
@@ -861,10 +863,12 @@ async function initAuth() {
     }
     currentUser = data.user;
     localStorage.setItem('jiayou_anon_email', data.user.email || '');
+    cloudSyncState.message = '';
     updateCloudUI();
   } catch(e) {
     console.error('认证初始化失败', e);
-    toast('认证失败: ' + (e.message || e));
+    cloudSyncState.message = '认证失败: ' + (e.message || e);
+    updateCloudUI();
     await fallbackAnonymousLogin();
   }
 }
@@ -893,6 +897,7 @@ async function fallbackAnonymousLogin() {
       currentUser = signUpData.user;
       localStorage.setItem('jiayou_anon_email', email);
       localStorage.setItem('jiayou_anon_password', password);
+      cloudSyncState.message = '';
       updateCloudUI();
       toast('已创建云端账号');
       return;
@@ -904,6 +909,7 @@ async function fallbackAnonymousLogin() {
     });
     if (!signInErr && signInData.user) {
       currentUser = signInData.user;
+      cloudSyncState.message = '';
       updateCloudUI();
       return;
     }
@@ -916,12 +922,34 @@ async function fallbackAnonymousLogin() {
     if (signUpErr2) throw signUpErr2;
     if (!signUpData2.user) throw new Error('重新注册后未返回用户');
     currentUser = signUpData2.user;
+    cloudSyncState.message = '';
     updateCloudUI();
     toast('已创建云端账号');
   } catch(e) {
     console.error('降级认证失败', e);
-    toast('云端登录失败: ' + (e.message || e));
+    cloudSyncState.message = '云端登录失败: ' + (e.message || e);
     updateCloudUI();
+  }
+}
+
+// 重试登录（清除旧凭据后重新走一遍）
+async function retryCloudLogin() {
+  toast('正在重试登录...');
+  cloudSyncState.message = '正在重试...';
+  updateCloudUI();
+  // 清除旧凭据，强制重新注册
+  localStorage.removeItem('jiayou_anon_email');
+  localStorage.removeItem('jiayou_anon_password');
+  // 清除 supabase 本地 session
+  try { if (supabaseClient) await supabaseClient.auth.signOut(); } catch(e) {}
+  currentUser = null;
+  await initAuth();
+  if (currentUser) {
+    var changed = await syncFromCloud();
+    if (changed) renderAll();
+    toast('登录成功');
+  } else {
+    toast('登录仍失败，请检查网络或稍后再试');
   }
 }
 
@@ -2549,6 +2577,8 @@ document.addEventListener('DOMContentLoaded', async function() {
   await loadDB();
   // 立即用本地数据渲染首页（不等待网络，秒开）
   showPage('home');
+  // 立即更新云端状态 UI（避免卡在静态"初始化..."文字）
+  updateCloudUI();
 
   // 初始化认证 + 云端同步，全部后台进行，不阻塞界面
   setTimeout(async function() {
@@ -3976,14 +4006,71 @@ function renderPoolItem(p) {
 
   html += '<div style="margin-top:4px"><span class="pool-status status-' + (p.status==='pending'?'pending':'decided') + '">' + (p.status==='pending'?'目标冻结':'目标锁定') + '</span></div>';
 
-  // 品牌变体显示
-  if (p.variants && p.variants.length > 1) {
-    html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:6px">';
-    html += p.variants.length + '个品牌：';
+  // 品牌变体显示（每行：照片+品牌+价格+规格+单价+材质+理由）
+  if (p.variants && p.variants.length > 0) {
+    // 先算单价用于排序和高亮
+    var comparable = p.variants.filter(function(v) { return v.price > 0 && v.specQty > 0 && v.specUnit; });
+    var bestByUnit = {};
+    if (comparable.length >= 2) {
+      var groups = {};
+      comparable.forEach(function(v) {
+        var u = v.specUnit;
+        if (!groups[u]) groups[u] = [];
+        groups[u].push(v);
+      });
+      Object.keys(groups).forEach(function(u) {
+        var arr = groups[u];
+        if (arr.length >= 2) {
+          arr.forEach(function(v) { v._up = v.price / v.specQty; });
+          arr.sort(function(a,b){ return a._up - b._up; });
+          bestByUnit[u] = arr[0].id;
+        }
+      });
+    }
+    html += '<div style="margin-top:10px">';
     p.variants.forEach(function(v) {
-      html += escapeHtml(v.brand||'?') + '(¥' + (v.price||0) + ') ';
+      var isBest = false;
+      if (v.specUnit && bestByUnit[v.specUnit] === v.id) isBest = true;
+      var unitPrice = (v.price > 0 && v.specQty > 0) ? (v.price / v.specQty) : null;
+      html += '<div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:8px;padding:6px;background:var(--bg);border-radius:8px' + (isBest ? ';border:1.5px solid var(--success)' : '') + '">';
+      // 照片
+      if (v.photos && v.photos.length > 0) {
+        html += '<img src="' + v.photos[0] + '" style="width:54px;height:54px;border-radius:8px;object-fit:cover;flex-shrink:0">';
+      } else {
+        html += '<div style="width:54px;height:54px;border-radius:8px;background:var(--separator);flex-shrink:0;display:flex;align-items:center;justify-content:center;color:var(--text-tertiary);font-size:20px">📷</div>';
+      }
+      html += '<div style="flex:1;min-width:0">';
+      html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;flex-wrap:wrap">';
+      html += '<span style="font-weight:600;font-size:14px">' + escapeHtml(v.brand||'?') + '</span>';
+      if (v.price) html += '<span style="font-size:13px;color:var(--accent)">¥' + v.price + '</span>';
+      if (v.specQty && v.specUnit) html += '<span style="font-size:12px;color:var(--text-secondary)">' + v.specQty + escapeHtml(v.specUnit) + '</span>';
+      if (isBest) html += '<span style="font-size:11px;color:#fff;background:var(--success);padding:1px 6px;border-radius:10px">最划算</span>';
+      html += '</div>';
+      if (unitPrice !== null) {
+        html += '<div style="font-size:12px;color:var(--text-secondary)">单价 ¥' + unitPrice.toFixed(4) + '/' + escapeHtml(v.specUnit) + '</div>';
+      }
+      if (v.material) {
+        html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:2px">材质：' + escapeHtml(v.material) + '</div>';
+      }
+      if (v.reason) {
+        html += '<div style="font-size:12px;color:var(--text-secondary);line-height:1.5;white-space:pre-wrap;margin-top:2px">' + escapeHtml(v.reason) + '</div>';
+      }
+      html += '</div>';
+      html += '</div>';
     });
     html += '</div>';
+
+    // 对比建议结论
+    if (comparable.length >= 2 && Object.keys(bestByUnit).length > 0) {
+      html += '<div style="margin-top:4px;padding:8px 10px;background:rgba(76,175,80,0.1);border-radius:8px;font-size:13px;color:var(--success);line-height:1.5">';
+      Object.keys(bestByUnit).forEach(function(u) {
+        var bestV = p.variants.find(function(v){ return v.id === bestByUnit[u]; });
+        if (bestV) {
+          html += '💡 每' + escapeHtml(u) + '最划算：<b>' + escapeHtml(bestV.brand||'?') + '</b>（¥' + (bestV.price/bestV.specQty).toFixed(4) + '/' + escapeHtml(u) + '）<br>';
+        }
+      });
+      html += '</div>';
+    }
   }
 
   if (p.notes) {
@@ -4030,26 +4117,25 @@ function renderPoolItem(p) {
   return html;
 }
 
-var poolPhotos = [];
+var poolPhotos = []; // 保留兼容，新版每个品牌独立照片
 function openPoolForm() {
-  poolPhotos = [];
-  window._poolVariants = [{ id: genId(), brand: '', price: 0 }];
+  window._poolVariants = [{ id: genId(), brand: '', price: 0, photos: [], reason: '', specQty: '', specUnit: '', material: '' }];
   var html = '<div class="modal-handle"></div>';
   html += '<div class="modal-title">添加到目标锁定</div>';
-
-  html += '<div class="form-group"><label class="form-label">截图存档（选填）</label>';
-  html += '<div class="photo-upload" id="pool-photos">';
-  html += '<div class="photo-slot" onclick="uploadPoolPhoto()">📷</div>';
-  html += '</div></div>';
 
   html += '<div class="form-group"><label class="form-label">名称</label>';
   html += '<input type="text" class="form-input" id="pool-name" placeholder="想买的东西（如：面霜）"></div>';
 
-  html += '<div class="form-group"><label class="form-label">想买的品牌（可多个）</label>';
+  html += '<div class="form-group"><label class="form-label">想买的品牌（可多个，自动对比单价）</label>';
   html += '<div id="pool-variant-list">';
   html += renderPoolVariantRows();
   html += '</div>';
   html += '<button class="btn btn-outline btn-sm" style="margin-top:4px;width:100%" onclick="addPoolVariantRow()">＋ 添加品牌</button>';
+  html += '</div>';
+
+  // 实时对比预览区
+  html += '<div class="form-group" id="pool-compare-preview" style="display:none"><label class="form-label">📊 实时对比</label>';
+  html += '<div id="pool-compare-content" style="font-size:13px;color:var(--text-secondary);background:var(--bg);border-radius:var(--radius-sm);padding:10px"></div>';
   html += '</div>';
 
   html += '<div class="form-group"><label class="form-label">归类到领地</label>';
@@ -4062,24 +4148,43 @@ function openPoolForm() {
   html += '<div class="form-group" id="pool-cat-group" style="display:none"><label class="form-label">分类</label>';
   html += '<select class="form-select" id="pool-category"></select></div>';
 
-  html += '<div class="form-group"><label class="form-label">备注（选填）</label>';
-  html += '<textarea class="form-textarea" id="pool-notes" placeholder="买的理由是什么？"></textarea></div>';
-
   html += '<button class="btn btn-primary btn-full" onclick="savePoolItem()">加入目标锁定</button>';
 
   document.getElementById('modal-content').innerHTML = html;
   document.getElementById('modal-overlay').classList.add('show');
+  updatePoolComparePreview();
 }
 
 function renderPoolVariantRows() {
   var html = '';
   (window._poolVariants || []).forEach(function(v, i) {
-    html += '<div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">';
-    html += '<input type="text" class="form-input" style="flex:2" placeholder="品牌名" value="' + escapeHtml(v.brand) + '" onchange="updatePoolVariant(' + i + ',\'brand\',this.value)">';
-    html += '<input type="number" class="form-input" style="flex:1" placeholder="价格" value="' + (v.price||0) + '" onchange="updatePoolVariant(' + i + ',\'price\',parseFloat(this.value)||0)">';
-    if (window._poolVariants.length > 1) {
-      html += '<button class="btn btn-danger btn-sm" style="flex-shrink:0;padding:6px 8px;font-size:12px" onclick="removePoolVariant(' + i + ')">✕</button>';
+    html += '<div class="pool-variant-row" style="border:1px solid var(--separator);border-radius:var(--radius-sm);padding:10px;margin-bottom:8px;background:var(--bg)">';
+    // 顶部：照片 + 品牌名 + 价格 + 删除
+    html += '<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">';
+    html += '<div class="pool-photo-cell" data-pool-variant-idx="' + i + '" onclick="uploadPoolVariantPhoto(' + i + ')" style="flex-shrink:0;width:54px;height:54px;border:2px dashed var(--separator);border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;font-size:22px;color:var(--text-tertiary);cursor:pointer;overflow:hidden;background:var(--card-bg)">';
+    if (v.photos && v.photos.length > 0) {
+      html += '<img src="' + v.photos[0] + '" style="width:100%;height:100%;object-fit:cover">';
+    } else {
+      html += '📷';
     }
+    html += '</div>';
+    html += '<input type="text" class="form-input" style="flex:2" placeholder="品牌名" value="' + escapeHtml(v.brand||'') + '" onchange="updatePoolVariant(' + i + ',\'brand\',this.value);updatePoolComparePreview()">';
+    html += '<input type="number" class="form-input" style="flex:1" placeholder="价格" value="' + (v.price||0) + '" onchange="updatePoolVariant(' + i + ',\'price\',parseFloat(this.value)||0);updatePoolComparePreview()">';
+    if (window._poolVariants.length > 1) {
+      html += '<button class="btn btn-danger btn-sm" style="flex-shrink:0;padding:6px 8px;font-size:12px" onclick="removePoolVariant(' + i + ')"' + (i >= window._poolVariants.length ? '' : '') + '>✕</button>';
+    }
+    html += '</div>';
+    // 规格：数量+单位（用于算单价）
+    html += '<div class="form-row" style="margin-bottom:8px">';
+    html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="number" class="form-input" style="font-size:14px" placeholder="规格数量（如100）" value="' + (v.specQty||'') + '" onchange="updatePoolVariant(' + i + ',\'specQty\',parseFloat(this.value)||0);updatePoolComparePreview()"></div>';
+    html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="text" class="form-input" style="font-size:14px" placeholder="单位（抽/ml/片）" value="' + escapeHtml(v.specUnit||'') + '" onchange="updatePoolVariant(' + i + ',\'specUnit\',this.value);updatePoolComparePreview()"></div>';
+    html += '</div>';
+    // 材质/关键参数
+    html += '<div class="form-group" style="margin-bottom:8px"><input type="text" class="form-input" style="font-size:14px" placeholder="材质/关键参数（如纯棉、水刺无纺布）" value="' + escapeHtml(v.material||'') + '" onchange="updatePoolVariant(' + i + ',\'material\',this.value)"></div>';
+    // 购买理由
+    html += '<div><label class="form-label" style="font-size:12px;margin-bottom:4px">购买理由 / 比较要点</label>';
+    html += '<textarea class="form-textarea" style="min-height:44px" placeholder="为什么想买？和其他品牌比哪里好？" onchange="updatePoolVariant(' + i + ',\'reason\',this.value)">' + escapeHtml(v.reason||'') + '</textarea>';
+    html += '</div>';
     html += '</div>';
   });
   return html;
@@ -4088,12 +4193,67 @@ function updatePoolVariant(idx, field, val) {
   if (window._poolVariants && window._poolVariants[idx]) window._poolVariants[idx][field] = val;
 }
 function addPoolVariantRow() {
-  window._poolVariants.push({ id: genId(), brand: '', price: 0 });
+  window._poolVariants.push({ id: genId(), brand: '', price: 0, photos: [], reason: '', specQty: '', specUnit: '', material: '' });
   document.getElementById('pool-variant-list').innerHTML = renderPoolVariantRows();
+  updatePoolComparePreview();
 }
 function removePoolVariant(idx) {
   window._poolVariants.splice(idx, 1);
   document.getElementById('pool-variant-list').innerHTML = renderPoolVariantRows();
+  updatePoolComparePreview();
+}
+
+function uploadPoolVariantPhoto(idx) {
+  var input = document.getElementById('photo-input');
+  input.onchange = function(e) {
+    var files = e.target.files;
+    if (files && files[0]) {
+      compressImage(files[0], function(dataUrl) {
+        if (!window._poolVariants[idx].photos) window._poolVariants[idx].photos = [];
+        window._poolVariants[idx].photos = [dataUrl]; // 每个品牌只放一张主图
+        document.getElementById('pool-variant-list').innerHTML = renderPoolVariantRows();
+      });
+    }
+    input.value = '';
+  };
+  input.click();
+}
+
+// 实时对比预览：算单价，找最划算
+function updatePoolComparePreview() {
+  var vs = (window._poolVariants || []).filter(function(v) { return v.price > 0 && v.specQty > 0 && v.specUnit; });
+  var box = document.getElementById('pool-compare-preview');
+  var content = document.getElementById('pool-compare-content');
+  if (!box || !content) return;
+  if (vs.length < 2) { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+  // 按单位分组对比（同单位才能比）
+  var groups = {};
+  vs.forEach(function(v) {
+    var u = v.specUnit || '?';
+    if (!groups[u]) groups[u] = [];
+    groups[u].push(v);
+  });
+  var html = '';
+  Object.keys(groups).forEach(function(u) {
+    var arr = groups[u];
+    if (arr.length < 2) return;
+    arr.forEach(function(v) {
+      v._unitPrice = v.price / v.specQty;
+    });
+    arr.sort(function(a, b) { return a._unitPrice - b._unitPrice; });
+    var best = arr[0];
+    html += '<div style="margin-bottom:6px"><b>每' + escapeHtml(u) + '：</b><br>';
+    arr.forEach(function(v) {
+      var mark = (v === best) ? ' <span style="color:var(--success);font-weight:600">✓ 最划算</span>' : '';
+      html += escapeHtml(v.brand||'?') + ' ¥' + v._unitPrice.toFixed(4) + '/' + escapeHtml(u) + mark + '<br>';
+    });
+    html += '</div>';
+  });
+  if (!html) {
+    html = '<div style="color:var(--text-tertiary)">填了规格数量+单位+价格后，这里会自动算单价并推荐最划算的</div>';
+  }
+  content.innerHTML = html;
 }
 
 function savePoolItem() {
@@ -4101,25 +4261,36 @@ function savePoolItem() {
   if (!name) { toast('请输入名称'); return; }
   var zoneId = document.getElementById('pool-zone').value;
   var poolVariants = window._poolVariants || [];
+  // 合并所有品牌照片作为顶层 photo 列表
+  var allPhotos = [];
+  poolVariants.forEach(function(v) { if (v.photos && v.photos.length) allPhotos = allPhotos.concat(v.photos); });
   var item = {
     id: genId(),
     name: name,
     price: poolVariants.length > 0 ? poolVariants[0].price : 0,
     qty: poolVariants.length,
     variants: poolVariants.map(function(v) {
-      return { id: v.id, brand: v.brand || '未命名', price: v.price || 0 };
+      return {
+        id: v.id,
+        brand: v.brand || '未命名',
+        price: v.price || 0,
+        photos: (v.photos || []).slice(),
+        reason: v.reason || '',
+        specQty: v.specQty || 0,
+        specUnit: v.specUnit || '',
+        material: v.material || ''
+      };
     }),
     zoneId: zoneId,
     categoryId: zoneId ? document.getElementById('pool-category').value : null,
-    notes: document.getElementById('pool-notes').value,
-    photos: poolPhotos.slice(),
+    notes: '',
+    photos: allPhotos,
     status: 'pending',
     date: new Date().toISOString()
   };
   DB.pool.push(item);
   saveDB();
   closeModal();
-  poolPhotos = [];
   renderPool();
   toast('已加入目标锁定');
 }
@@ -4253,10 +4424,17 @@ function renderSettings() {
     else statusText = '已登录';
   }
   html += '<div class="setting-row" onclick="manualSync()"><div class="setting-label">☁️ 同步状态</div><div class="setting-value" id="settings-cloud-status">' + statusText + '</div></div>';
+  // 诊断信息：显示具体错误
+  if (cloudSyncState.message) {
+    html += '<div style="padding:8px 12px;font-size:12px;color:var(--danger);line-height:1.5;background:rgba(255,59,48,0.08);border-radius:8px;margin:6px 0">' + escapeHtml(cloudSyncState.message) + '</div>';
+  }
   if (currentUser && currentUser.email && !currentUser.email.endsWith('@jiayou.app')) {
     html += '<div class="setting-row"><div class="setting-label">📧 已绑定邮箱</div><div class="setting-value">' + escapeHtml(currentUser.email) + '</div></div>';
   }
   html += '<button class="btn btn-primary btn-full" style="margin-top:10px;" onclick="manualSync()">立即同步</button>';
+  if (!currentUser) {
+    html += '<button class="btn btn-outline btn-full" style="margin-top:8px;" onclick="retryCloudLogin()">🔄 重试登录</button>';
+  }
   html += '</div>';
 
   // 数据管理
