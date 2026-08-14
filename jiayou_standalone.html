@@ -12,7 +12,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
 <title>家有</title>
-<script src="supabase.js" defer></script>
+<script src="supabase.js?v=2" defer></script>
 <style>
 /* ========== 设计系统 ========== */
 :root {
@@ -814,18 +814,25 @@ var cloudSyncState = { status: 'idle', message: '', lastSyncAt: null, pending: f
 var cloudSyncTimer = null;
 var cloudSyncInProgress = false;
 
-try {
-  if (window.supabase && window.supabase.createClient) {
+// 懒初始化 Supabase 客户端：
+// supabase.js 是 defer 加载（HTML 解析完才执行），而内联主脚本先执行，
+// 因此不能在顶层直接读 window.supabase —— 必须等真正用到时再创建。
+function ensureSupabaseClient() {
+  if (supabaseClient) return true;
+  if (!window.supabase || !window.supabase.createClient) {
+    cloudSyncState.message = 'Supabase 库未加载（检查 supabase.js 是否存在）';
+    return false;
+  }
+  try {
     supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
       auth: { persistSession: true, autoRefreshToken: true }
     });
-  } else {
-    console.error('window.supabase 不存在');
-    toast('Supabase 库未加载，请检查网络');
+    return true;
+  } catch(e) {
+    console.error('Supabase初始化失败', e);
+    cloudSyncState.message = 'Supabase初始化失败: ' + (e.message || e);
+    return false;
   }
-} catch(e) {
-  console.error('Supabase初始化失败', e);
-  toast('Supabase初始化失败: ' + (e.message || e));
 }
 
 // 生成稳定设备ID（用于匿名用户识别）
@@ -840,8 +847,7 @@ function getDeviceId() {
 
 // 尝试匿名登录；失败则使用设备本地模式（仍可用，只是不同步）
 async function initAuth() {
-  if (!supabaseClient) {
-    cloudSyncState.message = 'Supabase 库未加载（检查 supabase.js 是否存在）';
+  if (!ensureSupabaseClient()) {
     updateCloudUI();
     return;
   }
@@ -874,7 +880,7 @@ async function initAuth() {
 }
 
 async function fallbackAnonymousLogin() {
-  if (!supabaseClient) return;
+  if (!ensureSupabaseClient()) return;
   var deviceId = getDeviceId();
   var email = localStorage.getItem('jiayou_anon_email');
   var password = localStorage.getItem('jiayou_anon_password');
@@ -937,11 +943,12 @@ async function retryCloudLogin() {
   toast('正在重试登录...');
   cloudSyncState.message = '正在重试...';
   updateCloudUI();
+  if (!ensureSupabaseClient()) { toast('Supabase 库未加载'); return; }
   // 清除旧凭据，强制重新注册
   localStorage.removeItem('jiayou_anon_email');
   localStorage.removeItem('jiayou_anon_password');
   // 清除 supabase 本地 session
-  try { if (supabaseClient) await supabaseClient.auth.signOut(); } catch(e) {}
+  try { await supabaseClient.auth.signOut(); } catch(e) {}
   currentUser = null;
   await initAuth();
   if (currentUser) {
@@ -982,7 +989,8 @@ function setCloudStatus(status, message) {
 
 // 从本地数据中提取所有照片（base64），上传到 Storage，替换为 URL
 async function uploadAllLocalPhotos() {
-  if (!supabaseClient || !currentUser) return;
+  if (!currentUser) return;
+  if (!ensureSupabaseClient()) return;
   var uploads = [];
   DB.zones.forEach(function(zone) {
     zone.items.forEach(function(item) {
@@ -1028,7 +1036,8 @@ function findItemByIds(zoneId, itemId) {
 }
 
 async function uploadPhotoToStorage(base64Data, zoneId, itemId) {
-  if (!supabaseClient || !currentUser) return null;
+  if (!currentUser) return null;
+  if (!ensureSupabaseClient()) return null;
   try {
     var arr = base64Data.split(',');
     var mime = arr[0].match(/:(.*?);/)[1];
@@ -1051,7 +1060,8 @@ async function uploadPhotoToStorage(base64Data, zoneId, itemId) {
 
 // 保存数据到云端
 async function syncToCloud(force) {
-  if (!supabaseClient || !currentUser) return;
+  if (!currentUser) return;
+  if (!ensureSupabaseClient()) return;
   if (cloudSyncInProgress) {
     cloudSyncState.pending = true;
     updateCloudUI();
@@ -1092,7 +1102,8 @@ async function syncToCloud(force) {
 }
 
 function queueCloudSync() {
-  if (!supabaseClient || !currentUser) return;
+  if (!currentUser) return;
+  if (!ensureSupabaseClient()) return;
   cloudSyncState.pending = true;
   updateCloudUI();
   clearTimeout(cloudSyncTimer);
@@ -1101,7 +1112,8 @@ function queueCloudSync() {
 
 // 从云端拉取数据
 async function syncFromCloud() {
-  if (!supabaseClient || !currentUser) return false;
+  if (!currentUser) return false;
+  if (!ensureSupabaseClient()) return false;
   setCloudStatus('syncing', '从云端恢复...');
   try {
     var { data, error } = await supabaseClient
@@ -1151,6 +1163,7 @@ async function syncFromCloud() {
 // 手动触发同步按钮
 function manualSync() {
   if (!navigator.onLine) { toast('当前离线，恢复网络后自动同步'); return; }
+  if (!ensureSupabaseClient()) { toast('Supabase 库未加载，无法同步'); return; }
   if (!currentUser) { toast('未登录，无法同步'); return; }
   toast('开始同步...');
   syncToCloud(true).then(function() {
