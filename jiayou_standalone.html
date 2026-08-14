@@ -420,6 +420,24 @@ body {
 .form-row { display: flex; gap: 10px; }
 .form-row .form-group { flex: 1; }
 
+/* 开关（开袋即使用） */
+.switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.switch-desc { font-size: 13px; color: var(--text-secondary); line-height: 1.5; flex: 1; }
+.switch { position: relative; display: inline-block; width: 46px; height: 26px; flex-shrink: 0; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch .slider {
+  position: absolute; cursor: pointer; inset: 0;
+  background: var(--separator); border-radius: 26px;
+  transition: background 0.2s;
+}
+.switch .slider::before {
+  content: ''; position: absolute; height: 20px; width: 20px;
+  left: 3px; bottom: 3px; background: #fff; border-radius: 50%;
+  transition: transform 0.2s;
+}
+.switch input:checked + .slider { background: var(--accent); }
+.switch input:checked + .slider::before { transform: translateX(20px); }
+
 /* 图片上传 */
 .photo-upload {
   display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
@@ -1403,7 +1421,8 @@ function enterZone(zoneId) {
   currentZoneId = zoneId;
   var zone = getZone(zoneId);
   document.getElementById('zone-title').textContent = zone.icon + ' ' + zone.name;
-  currentCategoryId = zone.categories.length > 0 ? zone.categories[0].id : null;
+  currentCategoryId = 'all';
+  currentSearchQuery = '';
   showPage('zone');
 }
 
@@ -3024,6 +3043,12 @@ function openItemForm(itemId) {
     html += '<button class="btn btn-outline btn-sm" style="margin-top:6px;width:100%" onclick="addConsumableVariantRow()">＋ 添加品牌</button>';
     html += '</div>';
 
+    html += '<div class="form-group">';
+    html += '<label class="form-label">开袋即使用</label>';
+    html += '<div class="switch-row"><span class="switch-desc">开封当天即视为用完（适用于开封后马上吃完的食品类）</span>';
+    html += '<label class="switch"><input type="checkbox" id="item-oneshot"' + (item && item.oneShot === true ? ' checked' : '') + '><span class="slider"></span></label>';
+    html += '</div></div>';
+
     html += '<div class="form-row">';
     html += '<div class="form-group"><label class="form-label">保质期（月）</label><input type="number" class="form-input" id="item-shelf" value="' + (item?(item.shelfLife||''):'') + '" placeholder="如：12"></div>';
     html += '<div class="form-group"><label class="form-label">生产日期</label><input type="date" class="form-input" id="item-prod-date" value="' + (item&&item.productionDate?item.productionDate.split('T')[0]:'') + '"></div>';
@@ -3402,6 +3427,7 @@ function saveItem() {
     var prodDate = document.getElementById('item-prod-date').value;
     data.productionDate = prodDate ? new Date(prodDate).toISOString() : null;
     data.stockThreshold = parseFloat(document.getElementById('item-threshold').value) || 1;
+    data.oneShot = !!document.getElementById('item-oneshot').checked;
   } else {
     // 耐用品：从件数编辑器读取
     var dEditVariants = window._editVariants || [];
