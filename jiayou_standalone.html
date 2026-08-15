@@ -1483,6 +1483,45 @@ function getCategory(zoneId, catId) {
   return null;
 }
 
+// ========== 两级分类辅助 ==========
+// 取某大类的所有子分类（无 parentId 的分类视为大类）
+function getSubcategories(zone, catId) {
+  if (!zone || !zone.categories) return [];
+  return zone.categories.filter(function(c) { return c.parentId === catId; });
+}
+// 判断分类是否为子分类
+function isSubcategory(zone, cat) {
+  return !!(cat && cat.parentId && zone.categories.some(function(c) { return c.id === cat.parentId; }));
+}
+// 返回分类路径："大类 · 子类"（大类本身只返回大类名）
+function getCategoryPath(zoneId, catId) {
+  var zone = getZone(zoneId);
+  if (!zone) return '';
+  var cat = getCategory(zoneId, catId);
+  if (!cat) return '';
+  if (cat.parentId) {
+    var parent = getCategory(zoneId, cat.parentId);
+    if (parent) return parent.name + ' · ' + cat.name;
+  }
+  return cat.name;
+}
+// 搜索匹配：物品名/备注/位置/分类路径/每件描述与备注
+function matchesSearch(item, zone, q) {
+  q = (q || '').toLowerCase();
+  if (!q) return true;
+  var hay = [
+    item.name || '',
+    item.notes || '',
+    item.location || ''
+  ];
+  if (item.categoryId) hay.push(getCategoryPath(zone.id, item.categoryId));
+  (item.variants || []).forEach(function(v) {
+    hay.push(v.brand || '');
+    if (v.notes) hay.push(v.notes);
+  });
+  return hay.some(function(s) { return s.toLowerCase().indexOf(q) >= 0; });
+}
+
 // 判断是否为食品类（开封即用完）
 function isFoodItem(item, zoneId) {
   if (!item) return false;
@@ -1515,12 +1554,17 @@ function getItem(zoneId, itemId) {
 function getItemsByCategory(zoneId, catId) {
   var zone = getZone(zoneId);
   if (!zone) return [];
+  // 预计算：选中大类时，允许匹配的 id 集合（自身 + 其所有子分类）
+  var allowedIds = null;
+  if (catId !== 'all') {
+    allowedIds = [catId];
+    getSubcategories(zone, catId).forEach(function(sub) {
+      allowedIds.push(sub.id);
+    });
+  }
   return zone.items.filter(function(it) {
-    if (currentSearchQuery) {
-      var q = currentSearchQuery.toLowerCase();
-      if (it.name.toLowerCase().indexOf(q) === -1) return false;
-    }
-    return catId === 'all' || it.categoryId === catId;
+    if (currentSearchQuery && !matchesSearch(it, zone, currentSearchQuery)) return false;
+    return catId === 'all' || allowedIds.indexOf(it.categoryId) >= 0;
   });
 }
 
@@ -1957,18 +2001,48 @@ function renderZone() {
   // 搜索栏
   html += '<div class="search-bar">';
   html += '<span class="search-icon">🔍</span>';
-  html += '<input type="text" placeholder="搜索物品..." value="' + escapeHtml(currentSearchQuery) + '" oninput="onSearch(this.value)">';
+  html += '<input type="text" placeholder="搜物品/分类/备注/描述..." value="' + escapeHtml(currentSearchQuery) + '" oninput="onSearch(this.value)">';
   html += '</div>';
 
-  // 分类标签
+  // 分类标签（第一行：全部 + 大类）
+  var mainCats = zone.categories.filter(function(c) { return !c.parentId; });
+  // 若当前选中的是子分类，找到其父大类用于第一行高亮和第二行渲染
+  var activeMainId = 'all';
+  var activeSubId = null;
+  if (currentCategoryId !== 'all') {
+    var curCat = getCategory(currentZoneId, currentCategoryId);
+    if (curCat) {
+      if (curCat.parentId) {
+        activeMainId = curCat.parentId;
+        activeSubId = curCat.id;
+      } else {
+        activeMainId = curCat.id;
+      }
+    }
+  }
   html += '<div class="cat-tabs">';
-  html += '<div class="cat-tab ' + (currentCategoryId === 'all' ? 'active' : '') + '" onclick="selectCategory(\'all\')">全部</div>';
-  zone.categories.forEach(function(cat) {
-    html += '<div class="cat-tab ' + (currentCategoryId === cat.id ? 'active' : '') + '" onclick="selectCategory(\'' + cat.id + '\')">';
+  html += '<div class="cat-tab ' + (activeMainId === 'all' ? 'active' : '') + '" onclick="selectCategory(\'all\')">全部</div>';
+  mainCats.forEach(function(cat) {
+    html += '<div class="cat-tab ' + (activeMainId === cat.id ? 'active' : '') + '" onclick="selectCategory(\'' + cat.id + '\')">';
     html += escapeHtml(cat.name);
     html += '</div>';
   });
   html += '</div>';
+
+  // 第二行：选中大类的子分类（有子分类才显示）
+  if (activeMainId !== 'all') {
+    var subs = getSubcategories(zone, activeMainId);
+    if (subs.length > 0) {
+      html += '<div class="cat-tabs" style="margin-top:-4px">';
+      html += '<div class="cat-tab ' + (!activeSubId ? 'active' : '') + '" onclick="selectCategory(\'' + activeMainId + '\')">全部</div>';
+      subs.forEach(function(sub) {
+        html += '<div class="cat-tab ' + (activeSubId === sub.id ? 'active' : '') + '" onclick="selectCategory(\'' + sub.id + '\')">';
+        html += escapeHtml(sub.name);
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+  }
 
   // 物品网格
   var items = getItemsByCategory(currentZoneId, currentCategoryId);
@@ -2106,8 +2180,8 @@ function renderCardFront(item, zone) {
   html += '</div>';
   html += '<div class="detail-body">';
   html += '<div class="detail-name">' + escapeHtml(item.name) + '</div>';
-  var cat = getCategory(zone.id, item.categoryId);
-  html += '<div class="detail-cat">' + zone.icon + ' ' + zone.name + (cat ? ' · ' + cat.name : '') + '</div>';
+  var catPath = getCategoryPath(zone.id, item.categoryId);
+  html += '<div class="detail-cat">' + zone.icon + ' ' + zone.name + (catPath ? ' · ' + catPath : '') + '</div>';
 
   if (zone.type === 'consumable') {
     var status = getItemStatus(item);
@@ -2160,14 +2234,15 @@ function renderCardBack(item, zone) {
   // === 基本信息 ===
   html += '<div class="back-section">';
   html += '<div class="back-section-title">基本信息</div>';
-  if (item.photos && item.photos.length > 1) {
+  // 照片墙仅补给品保留（耐用品件数清单已有每件照片，顶部总览冗余）
+  if (zone.type === 'consumable' && item.photos && item.photos.length > 1) {
     html += '<div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:10px;scrollbar-width:none">';
     item.photos.forEach(function(p) {
       html += '<img src="' + p + '" style="width:80px;height:80px;border-radius:8px;object-fit:cover;flex-shrink:0">';
     });
     html += '</div>';
   }
-  html += '<div class="back-row"><span class="back-label">分类</span><span class="back-value">' + (getCategory(zone.id, item.categoryId)||{}).name + '</span></div>';
+  html += '<div class="back-row"><span class="back-label">分类</span><span class="back-value">' + (getCategoryPath(zone.id, item.categoryId) || '未分类') + '</span></div>';
   if (item.location) html += '<div class="back-row"><span class="back-label">存放位置</span><span class="back-value">' + escapeHtml(item.location) + '</span></div>';
   if (item.notes) html += '<div class="back-row"><span class="back-label">备注</span><span class="back-value">' + escapeHtml(item.notes) + '</span></div>';
   html += '<div class="back-row"><span class="back-label">领地类型</span><span class="back-value">' + (zone.type === 'consumable' ? '补给品' : '耐用品') + '</span></div>';
@@ -2389,7 +2464,7 @@ function renderCardBack(item, zone) {
     ensureVariants(item);
     var variants = item.variants || [];
     html += '<div class="back-section">';
-    html += '<div class="back-section-title">件数清单 (' + variants.length + '件)</div>';
+    html += '<div class="back-section-title" style="display:flex;justify-content:space-between;align-items:center">件数清单 (' + variants.length + '件)<button class="btn btn-outline btn-sm" style="font-size:12px;padding:4px 10px" onclick="addVariantFromDetail(\'' + item.id + '\')">＋ 添加</button></div>';
     if (variants.length > 0) {
       html += '<div class="variant-thumb-grid">';
       variants.forEach(function(v, vi) {
@@ -2406,9 +2481,12 @@ function renderCardBack(item, zone) {
         }
         html += '<div class="variant-label">' + escapeHtml(v.brand || ('第' + (vi+1) + '件')) + '</div>';
         if (v.price) html += '<div class="variant-sub">¥' + v.price + '</div>';
+        if (v.notes) html += '<div class="variant-sub" style="color:var(--text-secondary);font-size:11px;line-height:1.4;margin-top:2px">' + escapeHtml(v.notes) + '</div>';
         html += '</div>';
       });
       html += '</div>';
+    } else {
+      html += '<div style="padding:8px 0;font-size:13px;color:var(--text-tertiary)">还没有件数记录</div>';
     }
     html += '</div>';
 
@@ -2553,6 +2631,30 @@ function closePhotoViewer() {
 }
 
 // ========== 删除单件变体 ==========
+// 详情页快速添加一件（耐用品）：直接向 item.variants 追加空件
+function addVariantFromDetail(itemId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  if (!item.variants) item.variants = [];
+  item.variants.push({
+    id: genId(),
+    brand: '新增第' + (item.variants.length + 1) + '件',
+    stock: 1,
+    price: 0,
+    channel: '',
+    photos: [],
+    notes: '',
+    opened: false, openDate: null, finishDate: null,
+    usedUp: false, openQty: 0, feeling: null,
+    shelfLife: null, productionDate: null
+  });
+  syncDurableFromVariants(item);
+  saveDB();
+  renderCardBack(item, getZone(currentZoneId));
+  renderZone();
+  toast('已添加一件，点「✏ 编辑」可补照片和备注');
+}
+
 function deleteVariant(itemId, variantId) {
   var item = getItem(currentZoneId, itemId);
   if (!item || !item.variants) return;
@@ -3041,24 +3143,41 @@ function openItemForm(itemId) {
   html += '<div class="form-group"><label class="form-label">名称</label>';
   html += '<input type="text" class="form-input" id="item-name" value="' + (item?escapeHtml(item.name):'') + '" placeholder="如：洗发水"></div>';
 
-  html += '<div class="form-group"><label class="form-label">分类</label>';
-  html += '<select class="form-select" id="item-category">';
-  zone.categories.forEach(function(c) {
-    html += '<option value="' + c.id + '"' + (item&&item.categoryId===c.id?' selected':'') + '>' + escapeHtml(c.name) + '</option>';
+  // 两级分类：大类必选，子分类选填
+  var mainCats = zone.categories.filter(function(c) { return !c.parentId; });
+  var selMainId = mainCats.length > 0 ? mainCats[0].id : '';
+  var selSubId = '';
+  if (item && item.categoryId) {
+    var itemCat = getCategory(zone.id, item.categoryId);
+    if (itemCat) {
+      if (itemCat.parentId) { selMainId = itemCat.parentId; selSubId = itemCat.id; }
+      else { selMainId = itemCat.id; }
+    }
+  }
+  html += '<div class="form-row">';
+  html += '<div class="form-group"><label class="form-label">大类</label>';
+  html += '<select class="form-select" id="item-category" onchange="updateItemSubcategoryOptions(\'' + zone.id + '\', this.value)">';
+  mainCats.forEach(function(c) {
+    html += '<option value="' + c.id + '"' + (selMainId===c.id?' selected':'') + '>' + escapeHtml(c.name) + '</option>';
   });
   html += '</select></div>';
+  html += '<div class="form-group"><label class="form-label">子分类（选填）</label>';
+  html += '<select class="form-select" id="item-subcategory"></select></div>';
+  html += '</div>';
 
-  // 耐用品：件数编辑器（每件=描述+照片+可选价格）
+  // 耐用品：件数编辑器（每件=描述+照片+可选价格+备注）
   if (zone.type !== 'consumable') {
     html += '<div class="form-group"><label class="form-label">件数清单</label>';
+    // 顶部快捷添加（衣服多时免滑到底）
+    html += '<button class="btn btn-outline btn-sm" style="width:100%;margin-bottom:8px" onclick="addDurableVariantRow()">＋ 添加一件</button>';
     html += '<div id="variant-list">';
     var dVariants = [];
     if (item && item.variants && item.variants.length > 0) {
       dVariants = item.variants.map(function(v) {
-        return { id: v.id, brand: v.brand||'', photos: (v.photos||[]).slice(), price: v.price||0 };
+        return { id: v.id, brand: v.brand||'', photos: (v.photos||[]).slice(), price: v.price||0, notes: v.notes||'' };
       });
     } else {
-      dVariants = [{ id: genId(), brand: '', photos: [], price: 0 }];
+      dVariants = [{ id: genId(), brand: '', photos: [], price: 0, notes: '' }];
     }
     window._editVariants = dVariants;
     window._editVariantPhotos = dVariants.map(function(v) { return v.photos.slice(); });
@@ -3112,6 +3231,29 @@ function openItemForm(itemId) {
 
   document.getElementById('modal-content').innerHTML = html;
   document.getElementById('modal-overlay').classList.add('show');
+  // 初始化子分类选项（编辑时回填已选子分类）
+  window._itemSelSubId = selSubId || '';
+  updateItemSubcategoryOptions(zone.id, selMainId);
+}
+
+// 根据所选大类填充子分类下拉（选填）
+function updateItemSubcategoryOptions(zoneId, mainCatId) {
+  var sel = document.getElementById('item-subcategory');
+  if (!sel) return;
+  var zone = getZone(zoneId);
+  if (!zone) return;
+  var subs = getSubcategories(zone, mainCatId);
+  var html = '<option value="">不选子分类</option>';
+  subs.forEach(function(s) {
+    html += '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>';
+  });
+  sel.innerHTML = html;
+  // 回填编辑时已选的子分类（仅当它属于当前大类）
+  if (window._itemSelSubId && subs.some(function(s) { return s.id === window._itemSelSubId; })) {
+    sel.value = window._itemSelSubId;
+  }
+  // 用户手动切换大类后清除回填记忆
+  window._itemSelSubId = sel.value;
 }
 
 function uploadItemPhoto() {
@@ -3293,10 +3435,11 @@ function renderDurableVariantRows() {
       html += '<span style="font-size:20px;color:var(--text-tertiary)">📷</span>';
     }
     html += '</div>';
-    // 描述+价格
+    // 描述+价格+备注
     html += '<div style="flex:1;display:flex;flex-direction:column;gap:4px">';
     html += '<input type="text" class="form-input" style="font-size:14px" placeholder="描述（如：白色圆领）" value="' + escapeHtml(v.brand) + '" onchange="updateDurableVariantField(' + i + ',\'brand\',this.value)">';
     html += '<input type="number" class="form-input" style="font-size:14px" placeholder="价格（选填）" value="' + (v.price||'') + '" onchange="updateDurableVariantField(' + i + ',\'price\',parseFloat(this.value)||0)">';
+    html += '<input type="text" class="form-input" style="font-size:13px;color:var(--text-secondary)" placeholder="备注（如：真丝/手洗/25.3购）" value="' + escapeHtml(v.notes||'') + '" onchange="updateDurableVariantField(' + i + ',\'notes\',this.value)">';
     html += '</div>';
     // 删除按钮
     html += '<button class="btn btn-danger btn-sm" style="flex-shrink:0;padding:6px 8px;font-size:12px" onclick="removeDurableVariantRow(' + i + ')">✕</button>';
@@ -3324,7 +3467,7 @@ function updateDurableVariantField(idx, field, val) {
 function addDurableVariantRow() {
   window._editVariants = window._editVariants || [];
   window._editVariantPhotos = window._editVariantPhotos || [];
-  window._editVariants.push({ id: genId(), brand: '', photos: [], price: 0 });
+  window._editVariants.push({ id: genId(), brand: '', photos: [], price: 0, notes: '' });
   window._editVariantPhotos.push([]);
   document.getElementById('variant-list').innerHTML = renderDurableVariantRows();
 }
@@ -3436,9 +3579,14 @@ function saveItem() {
   var name = document.getElementById('item-name').value.trim();
   if (!name) { toast('请输入名称'); return; }
 
+  // 分类：选了子分类用子分类，否则用大类
+  var finalCategoryId = document.getElementById('item-category').value;
+  var subSel = document.getElementById('item-subcategory');
+  if (subSel && subSel.value) finalCategoryId = subSel.value;
+
   var data = {
     name: name,
-    categoryId: document.getElementById('item-category').value,
+    categoryId: finalCategoryId,
     location: document.getElementById('item-location').value,
     notes: document.getElementById('item-notes').value,
     photos: itemPhotos.slice()
@@ -3483,6 +3631,7 @@ function saveItem() {
         price: ev.price || 0,
         channel: '',
         photos: (dEditPhotos[i] || []).slice(),
+        notes: ev.notes || '',
         opened: false, openDate: null, finishDate: null,
         usedUp: false, openQty: 0, feeling: null,
         shelfLife: null, productionDate: null
@@ -3526,12 +3675,13 @@ function saveItem() {
         }
       }
     } else {
-      // 耐用品：保留已有的variant使用感受
+      // 耐用品：保留已有的variant使用感受和备注
       var oldDVariants = item.variants || [];
       data.variants.forEach(function(nv) {
         var old = oldDVariants.find(function(ov) { return ov.id === nv.id; });
         if (old) {
           nv.feeling = old.feeling;
+          if (!nv.notes && old.notes) nv.notes = old.notes;
         }
       });
     }
@@ -3819,32 +3969,64 @@ function openCategoryManager() {
   var zone = getZone(currentZoneId);
   var html = '<div class="modal-handle"></div>';
   html += '<div class="modal-title">分类管理</div>';
+  html += '<div style="font-size:12px;color:var(--text-tertiary);margin-bottom:8px">大类下可加子分类（如：上装 → 春秋/夏/冬），添加物品时子分类选填</div>';
   html += '<div id="cat-list">';
-  zone.categories.forEach(function(cat) {
-    var count = zone.items.filter(function(it) { return it.categoryId === cat.id; }).length;
-    html += '<div class="setting-row" style="border-radius:0">';
-    html += '<div><span class="setting-label">' + escapeHtml(cat.name) + '</span><br><span class="setting-value">' + count + '件</span></div>';
-    html += '<div style="display:flex;gap:8px">';
+  var mainCats = zone.categories.filter(function(c) { return !c.parentId; });
+  if (mainCats.length === 0) {
+    html += '<div style="padding:20px;text-align:center;color:var(--text-tertiary);font-size:13px">还没有分类</div>';
+  }
+  mainCats.forEach(function(cat) {
+    var subs = getSubcategories(zone, cat.id);
+    // 大类计数 = 自身 + 子分类的物品总数
+    var subIds = subs.map(function(s) { return s.id; });
+    var count = zone.items.filter(function(it) {
+      return it.categoryId === cat.id || subIds.indexOf(it.categoryId) >= 0;
+    }).length;
+    html += '<div class="setting-row" style="border-radius:0;background:var(--card-bg)">';
+    html += '<div><span class="setting-label" style="font-weight:700">' + escapeHtml(cat.name) + '</span><br><span class="setting-value">' + count + '件' + (subs.length > 0 ? ' · ' + subs.length + '个子类' : '') + '</span></div>';
+    html += '<div style="display:flex;gap:6px">';
+    html += '<button class="btn btn-outline btn-sm" onclick="addSubcategory(\'' + cat.id + '\')">＋子类</button>';
     html += '<button class="btn btn-outline btn-sm" onclick="editCategory(\'' + cat.id + '\')">改名</button>';
     html += '<button class="btn btn-danger btn-sm" onclick="deleteCategory(\'' + cat.id + '\')">删</button>';
     html += '</div></div>';
+    // 子分类行（缩进）
+    subs.forEach(function(sub) {
+      var subCount = zone.items.filter(function(it) { return it.categoryId === sub.id; }).length;
+      html += '<div class="setting-row" style="border-radius:0;padding-left:28px">';
+      html += '<div><span class="setting-label">└ ' + escapeHtml(sub.name) + '</span><br><span class="setting-value">' + subCount + '件</span></div>';
+      html += '<div style="display:flex;gap:6px">';
+      html += '<button class="btn btn-outline btn-sm" onclick="editCategory(\'' + sub.id + '\')">改名</button>';
+      html += '<button class="btn btn-danger btn-sm" onclick="deleteCategory(\'' + sub.id + '\')">删</button>';
+      html += '</div></div>';
+    });
   });
   html += '</div>';
-  html += '<button class="btn btn-primary btn-full" style="margin-top:16px" onclick="addCategory()">＋ 添加分类</button>';
-  html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">完成</button>';
+  html += '<button class="btn btn-primary btn-full" style="margin-top:16px" onclick="addCategory()">＋ 添加大类</button>';
+  html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal();renderZone()">完成</button>';
 
   document.getElementById('modal-content').innerHTML = html;
   document.getElementById('modal-overlay').classList.add('show');
 }
 
 function addCategory() {
-  var name = prompt('分类名称');
+  var name = prompt('大类名称');
   if (!name || !name.trim()) return;
   var zone = getZone(currentZoneId);
   zone.categories.push({ id: genId(), name: name.trim() });
   saveDB();
   openCategoryManager();
-  toast('已添加');
+  toast('已添加大类');
+}
+
+// 在某大类下添加子分类
+function addSubcategory(parentId) {
+  var name = prompt('子分类名称（如：春秋 / 夏 / 冬 / 面部）');
+  if (!name || !name.trim()) return;
+  var zone = getZone(currentZoneId);
+  zone.categories.push({ id: genId(), name: name.trim(), parentId: parentId });
+  saveDB();
+  openCategoryManager();
+  toast('已添加子分类');
 }
 
 function editCategory(catId) {
@@ -3860,6 +4042,16 @@ function editCategory(catId) {
 
 function deleteCategory(catId) {
   var zone = getZone(currentZoneId);
+  var cat = getCategory(zone.id, catId);
+  if (!cat) return;
+  if (!cat.parentId) {
+    // 大类：检查子分类和物品
+    var subs = getSubcategories(zone, catId);
+    if (subs.length > 0) {
+      toast('该大类下还有 ' + subs.length + ' 个子分类，请先删除子分类');
+      return;
+    }
+  }
   var count = zone.items.filter(function(it) { return it.categoryId === catId; }).length;
   if (count > 0) {
     toast('该分类下还有' + count + '件物品，请先移走');
@@ -4009,8 +4201,8 @@ function renderPoolItem(p) {
     if (zone) meta += zone.icon + ' ' + zone.name;
   }
   if (p.categoryId) {
-    var cat = getCategory(p.zoneId, p.categoryId);
-    if (cat) meta += ' · ' + cat.name;
+    var catPath = getCategoryPath(p.zoneId, p.categoryId);
+    if (catPath) meta += ' · ' + catPath;
   }
   if (p.date) meta += ' · ' + formatDate(p.date);
   html += '<div class="pool-meta">' + meta + '</div></div>';
@@ -4349,7 +4541,9 @@ function updatePoolCategories() {
   var zone = getZone(zoneId);
   select.innerHTML = '';
   zone.categories.forEach(function(c) {
-    select.innerHTML += '<option value="' + c.id + '">' + escapeHtml(c.name) + '</option>';
+    // 子分类显示为 "大类 · 子类"，大类显示为自身名称
+    var label = c.parentId ? getCategoryPath(zoneId, c.id) : c.name;
+    select.innerHTML += '<option value="' + c.id + '">' + escapeHtml(label) + '</option>';
   });
 }
 
