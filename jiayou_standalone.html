@@ -2228,7 +2228,12 @@ function renderCardBack(item, zone) {
   var html = '<div class="detail-back">';
   html += '<div class="back-header">';
   html += '<div class="back-title">' + escapeHtml(item.name) + '</div>';
+  // 顶部快捷操作：编辑 / 删除（不用滑到底部）
+  html += '<div style="display:flex;gap:6px;align-items:center">';
+  html += '<button class="btn btn-outline btn-sm" style="font-size:12px;padding:4px 10px" onclick="editItem(\'' + item.id + '\')">✏ 编辑</button>';
+  html += '<button class="btn btn-danger btn-sm" style="font-size:12px;padding:4px 10px" onclick="deleteItem(\'' + item.id + '\')">🗑</button>';
   html += '<button class="back-close" onclick="closeCardDetail()">✕</button>';
+  html += '</div>';
   html += '</div>';
 
   // === 基本信息 ===
@@ -2244,8 +2249,7 @@ function renderCardBack(item, zone) {
   }
   html += '<div class="back-row"><span class="back-label">分类</span><span class="back-value">' + (getCategoryPath(zone.id, item.categoryId) || '未分类') + '</span></div>';
   if (item.location) html += '<div class="back-row"><span class="back-label">存放位置</span><span class="back-value">' + escapeHtml(item.location) + '</span></div>';
-  if (item.notes) html += '<div class="back-row"><span class="back-label">备注</span><span class="back-value">' + escapeHtml(item.notes) + '</span></div>';
-  html += '<div class="back-row"><span class="back-label">领地类型</span><span class="back-value">' + (zone.type === 'consumable' ? '补给品' : '耐用品') + '</span></div>';
+  if (item.notes && zone.type === 'consumable') html += '<div class="back-row"><span class="back-label">备注</span><span class="back-value">' + escapeHtml(item.notes) + '</span></div>';
   html += '</div>';
 
   // === 库存与价格 ===
@@ -2424,38 +2428,27 @@ function renderCardBack(item, zone) {
     }
   }
 
-  // === 使用感受（可选）/ 耐用品备注 ===
-  // 补给品且有多变体时，感受在每个变体旁独立编辑；补给品单品用顶层感受；耐用品用备注
+  // === 使用感受（仅补给品；耐用品每件有独立备注，不再显示此区） ===
   var hasMultipleVariants = item.variants && item.variants.length > 1 && zone.type === 'consumable';
-  if (!hasMultipleVariants) {
+  if (!hasMultipleVariants && zone.type !== 'durable') {
     html += '<div class="back-section">';
-    if (zone.type === 'durable') {
-      html += '<div class="back-section-title">备注</div>';
-      if (item.notes) {
-        html += '<div style="font-size:14px;line-height:1.5;color:var(--text);white-space:pre-wrap">' + escapeHtml(item.notes) + '</div>';
-      } else {
-        html += '<div class="back-row"><span class="back-label" style="color:var(--text-tertiary)">暂无备注</span></div>';
+    html += '<div class="back-section-title">使用感受（选填）</div>';
+    if (item.feeling) {
+      if (item.feeling.rating) {
+        html += '<div class="back-row"><span class="back-label">评分</span><span class="back-value">';
+        for (var i = 1; i <= 5; i++) html += i <= item.feeling.rating ? '⭐' : '☆';
+        html += '</span></div>';
       }
-      html += '<button class="btn btn-outline btn-sm" style="margin-top:8px;width:100%" onclick="openNotesForm(\'' + item.id + '\')">✏ 编辑备注</button>';
+      if (item.feeling.tags && item.feeling.tags.length > 0) {
+        html += '<div class="back-row"><span class="back-label">标签</span><span class="back-value">' + item.feeling.tags.map(escapeHtml).join('、') + '</span></div>';
+      }
+      if (item.feeling.notes) {
+        html += '<div class="back-row"><span class="back-label">心得</span><span class="back-value">' + escapeHtml(item.feeling.notes) + '</span></div>';
+      }
     } else {
-      html += '<div class="back-section-title">使用感受（选填）</div>';
-      if (item.feeling) {
-        if (item.feeling.rating) {
-          html += '<div class="back-row"><span class="back-label">评分</span><span class="back-value">';
-          for (var i = 1; i <= 5; i++) html += i <= item.feeling.rating ? '⭐' : '☆';
-          html += '</span></div>';
-        }
-        if (item.feeling.tags && item.feeling.tags.length > 0) {
-          html += '<div class="back-row"><span class="back-label">标签</span><span class="back-value">' + item.feeling.tags.map(escapeHtml).join('、') + '</span></div>';
-        }
-        if (item.feeling.notes) {
-          html += '<div class="back-row"><span class="back-label">心得</span><span class="back-value">' + escapeHtml(item.feeling.notes) + '</span></div>';
-        }
-      } else {
-        html += '<div class="back-row"><span class="back-label" style="color:var(--text-tertiary)">暂无记录</span></div>';
-      }
-      html += '<button class="btn btn-outline btn-sm" style="margin-top:8px;width:100%" onclick="openFeelingForm(\'' + item.id + '\')">✏ 编辑使用感受</button>';
+      html += '<div class="back-row"><span class="back-label" style="color:var(--text-tertiary)">暂无记录</span></div>';
     }
+    html += '<button class="btn btn-outline btn-sm" style="margin-top:8px;width:100%" onclick="openFeelingForm(\'' + item.id + '\')">✏ 编辑使用感受</button>';
     html += '</div>';
   }
 
@@ -3140,6 +3133,14 @@ function openItemForm(itemId) {
   var html = '<div class="modal-handle"></div>';
   html += '<div class="modal-title">' + (item ? '编辑物品' : '添加物品') + '</div>';
 
+  // 顶部快捷操作：保存 / 删除（字段多时免滑到底部）
+  html += '<div style="display:flex;gap:8px;margin-bottom:14px">';
+  html += '<button class="btn btn-primary" style="flex:1" onclick="saveItem()">💾 保存</button>';
+  if (item) {
+    html += '<button class="btn btn-danger" style="flex-shrink:0" onclick="deleteItem(\'' + item.id + '\')">🗑 删除</button>';
+  }
+  html += '</div>';
+
   html += '<div class="form-group"><label class="form-label">名称</label>';
   html += '<input type="text" class="form-input" id="item-name" value="' + (item?escapeHtml(item.name):'') + '" placeholder="如：洗发水"></div>';
 
@@ -3221,8 +3222,11 @@ function openItemForm(itemId) {
     html += '</div>';
   }
 
-  html += '<div class="form-group"><label class="form-label">备注（选填）</label>';
-  html += '<textarea class="form-textarea" id="item-notes" placeholder="...">' + (item?escapeHtml(item.notes||''):'') + '</textarea></div>';
+  // 整物品备注仅补给品（耐用品用每件独立备注）
+  if (zone.type === 'consumable') {
+    html += '<div class="form-group"><label class="form-label">备注（选填）</label>';
+    html += '<textarea class="form-textarea" id="item-notes" placeholder="...">' + (item?escapeHtml(item.notes||''):'') + '</textarea></div>';
+  }
 
   html += '<button class="btn btn-primary btn-full" onclick="saveItem()">' + (item?'保存修改':'添加') + '</button>';
   if (item) {
@@ -3588,7 +3592,7 @@ function saveItem() {
     name: name,
     categoryId: finalCategoryId,
     location: document.getElementById('item-location').value,
-    notes: document.getElementById('item-notes').value,
+    notes: (function() { var el = document.getElementById('item-notes'); return el ? el.value : ''; })(),
     photos: itemPhotos.slice()
   };
 
@@ -3685,6 +3689,8 @@ function saveItem() {
         }
       });
     }
+    // 耐用品编辑表单已无整物品备注输入框，保留旧值不被空覆盖
+    if (zone.type !== 'consumable' && !data.notes && item.notes) data.notes = item.notes;
     Object.assign(item, data);
     if (zone.type === 'consumable') syncItemFromVariants(item);
     else syncDurableFromVariants(item);
