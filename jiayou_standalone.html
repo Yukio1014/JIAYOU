@@ -1352,10 +1352,13 @@ function getTotalStock(item) {
   return item.stock || 0;
 }
 
-// 耐用品：计算单件物品的总金额（所有variant的price累加）
+// 耐用品：计算单件物品的总金额（优先用各款 totalPrice，否则用 单价×件数）
 function calcDurableTotalPrice(item) {
   if (!item.variants || item.variants.length === 0) return 0;
-  return item.variants.reduce(function(s, v) { return s + (v.price || 0); }, 0);
+  return item.variants.reduce(function(s, v) {
+    var t = v.totalPrice || ((v.price || 0) * (v.stock || 1));
+    return s + t;
+  }, 0);
 }
 
 // 耐用品：计算单件物品的实际件数（所有variant数量之和）
@@ -1416,7 +1419,7 @@ function syncDurableFromVariants(item) {
   if (!item.variants || item.variants.length === 0) {
     item.variants = [{ id: genId(), brand: item.name || '第1件', stock: 1, price: item.currentPrice || 0, photos: item.photos || [] }];
   }
-  item.stock = item.variants.length;
+  item.stock = item.variants.reduce(function(s,v){ return s + (v.stock||1); }, 0);
   item.unit = '件';
   // 合并所有variant照片到item级别（用于兼容旧逻辑）
   var allPhotos = [];
@@ -2076,7 +2079,13 @@ function selectCategory(catId) {
 function renderItemCard(item, zone) {
   var status = getItemStatus(item);
   var isDurable = zone.type !== 'consumable';
-  var variantCount = (item.variants && item.variants.length) ? item.variants.length : (isDurable ? 1 : 0);
+  // 耐用品按各 variant 的 stock 汇总实际件数；无 stock 字段（旧数据）默认1
+  var variantCount;
+  if (isDurable) {
+    variantCount = (item.variants && item.variants.length) ? item.variants.reduce(function(s,v){ return s + (v.stock||1); }, 0) : 1;
+  } else {
+    variantCount = (item.variants && item.variants.length) ? item.variants.length : 0;
+  }
 
   var html = '<div class="item-card item-card-compact" onclick="openCardDetail(\'' + zone.id + '\',\'' + item.id + '\')">';
 
@@ -2207,11 +2216,12 @@ function renderCardFront(item, zone) {
       html += '</div>';
     }
   } else {
-    // 耐用品正面：件数 + 总金额（隐私模式，不显示照片）
-    var variantCount = (item.variants && item.variants.length) ? item.variants.length : 1;
+    // 耐用品正面：件数（按 stock 汇总）+ 总金额
+    var variantCount = (item.variants && item.variants.length) ? item.variants.reduce(function(s,v){ return s + (v.stock||1); }, 0) : 1;
+    var variantTypes = (item.variants && item.variants.length) ? item.variants.length : 1;
     var totalPrice = calcDurableTotalPrice(item);
     html += '<div style="margin-top:14px;text-align:center;padding:16px;border-radius:10px;background:rgba(0,122,255,0.08);color:var(--accent);font-weight:700">';
-    html += '共 ' + variantCount + ' 件';
+    html += '共 ' + variantCount + ' 件' + (variantCount !== variantTypes ? ' · ' + variantTypes + '款' : '');
     html += '<div style="font-size:15px;margin-top:4px">总金额 ¥' + totalPrice.toFixed(2) + '</div>';
     html += '</div>';
     if (item.location) {
@@ -2457,7 +2467,8 @@ function renderCardBack(item, zone) {
     ensureVariants(item);
     var variants = item.variants || [];
     html += '<div class="back-section">';
-    html += '<div class="back-section-title" style="display:flex;justify-content:space-between;align-items:center">件数清单 (' + variants.length + '件)<button class="btn btn-outline btn-sm" style="font-size:12px;padding:4px 10px" onclick="addVariantFromDetail(\'' + item.id + '\')">＋ 添加</button></div>';
+    var totalQty = variants.reduce(function(s,v){ return s + (v.stock||1); }, 0);
+    html += '<div class="back-section-title" style="display:flex;justify-content:space-between;align-items:center">件数清单 (' + totalQty + '件 / ' + variants.length + '款)<button class="btn btn-outline btn-sm" style="font-size:12px;padding:4px 10px" onclick="addVariantFromDetail(\'' + item.id + '\')">＋ 添加</button></div>';
     if (variants.length > 0) {
       html += '<div class="variant-thumb-grid">';
       variants.forEach(function(v, vi) {
@@ -2465,15 +2476,29 @@ function renderCardBack(item, zone) {
         html += '<div class="variant-thumb">';
         // 删除按钮
         html += '<button class="variant-del" onclick="event.stopPropagation();deleteVariant(\'' + item.id + '\',\'' + v.id + '\')">✕</button>';
+        // 多件时在照片右上角叠 ×N 角标
         if (vPhotos.length > 0) {
-          // 收集所有照片用于全屏查看
           var allPhotos = vPhotos.map(function(p){ return p.replace(/"/g,'&quot;'); }).join('||');
           html += '<img src="' + vPhotos[0] + '" onclick="openPhotoViewer([\'' + vPhotos.join("','") + '\'],0)">';
+          if ((v.stock||1) > 1) {
+            html += '<div style="position:absolute;bottom:0;right:0;background:rgba(0,122,255,0.85);color:#fff;font-size:11px;font-weight:700;padding:1px 6px;border-radius:8px 0 0 0">×' + (v.stock||1) + '</div>';
+          }
         } else {
           html += '<div class="variant-thumb-no-photo">📷</div>';
+          if ((v.stock||1) > 1) {
+            html += '<div style="position:absolute;bottom:0;right:0;background:rgba(0,122,255,0.85);color:#fff;font-size:11px;font-weight:700;padding:1px 6px">×' + (v.stock||1) + '</div>';
+          }
         }
         html += '<div class="variant-label">' + escapeHtml(v.brand || ('第' + (vi+1) + '件')) + '</div>';
-        if (v.price) html += '<div class="variant-sub">¥' + v.price + '</div>';
+        // 价格展示：单件显示单价；多件显示 "单价 ×N = 总价"
+        var vQty = v.stock || 1;
+        var vUnitP = v.price || 0;
+        var vTotalP = v.totalPrice || (vUnitP * vQty);
+        if (vQty > 1 && vUnitP > 0) {
+          html += '<div class="variant-sub">¥' + vUnitP.toFixed(2) + ' × ' + vQty + ' = ¥' + vTotalP.toFixed(2) + '</div>';
+        } else if (vTotalP > 0) {
+          html += '<div class="variant-sub">¥' + vTotalP.toFixed(2) + '</div>';
+        }
         if (v.notes) html += '<div class="variant-sub" style="color:var(--text-secondary);font-size:11px;line-height:1.4;margin-top:2px">' + escapeHtml(v.notes) + '</div>';
         html += '</div>';
       });
@@ -3175,10 +3200,10 @@ function openItemForm(itemId) {
     var dVariants = [];
     if (item && item.variants && item.variants.length > 0) {
       dVariants = item.variants.map(function(v) {
-        return { id: v.id, brand: v.brand||'', photos: (v.photos||[]).slice(), price: v.price||0, notes: v.notes||'' };
+        return { id: v.id, brand: v.brand||'', photos: (v.photos||[]).slice(), price: v.price||0, notes: v.notes||'', stock: v.stock||1, totalPrice: v.totalPrice||0 };
       });
     } else {
-      dVariants = [{ id: genId(), brand: '', photos: [], price: 0, notes: '' }];
+      dVariants = [{ id: genId(), brand: '', photos: [], price: 0, notes: '', stock: 1, totalPrice: 0 }];
     }
     window._editVariants = dVariants;
     window._editVariantPhotos = dVariants.map(function(v) { return v.photos.slice(); });
@@ -3439,10 +3464,20 @@ function renderDurableVariantRows() {
       html += '<span style="font-size:20px;color:var(--text-tertiary)">📷</span>';
     }
     html += '</div>';
-    // 描述+价格+备注
+    // 描述 + 单价/件数/总价(联动) + 备注
     html += '<div style="flex:1;display:flex;flex-direction:column;gap:4px">';
-    html += '<input type="text" class="form-input" style="font-size:14px" placeholder="描述（如：白色圆领）" value="' + escapeHtml(v.brand) + '" onchange="updateDurableVariantField(' + i + ',\'brand\',this.value)">';
-    html += '<input type="number" class="form-input" style="font-size:14px" placeholder="价格（选填）" value="' + (v.price||'') + '" onchange="updateDurableVariantField(' + i + ',\'price\',parseFloat(this.value)||0)">';
+    html += '<input type="text" class="form-input" style="font-size:14px" placeholder="描述（如：白色圆领 / 女隐形袜·黑色）" value="' + escapeHtml(v.brand) + '" onchange="updateDurableVariantField(' + i + ',\'brand\',this.value)">';
+    // 单价 / 件数 / 总价 三联动
+    var vUnit = v.price || 0;
+    var vQty = v.stock || 1;
+    var vTotal = v.totalPrice || (vUnit * vQty);
+    html += '<div style="display:flex;gap:6px;align-items:center">';
+    html += '<input type="number" class="form-input" style="font-size:13px;flex:1" placeholder="单价" value="' + (vUnit||'') + '" oninput="onDurablePriceInput(' + i + ',\'unit\',this.value)">';
+    html += '<span style="font-size:12px;color:var(--text-tertiary)">×</span>';
+    html += '<input type="number" class="form-input" style="font-size:13px;width:56px;flex-shrink:0" placeholder="件" min="1" step="1" value="' + vQty + '" oninput="onDurablePriceInput(' + i + ',\'qty\',this.value)">';
+    html += '<span style="font-size:12px;color:var(--text-tertiary)">=</span>';
+    html += '<input type="number" class="form-input" style="font-size:13px;flex:1" placeholder="总价" value="' + (vTotal||'') + '" oninput="onDurablePriceInput(' + i + ',\'total\',this.value)">';
+    html += '</div>';
     html += '<input type="text" class="form-input" style="font-size:13px;color:var(--text-secondary)" placeholder="备注（如：真丝/手洗/25.3购）" value="' + escapeHtml(v.notes||'') + '" onchange="updateDurableVariantField(' + i + ',\'notes\',this.value)">';
     html += '</div>';
     // 删除按钮
@@ -3468,10 +3503,39 @@ function updateDurableVariantField(idx, field, val) {
     window._editVariants[idx][field] = val;
   }
 }
+// 单价 × 件数 = 总价 三联动（实时计算，不重渲染整个列表避免输入焦点丢失）
+function onDurablePriceInput(idx, which, val) {
+  var v = window._editVariants && window._editVariants[idx];
+  if (!v) return;
+  var row = document.querySelectorAll('.durable-variant-row')[idx];
+  if (!row) return;
+  var inputs = row.querySelectorAll('input[type=number]');
+  // inputs[0]=单价 [1]=件数 [2]=总价
+  var unitEl = inputs[0], qtyEl = inputs[1], totalEl = inputs[2];
+  if (which === 'unit') {
+    var u = parseFloat(val) || 0;
+    v.price = u;
+    var q = v.stock || 1;
+    v.totalPrice = +(u * q).toFixed(2);
+    if (totalEl) totalEl.value = v.totalPrice || '';
+  } else if (which === 'qty') {
+    var q2 = Math.max(1, parseInt(val) || 1);
+    v.stock = q2;
+    var u2 = v.price || 0;
+    v.totalPrice = +(u2 * q2).toFixed(2);
+    if (totalEl) totalEl.value = v.totalPrice || '';
+  } else if (which === 'total') {
+    var t = parseFloat(val) || 0;
+    v.totalPrice = t;
+    var q3 = v.stock || 1;
+    v.price = q3 > 0 ? +(t / q3).toFixed(2) : 0;
+    if (unitEl) unitEl.value = v.price || '';
+  }
+}
 function addDurableVariantRow() {
   window._editVariants = window._editVariants || [];
   window._editVariantPhotos = window._editVariantPhotos || [];
-  window._editVariants.push({ id: genId(), brand: '', photos: [], price: 0, notes: '' });
+  window._editVariants.push({ id: genId(), brand: '', photos: [], price: 0, notes: '', stock: 1, totalPrice: 0 });
   window._editVariantPhotos.push([]);
   document.getElementById('variant-list').innerHTML = renderDurableVariantRows();
 }
@@ -3631,8 +3695,9 @@ function saveItem() {
       return {
         id: ev.id,
         brand: ev.brand || ('第' + (i+1) + '件'),
-        stock: 1,
+        stock: Math.max(1, parseInt(ev.stock) || 1),
         price: ev.price || 0,
+        totalPrice: ev.totalPrice || ((ev.price || 0) * (Math.max(1, parseInt(ev.stock) || 1))),
         channel: '',
         photos: (dEditPhotos[i] || []).slice(),
         notes: ev.notes || '',
@@ -3641,9 +3706,10 @@ function saveItem() {
         shelfLife: null, productionDate: null
       };
     });
-    data.stock = data.variants.length;
+    data.stock = data.variants.reduce(function(s,v){ return s + (v.stock||1); }, 0);
     data.unit = '件';
-    data.currentPrice = data.variants.length > 0 ? data.variants[0].price : 0;
+    // 耐用品总金额 = 各款总价之和
+    data.currentPrice = data.variants.reduce(function(s,v){ return s + (v.totalPrice || ((v.price||0)*(v.stock||1))); }, 0);
     data.channel = '';
   }
 
@@ -3686,6 +3752,7 @@ function saveItem() {
         if (old) {
           nv.feeling = old.feeling;
           if (!nv.notes && old.notes) nv.notes = old.notes;
+          if (!nv.totalPrice && old.totalPrice) nv.totalPrice = old.totalPrice;
         }
       });
     }
