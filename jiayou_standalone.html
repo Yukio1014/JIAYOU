@@ -4007,14 +4007,37 @@ function openStockAuditForm(itemId) {
   var item = getItem(currentZoneId, itemId);
   if (!item) return;
   var currentStock = getTotalStock(item);
+  var unit = item.unit || '个';
   var html = '<div class="modal-handle"></div>';
   html += '<div class="modal-title">📦 库存盘点</div>';
   html += '<div style="text-align:center;margin-bottom:16px">';
   html += '<div style="font-size:16px;font-weight:700">' + escapeHtml(item.name) + '</div>';
-  html += '<div style="font-size:13px;color:var(--text-secondary);margin-top:4px">当前记录：' + currentStock + (item.unit||'个') + '</div>';
+  html += '<div style="font-size:13px;color:var(--text-secondary);margin-top:4px">当前记录：' + currentStock + unit + '</div>';
   html += '</div>';
-  html += '<div class="form-group"><label class="form-label">实际数量（清点实物）</label>';
-  html += '<input type="number" class="form-input" id="audit-stock" value="' + currentStock + '" min="0" step="0.5" style="font-size:24px;text-align:center;font-weight:700"></div>';
+
+  var variants = item.variants && item.variants.length > 0 ? item.variants : [];
+  if (variants.length > 0) {
+    html += '<div class="form-group" style="margin-bottom:8px"><label class="form-label">按品牌清点实际数量</label></div>';
+    html += '<div style="max-height:360px;overflow-y:auto;margin-bottom:12px" id="audit-variant-list">';
+    variants.forEach(function(v, i) {
+      html += '<div style="display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--separator)">';
+      html += '<div style="flex:1;min-width:0">';
+      html += '<div style="font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(v.brand || ('品牌' + (i+1))) + '</div>';
+      html += '<div style="font-size:12px;color:var(--text-secondary)">当前 ' + (v.stock || 0) + unit + '</div>';
+      html += '</div>';
+      html += '<input type="number" class="form-input audit-variant-stock" data-idx="' + i + '" value="' + (v.stock || 0) + '" min="0" step="0.5" style="width:90px;text-align:center;font-size:16px;font-weight:600;flex-shrink:0" oninput="updateAuditTotal()">';
+      html += '</div>';
+    });
+    html += '</div>';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;margin-bottom:12px;border-top:1px solid var(--separator)">';
+    html += '<span style="font-size:14px;font-weight:700">实际总数</span>';
+    html += '<span style="font-size:18px;font-weight:700;color:var(--primary)" id="audit-total" data-unit="' + unit + '">' + currentStock + unit + '</span>';
+    html += '</div>';
+  } else {
+    html += '<div class="form-group"><label class="form-label">实际数量（清点实物）</label>';
+    html += '<input type="number" class="form-input" id="audit-stock" value="' + currentStock + '" min="0" step="0.5" style="font-size:24px;text-align:center;font-weight:700"></div>';
+  }
+
   html += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">按实物清点后填写，用于校正共用物品的消耗。</div>';
   html += '<button class="btn btn-primary btn-full" onclick="saveStockAudit(\'' + itemId + '\')">确认盘点</button>';
   html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">取消</button>';
@@ -4022,13 +4045,45 @@ function openStockAuditForm(itemId) {
   document.getElementById('modal-overlay').classList.add('show');
 }
 
+function updateAuditTotal() {
+  var inputs = document.querySelectorAll('.audit-variant-stock');
+  var total = 0;
+  inputs.forEach(function(el) {
+    total += parseFloat(el.value) || 0;
+  });
+  var totalEl = document.getElementById('audit-total');
+  if (totalEl) {
+    var unit = totalEl.getAttribute('data-unit') || '个';
+    totalEl.textContent = total + unit;
+  }
+}
+
 function saveStockAudit(itemId) {
   var item = getItem(currentZoneId, itemId);
   if (!item) return;
-  var input = document.getElementById('audit-stock');
-  var actual = parseFloat(input ? input.value : NaN);
-  if (isNaN(actual) || actual < 0) { toast('请输入有效数量'); return; }
+  var variants = item.variants && item.variants.length > 0 ? item.variants : [];
   var recorded = getTotalStock(item);
+  var actual = 0;
+
+  if (variants.length > 0) {
+    var newStocks = [];
+    var hasInvalid = false;
+    variants.forEach(function(v, i) {
+      var input = document.querySelector('.audit-variant-stock[data-idx="' + i + '"]');
+      var val = parseFloat(input ? input.value : NaN);
+      if (isNaN(val) || val < 0) { hasInvalid = true; val = 0; }
+      newStocks.push(val);
+      actual += val;
+    });
+    if (hasInvalid) { toast('请输入有效数量'); return; }
+    variants.forEach(function(v, i) { v.stock = newStocks[i]; });
+  } else {
+    var input = document.getElementById('audit-stock');
+    actual = parseFloat(input ? input.value : NaN);
+    if (isNaN(actual) || actual < 0) { toast('请输入有效数量'); return; }
+    item.stock = actual;
+  }
+
   var diff = recorded - actual; // 正数=实际用得更快
 
   if (!item.auditHistory) item.auditHistory = [];
@@ -4055,25 +4110,6 @@ function saveStockAudit(itemId) {
         isAudit: true
       });
     }
-  }
-
-  // 更新所有变体库存使总数=实际数量（按比例分摊到未用变体）
-  var variants = item.variants && item.variants.length > 0 ? item.variants : [];
-  if (variants.length > 0) {
-    var unused = variants.filter(function(v) { return !v.opened || v.usedUp; });
-    var active = variants.filter(function(v) { return v.opened && !v.usedUp; });
-    if (unused.length > 0) {
-      // 把实际数量分配到未开封/已用完的变体
-      var perUnit = actual / unused.length;
-      unused.forEach(function(v) { v.stock = Math.round(perUnit * 100) / 100; });
-      // 使用中变体库存归0（正在使用的不算库存）
-      active.forEach(function(v) { v.stock = 0; });
-    } else if (active.length > 0) {
-      // 没有未用变体，全部放第一个使用中
-      active[0].stock = actual;
-    }
-  } else {
-    item.stock = actual;
   }
 
   syncItemFromVariants(item);
