@@ -1355,10 +1355,11 @@ function getTotalStock(item) {
 // 耐用品：计算单件物品的总金额（优先用各款 totalPrice，否则用 单价×件数）
 function calcDurableTotalPrice(item) {
   if (!item.variants || item.variants.length === 0) return 0;
-  return item.variants.reduce(function(s, v) {
+  var total = item.variants.reduce(function(s, v) {
     var t = v.totalPrice || ((v.price || 0) * (v.stock || 1));
     return s + t;
   }, 0);
+  return parseFloat(total.toFixed(2));
 }
 
 // 耐用品：计算单件物品的实际件数（所有variant数量之和）
@@ -1392,7 +1393,7 @@ function syncItemFromVariants(item) {
   item.stock = item.variants.reduce(function(s, v) { return s + (v.stock || 0); }, 0);
   if (item.variants.length > 0) {
     // 补给品总金额 = 各品牌总价之和
-    item.currentPrice = item.variants.reduce(function(s,v){ return s + (v.totalPrice || ((v.price||0)*(v.stock||0))); }, 0);
+    item.currentPrice = parseFloat(item.variants.reduce(function(s,v){ return s + (v.totalPrice || ((v.price||0)*(v.stock||0))); }, 0).toFixed(2));
     item.channel = item.variants[0].channel;
     // 合并所有变体的照片到 item.photos（用于首页卡片正面展示）
     var allVariantPhotos = [];
@@ -1430,7 +1431,7 @@ function syncDurableFromVariants(item) {
     }
   });
   item.photos = allPhotos;
-  item.currentPrice = item.variants[0].price || 0;
+  item.currentPrice = parseFloat((item.variants[0].price || 0).toFixed(2));
 }
 
 // ========== 页面切换 ==========
@@ -2136,7 +2137,7 @@ function renderItemCard(item, zone) {
     }
   } else {
     // 补给品品牌变体数
-    if (item.variants && item.variants.length > 1) {
+    if (item.variants && item.variants.length > 0) {
       html += '<div class="card-info" style="color:var(--accent);font-weight:500">' + item.variants.length + '个品牌</div>';
     }
     // 消耗品正面：库存条 + 保质期
@@ -2149,7 +2150,7 @@ function renderItemCard(item, zone) {
       if (status.overStock) barClass = 'over';
       else if (pct > 60) barClass = 'high';
       else if (pct > 30) barClass = 'mid';
-      html += '<div class="card-info">' + totalStock + (item.unit || '') + ' · ¥' + (item.currentPrice || 0) + '</div>';
+      html += '<div class="card-info">' + totalStock + (item.unit || '') + ' · ¥' + parseFloat((item.currentPrice || 0)).toFixed(2) + '</div>';
       html += '<div class="stock-bar ' + barClass + ' card-mini-bar"><div class="stock-fill" style="width:' + pct + '%"></div></div>';
     }
     if (status.daysLeft !== null && !status.expired) {
@@ -2273,7 +2274,7 @@ function renderCardBack(item, zone) {
     html += '</div>';
 
     // === 品牌变体 ===
-    if (item.variants && item.variants.length > 1) {
+    if (item.variants && item.variants.length > 0) {
       html += '<div class="back-section">';
       html += '<div class="back-section-title">品牌变体 (' + item.variants.length + '个)</div>';
       item.variants.forEach(function(v, vi) {
@@ -2436,11 +2437,11 @@ function renderCardBack(item, zone) {
       var prices = item.priceHistory.map(function(p) { return p.unitPrice || 0; });
       var minPrice = Math.min.apply(null, prices);
       var avgPrice = prices.reduce(function(s,p) { return s+p; }, 0) / prices.length;
-      html += '<div class="back-row"><span class="back-label">历史最低</span><span class="back-value" style="color:var(--green)">¥' + minPrice + '</span></div>';
-      html += '<div class="back-row"><span class="back-label">均价</span><span class="back-value">¥' + avgPrice.toFixed(1) + '</span></div>';
+      html += '<div class="back-row"><span class="back-label">历史最低</span><span class="back-value" style="color:var(--green)">¥' + minPrice.toFixed(2) + '</span></div>';
+      html += '<div class="back-row"><span class="back-label">均价</span><span class="back-value">¥' + avgPrice.toFixed(2) + '</span></div>';
       html += '<div style="margin-top:8px">';
       item.priceHistory.slice().reverse().slice(0, 5).forEach(function(p) {
-        html += '<div class="open-record">📅 ' + formatDate(p.date) + ' · ' + escapeHtml(p.channel||'') + ' · ¥' + (p.unitPrice||0) + '/' + (item.unit||'个');
+        html += '<div class="open-record">📅 ' + formatDate(p.date) + ' · ' + escapeHtml(p.channel||'') + ' · ¥' + parseFloat((p.unitPrice||0)).toFixed(2) + '/' + (item.unit||'个');
         if (p.notes) html += ' · ' + escapeHtml(p.notes);
         html += '</div>';
       });
@@ -3001,7 +3002,7 @@ function openRestockForm(itemId) {
     var prices = item.priceHistory.map(function(p) { return p.unitPrice || 0; });
     var minPrice = Math.min.apply(null, prices);
     var lastPrice = prices[prices.length - 1];
-    html += '<div class="price-compare price-first">历史最低 ¥' + minPrice + ' · 上次 ¥' + lastPrice + '</div>';
+    html += '<div class="price-compare price-first">历史最低 ¥' + minPrice.toFixed(2) + ' · 上次 ¥' + lastPrice.toFixed(2) + '</div>';
   }
 
   html += '<div class="form-row">';
@@ -3049,7 +3050,7 @@ function updateRestockCompare(item) {
   var qty = parseFloat(document.getElementById('restock-qty').value) || 0;
   var total = parseFloat(document.getElementById('restock-total').value) || 0;
   var unitPrice = qty > 0 ? total / qty : 0;
-  document.getElementById('restock-unit-price').value = unitPrice.toFixed(1);
+  document.getElementById('restock-unit-price').value = unitPrice.toFixed(2);
 
   var compareDiv = document.getElementById('restock-compare');
   if (unitPrice > 0 && item.priceHistory && item.priceHistory.length > 0) {
@@ -3058,11 +3059,11 @@ function updateRestockCompare(item) {
     var lastPrice = prices[prices.length - 1];
 
     if (unitPrice < minPrice) {
-      compareDiv.innerHTML = '<div class="price-compare price-cheaper">🎉 新低！比历史最低 ¥' + minPrice + ' 便宜 ¥' + (minPrice - unitPrice).toFixed(1) + '</div>';
+      compareDiv.innerHTML = '<div class="price-compare price-cheaper">🎉 新低！比历史最低 ¥' + minPrice.toFixed(2) + ' 便宜 ¥' + (minPrice - unitPrice).toFixed(2) + '</div>';
     } else if (unitPrice < lastPrice) {
-      compareDiv.innerHTML = '<div class="price-compare price-cheaper">✓ 比上次 ¥' + lastPrice + ' 便宜</div>';
+      compareDiv.innerHTML = '<div class="price-compare price-cheaper">✓ 比上次 ¥' + lastPrice.toFixed(2) + ' 便宜</div>';
     } else if (unitPrice > lastPrice) {
-      compareDiv.innerHTML = '<div class="price-compare price-expensive">⚠ 比上次 ¥' + lastPrice + ' 贵 ¥' + (unitPrice - lastPrice).toFixed(1) + '</div>';
+      compareDiv.innerHTML = '<div class="price-compare price-expensive">⚠ 比上次 ¥' + lastPrice.toFixed(2) + ' 贵 ¥' + (unitPrice - lastPrice).toFixed(2) + '</div>';
     } else {
       compareDiv.innerHTML = '<div class="price-compare price-same">和上次价格相同</div>';
     }
@@ -4343,7 +4344,7 @@ function renderPool() {
     givenUp.slice(-10).forEach(function(p) {
       html += '<div class="pool-item" style="opacity:0.6">';
       html += '<div class="pool-header"><div><div class="pool-name">' + escapeHtml(p.name) + '</div>';
-      html += '<div class="pool-meta">¥' + (p.price||0) + ' · ' + formatDate(p.date) + '解除</div></div>';
+      html += '<div class="pool-meta">¥' + parseFloat((p.price||0)).toFixed(2) + ' · ' + formatDate(p.date) + '解除</div></div>';
       html += '<span class="pool-status status-given-up">已解除</span></div>';
       html += '</div>';
     });
@@ -4367,7 +4368,7 @@ function renderPoolItem(p) {
   }
   if (p.date) meta += ' · ' + formatDate(p.date);
   html += '<div class="pool-meta">' + meta + '</div></div>';
-  html += '<div class="pool-price">¥' + (p.price||0) + '</div>';
+  html += '<div class="pool-price">¥' + parseFloat((p.price||0)).toFixed(2) + '</div>';
   html += '</div>';
 
   html += '<div style="margin-top:4px"><span class="pool-status status-' + (p.status==='pending'?'pending':'decided') + '">' + (p.status==='pending'?'目标冻结':'目标锁定') + '</span></div>';
@@ -4408,7 +4409,7 @@ function renderPoolItem(p) {
       html += '<div style="flex:1;min-width:0">';
       html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;flex-wrap:wrap">';
       html += '<span style="font-weight:600;font-size:14px">' + escapeHtml(v.brand||'?') + '</span>';
-      if (v.price) html += '<span style="font-size:13px;color:var(--accent)">¥' + v.price + '</span>';
+      if (v.price) html += '<span style="font-size:13px;color:var(--accent)">¥' + parseFloat(v.price).toFixed(2) + '</span>';
       if (v.specQty && v.specUnit) html += '<span style="font-size:12px;color:var(--text-secondary)">' + v.specQty + escapeHtml(v.specUnit) + '</span>';
       if (isBest) html += '<span style="font-size:11px;color:#fff;background:var(--success);padding:1px 6px;border-radius:10px">最划算</span>';
       html += '</div>';
