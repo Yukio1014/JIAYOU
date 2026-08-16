@@ -1391,7 +1391,8 @@ function syncItemFromVariants(item) {
   ensureVariants(item);
   item.stock = item.variants.reduce(function(s, v) { return s + (v.stock || 0); }, 0);
   if (item.variants.length > 0) {
-    item.currentPrice = item.variants[0].price;
+    // 补给品总金额 = 各品牌总价之和
+    item.currentPrice = item.variants.reduce(function(s,v){ return s + (v.totalPrice || ((v.price||0)*(v.stock||0))); }, 0);
     item.channel = item.variants[0].channel;
     // 合并所有变体的照片到 item.photos（用于首页卡片正面展示）
     var allVariantPhotos = [];
@@ -2286,7 +2287,17 @@ function renderCardBack(item, zone) {
           html += ' <span style="color:var(--green);font-size:11px;font-weight:600">已用完</span>';
         }
         html += '</div>';
-        html += '<div style="font-weight:700">¥' + (v.price||0) + ' · ' + (v.stock||0) + (item.unit||'') + '</div>';
+        // 价格展示：多库存显示"单价 × 库存 = 总价"，单库存显示单价
+        var cVQty = v.stock || 0;
+        var cVUnit = v.price || 0;
+        var cVTotal = v.totalPrice || (cVUnit * cVQty);
+        var priceText;
+        if (cVQty > 1 && cVUnit > 0) {
+          priceText = '¥' + cVUnit.toFixed(2) + ' × ' + cVQty + ' = ¥' + cVTotal.toFixed(2) + ' · ' + cVQty + (item.unit||'');
+        } else {
+          priceText = '¥' + cVTotal.toFixed(2) + ' · ' + cVQty + (item.unit||'');
+        }
+        html += '<div style="font-weight:700">' + priceText + '</div>';
         html += '</div>';
         // 使用感受：有任意内容就显示
         if (v.feeling && (v.feeling.rating || (v.feeling.tags && v.feeling.tags.length > 0) || v.feeling.notes)) {
@@ -3113,13 +3124,14 @@ function confirmRestock(itemId) {
   var variant;
   if (brandSelect === '__new__') {
     var newBrand = document.getElementById('restock-new-brand').value.trim() || ('品牌' + (item.variants.length + 1));
-    variant = { id: genId(), brand: newBrand, stock: qty, price: parseFloat(unitPrice.toFixed(1)), channel: channel, photos: [], opened: false, openDate: null, finishDate: null, usedUp: false, openQty: 0, feeling: null, shelfLife: item.shelfLife, productionDate: null };
+    variant = { id: genId(), brand: newBrand, stock: qty, price: parseFloat(unitPrice.toFixed(2)), totalPrice: parseFloat(total.toFixed(2)), channel: channel, photos: [], opened: false, openDate: null, finishDate: null, usedUp: false, openQty: 0, feeling: null, shelfLife: item.shelfLife, productionDate: null };
     item.variants.push(variant);
   } else {
     variant = item.variants.find(function(v) { return v.id === brandSelect; });
     if (variant) {
       variant.stock = (variant.stock || 0) + qty;
-      variant.price = parseFloat(unitPrice.toFixed(1));
+      variant.price = parseFloat(unitPrice.toFixed(2));
+      variant.totalPrice = parseFloat((variant.price * variant.stock).toFixed(2));
       variant.channel = channel;
     }
   }
@@ -3221,9 +3233,9 @@ function openItemForm(itemId) {
     html += '<div class="form-group"><label class="form-label">品牌变体</label>';
     html += '<div id="variant-list">';
     var variants = (item && item.variants && item.variants.length > 0) ? item.variants : [];
-    if (variants.length === 0) variants = [{ id: genId(), brand: item?item.name:'', stock: item?(item.stock||0):0, price: item?(item.currentPrice||0):0, photos: [] }];
+    if (variants.length === 0) variants = [{ id: genId(), brand: item?item.name:'', stock: item?(item.stock||0):0, price: item?(item.currentPrice||0):0, totalPrice: 0, photos: [] }];
     window._editVariants = variants.map(function(v) {
-      return { id: v.id, brand: v.brand||'', stock: v.stock||0, price: v.price||0, photos: (v.photos||[]).slice() };
+      return { id: v.id, brand: v.brand||'', stock: v.stock||0, price: v.price||0, totalPrice: v.totalPrice||0, photos: (v.photos||[]).slice() };
     });
     window._editVariantPhotos = variants.map(function(v) { return (v.photos||[]).slice(); });
     html += renderConsumableVariantRows();
@@ -3335,12 +3347,19 @@ function renderConsumableVariantRows() {
       html += '<span style="font-size:20px;color:var(--text-tertiary)">📷</span>';
     }
     html += '</div>';
-    // 品牌名+库存+单价
+    // 品牌名 + 库存 + 单价×库存=总价 三联动
     html += '<div style="flex:1;display:flex;flex-direction:column;gap:4px">';
     html += '<input type="text" class="form-input" style="font-size:14px" placeholder="品牌名" value="' + escapeHtml(v.brand) + '" onchange="updateConsumableVariantField(' + i + ',\'brand\',this.value)">';
-    html += '<div style="display:flex;gap:6px">';
-    html += '<input type="number" class="form-input" style="font-size:14px;flex:1" placeholder="库存" value="' + (v.stock||0) + '" onchange="updateConsumableVariantField(' + i + ',\'stock\',parseFloat(this.value)||0)" step="0.5">';
-    html += '<input type="number" class="form-input" style="font-size:14px;flex:1" placeholder="单价" value="' + (v.price||0) + '" onchange="updateConsumableVariantField(' + i + ',\'price\',parseFloat(this.value)||0)">';
+    var cUnit = v.price || 0;
+    var cStock = v.stock || 0;
+    var cTotal = v.totalPrice || (cUnit * cStock);
+    html += '<div style="display:flex;gap:6px;align-items:center">';
+    html += '<input type="number" class="form-input" style="font-size:13px;flex:1" placeholder="库存" value="' + cStock + '" oninput="onConsumablePriceInput(' + i + ',\'stock\',this.value)" step="0.5">';
+    html += '<input type="number" class="form-input" style="font-size:13px;flex:1" placeholder="单价" value="' + (cUnit||'') + '" oninput="onConsumablePriceInput(' + i + ',\'unit\',this.value)">';
+    html += '</div>';
+    html += '<div style="display:flex;gap:6px;align-items:center">';
+    html += '<span style="font-size:12px;color:var(--text-tertiary);flex-shrink:0">总价</span>';
+    html += '<input type="number" class="form-input" style="font-size:13px;flex:1" placeholder="总价（填了自动算单价）" value="' + (cTotal||'') + '" oninput="onConsumablePriceInput(' + i + ',\'total\',this.value)">';
     html += '</div>';
     html += '</div>';
     // 删除按钮
@@ -3368,10 +3387,39 @@ function updateConsumableVariantField(idx, field, val) {
     window._editVariants[idx][field] = val;
   }
 }
+// 补给品：库存 × 单价 = 总价 三联动
+function onConsumablePriceInput(idx, which, val) {
+  var v = window._editVariants && window._editVariants[idx];
+  if (!v) return;
+  var row = document.querySelectorAll('.consumable-variant-row')[idx];
+  if (!row) return;
+  var inputs = row.querySelectorAll('input[type=number]');
+  // inputs[0]=库存 [1]=单价 [2]=总价
+  var stockEl = inputs[0], unitEl = inputs[1], totalEl = inputs[2];
+  if (which === 'stock') {
+    var s = parseFloat(val) || 0;
+    v.stock = s;
+    var u = v.price || 0;
+    v.totalPrice = +(u * s).toFixed(2);
+    if (totalEl) totalEl.value = v.totalPrice || '';
+  } else if (which === 'unit') {
+    var u2 = parseFloat(val) || 0;
+    v.price = u2;
+    var s2 = v.stock || 0;
+    v.totalPrice = +(u2 * s2).toFixed(2);
+    if (totalEl) totalEl.value = v.totalPrice || '';
+  } else if (which === 'total') {
+    var t = parseFloat(val) || 0;
+    v.totalPrice = t;
+    var s3 = v.stock || 0;
+    v.price = s3 > 0 ? +(t / s3).toFixed(2) : 0;
+    if (unitEl) unitEl.value = v.price || '';
+  }
+}
 function addConsumableVariantRow() {
   window._editVariants = window._editVariants || [];
   window._editVariantPhotos = window._editVariantPhotos || [];
-  window._editVariants.push({ id: genId(), brand: '', stock: 0, price: 0, photos: [] });
+  window._editVariants.push({ id: genId(), brand: '', stock: 0, price: 0, totalPrice: 0, photos: [] });
   window._editVariantPhotos.push([]);
   document.getElementById('variant-list').innerHTML = renderConsumableVariantRows();
 }
@@ -3665,8 +3713,11 @@ function saveItem() {
     var editVariants = window._editVariants || [];
     var editPhotos = window._editVariantPhotos || [];
     data.variants = editVariants.map(function(ev, i) {
+      var evStock = parseFloat(ev.stock) || 0;
+      var evPrice = parseFloat(ev.price) || 0;
       return {
-        id: ev.id, brand: ev.brand || '未命名', stock: ev.stock || 0, price: ev.price || 0,
+        id: ev.id, brand: ev.brand || '未命名', stock: evStock, price: evPrice,
+        totalPrice: ev.totalPrice || +(evPrice * evStock).toFixed(2),
         channel: '', photos: (editPhotos[i] || []).slice(),
         opened: false, openDate: null, finishDate: null,
         usedUp: false, openQty: 0, feeling: null, shelfLife: null, productionDate: null
@@ -3680,7 +3731,8 @@ function saveItem() {
     variantPhotos.forEach(function(p) { if (p && !seenP[p]) { seenP[p] = true; allP.push(p); } });
     data.photos = allP;
     data.stock = data.variants.reduce(function(s,v) { return s + (v.stock||0); }, 0);
-    data.currentPrice = data.variants.length > 0 ? data.variants[0].price : 0;
+    // 补给品总金额 = 各品牌总价之和
+    data.currentPrice = data.variants.reduce(function(s,v){ return s + (v.totalPrice || ((v.price||0)*(v.stock||0))); }, 0);
     data.unit = document.getElementById('item-unit').value || '个';
     data.shelfLife = parseInt(document.getElementById('item-shelf').value) || null;
     var prodDate = document.getElementById('item-prod-date').value;
