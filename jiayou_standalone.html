@@ -326,10 +326,9 @@ body {
 .badge-expire { background: rgba(255,59,48,0.9); }
 .badge-warn { background: rgba(255,149,0,0.9); }
 .badge-low { background: rgba(255,149,0,0.9); }
-.badge-over { background: rgba(90,200,250,0.9); }
-.badge-idle { background: rgba(175,82,222,0.9); }
 .badge-good { background: rgba(52,199,89,0.85); }
 .badge-bad { background: rgba(255,59,48,0.85); }
+.badge-oneshot { background: rgba(255,149,0,0.92); }
 
 /* 卡片3D翻面 */
 .card-detail-overlay {
@@ -1527,26 +1526,9 @@ function matchesSearch(item, zone, q) {
   return hay.some(function(s) { return s.toLowerCase().indexOf(q) >= 0; });
 }
 
-// 判断是否为食品类（开封即用完）
-function isFoodItem(item, zoneId) {
-  if (!item) return false;
-  // 优先看分类名
-  if (zoneId && item.categoryId) {
-    var cat = getCategory(zoneId, item.categoryId);
-    if (cat && cat.name) {
-      var catName = cat.name.toLowerCase();
-      if (catName.indexOf('食品') >= 0 || catName.indexOf('食物') >= 0 || catName.indexOf('吃的') >= 0) return true;
-    }
-  }
-  // 其次看物品名
-  var name = (item.name || '').toLowerCase();
-  var foodKeywords = ['食品', '零食', '饮料', '水果', '蔬菜', '肉', '鱼', '蛋', '奶', '面包', '蛋糕', '饼干', '巧克力', '糖果', '咖啡', '茶', '果汁', '酸奶', '奶酪', '黄油', '面粉', '米', '面', '油', '调味', '酱', '罐头', '速食', '方便面', '麦片', '果干', '坚果'];
-  for (var i = 0; i < foodKeywords.length; i++) {
-    if (name.indexOf(foodKeywords[i]) >= 0) return true;
-  }
-  // 用户自定义标记
-  if (item.oneShot === true) return true;
-  return false;
+// 开袋即用完：完全由用户手动开关控制，不再根据分类名/物品名自动猜测
+function isOneShotItem(item) {
+  return !!(item && item.oneShot === true);
 }
 function getItem(zoneId, itemId) {
   var zone = getZone(zoneId);
@@ -1586,7 +1568,8 @@ function renderHome() {
   });
 
   // === 消耗品预警 ===
-  var expired = [], expiring = [], lowStock = [], lowStockSoft = [], overStock = [];
+  var expired = [], expiring = [], lowStock = [], lowStockSoft = [];
+  var inUseItems = [], stockpileItems = [];
   DB.zones.forEach(function(zone) {
     if (zone.type !== 'consumable') return;
     zone.items.forEach(function(it) {
@@ -1595,19 +1578,8 @@ function renderHome() {
       if (status.expiring) expiring.push({item: it, zone: zone});
       if (status.lowStock) lowStock.push({item: it, zone: zone});
       else if (status.lowStockSoft) lowStockSoft.push({item: it, zone: zone});
-      if (status.overStock) overStock.push({item: it, zone: zone});
-    });
-  });
-
-  // === 耐用品统计 ===
-  var durableZones = DB.zones.filter(function(z) { return z.type === 'durable'; });
-  var idleItems = [];
-  durableZones.forEach(function(zone) {
-    zone.items.forEach(function(it) {
-      if (it.lastUsedDate) {
-        var days = daysBetween(new Date(it.lastUsedDate), new Date());
-        if (days > 180) idleItems.push({item: it, zone: zone, days: days});
-      }
+      if (status.hasInUse) inUseItems.push({item: it, zone: zone});
+      if (status.allUnopened) stockpileItems.push({item: it, zone: zone});
     });
   });
 
@@ -1633,17 +1605,17 @@ function renderHome() {
     html += '<div class="badge-num">' + lowStockSoft.length + '</div>';
     html += '<div class="badge-label">余量较少</div></div>';
   }
-  if (overStock.length > 0) {
-    html += '<div class="alert-badge alert-blue" onclick="filterOverStock()">';
-    html += '<div class="badge-num">' + overStock.length + '</div>';
-    html += '<div class="badge-label">囤太多</div></div>';
+  if (inUseItems.length > 0) {
+    html += '<div class="alert-badge alert-green" onclick="filterInUse()">';
+    html += '<div class="badge-num">' + inUseItems.length + '</div>';
+    html += '<div class="badge-label">使用中</div></div>';
   }
-  if (idleItems.length > 0) {
-    html += '<div class="alert-badge alert-purple" onclick="filterIdle()">';
-    html += '<div class="badge-num">' + idleItems.length + '</div>';
-    html += '<div class="badge-label">闲置中</div></div>';
+  if (stockpileItems.length > 0) {
+    html += '<div class="alert-badge alert-gray" onclick="filterStockpile()">';
+    html += '<div class="badge-num">' + stockpileItems.length + '</div>';
+    html += '<div class="badge-label">囤货区</div></div>';
   }
-  if (expired.length === 0 && expiring.length === 0 && lowStock.length === 0 && overStock.length === 0 && idleItems.length === 0) {
+  if (expired.length === 0 && expiring.length === 0 && lowStock.length === 0 && lowStockSoft.length === 0 && inUseItems.length === 0 && stockpileItems.length === 0) {
     html += '<div class="alert-badge alert-green">';
     html += '<div class="badge-num">✓</div>';
     html += '<div class="badge-label">一切正常</div></div>';
@@ -1692,7 +1664,7 @@ function renderHome() {
 function getItemStatus(item) {
   var status = {
     expired: false, expiring: false,
-    lowStock: false, lowStockSoft: false, overStock: false,
+    lowStock: false, lowStockSoft: false,
     shelfPercent: 100, daysLeft: null, estDaysLeft: null
   };
 
@@ -1724,6 +1696,10 @@ function getItemStatus(item) {
     if (earliestDaysLeft <= 0) status.expired = true;
     else if (earliestDaysLeft <= 30) status.expiring = true;
   }
+
+  // === 使用状态 ===
+  status.hasInUse = variants.some(function(v) { return v.opened && !v.usedUp; });
+  status.allUnopened = variants.length > 0 && variants.every(function(v) { return !v.opened; });
 
   // === 库存告急判断（基于消耗速率预估） ===
   if (totalStock > 0) {
@@ -1761,17 +1737,8 @@ function getItemStatus(item) {
     }
   }
 
-  // 囤太多：消耗速率计算
-  if (item.usageRecords && item.usageRecords.length > 2) {
-    var rate = calcUsageRate(item);
-    if (rate > 0 && totalStock > 0) {
-      var monthsToFinish = totalStock / rate;
-      var shelfMonthsLeft = status.daysLeft ? status.daysLeft / 30 : 999;
-      if (monthsToFinish > shelfMonthsLeft && shelfMonthsLeft < 999) {
-        status.overStock = true;
-      }
-    }
-  }
+  // 余量较少只对"使用中"的物品生效（未开封的物品无论余量多少都不提示）
+  if (!status.hasInUse) status.lowStockSoft = false;
 
   return status;
 }
@@ -1905,9 +1872,6 @@ function renderAIAnalysis() {
           var suggestQty = Math.ceil(rate * 6); // 建议买半年量
           buySuggestions.push({ name: it.name, qty: suggestQty, unit: it.unit || '个', reason: '库存仅够' + monthsLeft.toFixed(1) + '月' });
         }
-      }
-      if (status.overStock) {
-        stopSuggestions.push({ name: it.name, reason: '用到过期也用不完' });
       }
     });
   });
@@ -2098,15 +2062,10 @@ function renderItemCard(item, zone) {
     html += '<div class="card-badge badge-warn">' + status.daysLeft + '天</div>';
   } else if (status.lowStock) {
     html += '<div class="card-badge badge-low">告急</div>';
-  } else if (status.overStock) {
-    html += '<div class="card-badge badge-over">囤太多</div>';
   }
-  // 耐用品闲置
-  if (isDurable && item.lastUsedDate) {
-    var days = daysBetween(new Date(item.lastUsedDate), new Date());
-    if (days > 180) {
-      html += '<div class="card-badge badge-idle">闲置</div>';
-    }
+  // 开袋即用完标记（用于排查被误开的开关）
+  if (item.oneShot === true) {
+    html += '<div class="card-badge badge-oneshot">⚡即用完</div>';
   }
   // 使用感受标记
   if (item.feeling && item.feeling.rating) {
@@ -2147,8 +2106,7 @@ function renderItemCard(item, zone) {
       var maxBar = Math.max(totalStock, threshold * 3);
       var pct = maxBar > 0 ? (totalStock / maxBar * 100) : 0;
       var barClass = 'low';
-      if (status.overStock) barClass = 'over';
-      else if (pct > 60) barClass = 'high';
+      if (pct > 60) barClass = 'high';
       else if (pct > 30) barClass = 'mid';
       html += '<div class="card-info">' + totalStock + (item.unit || '') + ' · ¥' + parseFloat((item.currentPrice || 0)).toFixed(2) + '</div>';
       html += '<div class="stock-bar ' + barClass + ' card-mini-bar"><div class="stock-fill" style="width:' + pct + '%"></div></div>';
@@ -2202,8 +2160,7 @@ function renderCardFront(item, zone) {
       var maxBar = Math.max(totalStock, threshold * 3);
       var pct = maxBar > 0 ? (totalStock / maxBar * 100) : 0;
       var barClass = 'low';
-      if (status.overStock) barClass = 'over';
-      else if (pct > 60) barClass = 'high';
+      if (pct > 60) barClass = 'high';
       else if (pct > 30) barClass = 'mid';
       html += '<div style="margin-top:14px">';
       html += '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:13px;color:var(--text-secondary)">库存</span><span style="font-weight:700">' + totalStock + (item.unit||'') + '</span></div>';
@@ -2240,6 +2197,9 @@ function renderCardBack(item, zone) {
   var html = '<div class="detail-back">';
   html += '<div class="back-header">';
   html += '<div class="back-title">' + escapeHtml(item.name) + '</div>';
+  if (item.oneShot === true) {
+    html += '<div style="display:inline-block;margin-left:8px;padding:2px 8px;border-radius:6px;background:rgba(255,149,0,0.12);color:var(--orange);font-size:12px;font-weight:600;vertical-align:middle">⚡ 开袋即用完</div>';
+  }
   // 顶部快捷操作：编辑 / 删除（不用滑到底部）
   html += '<div style="display:flex;gap:6px;align-items:center">';
   html += '<button class="btn btn-outline btn-sm" style="font-size:12px;padding:4px 10px" onclick="editItem(\'' + item.id + '\')">✏ 编辑</button>';
@@ -2373,7 +2333,7 @@ function renderCardBack(item, zone) {
         html += '<button class="open-btn" onclick="finishCurrentVariant(\'' + item.id + '\')">✅ 用完了</button>';
       }
     } else {
-      var foodBtnText = isFoodItem(item, currentZoneId) ? '🍴 开封食用' : '🔓 点击开封';
+      var foodBtnText = isOneShotItem(item) ? '⚡ 开封即用完' : '🔓 点击开封';
       html += '<div class="back-row"><span class="back-label">状态</span><span class="back-value">未开封</span></div>';
       html += '<button class="open-btn" onclick="openItem(\'' + item.id + '\')">' + foodBtnText + '</button>';
     }
@@ -2790,12 +2750,12 @@ function openItem(itemId) {
 
   if (item.variants.length > 1) {
     // 多个品牌 → 先选品牌（支持同时开封多个）
-    var isFood = isFoodItem(item, currentZoneId);
+    var isOneShot = isOneShotItem(item);
     var html = '<div class="modal-handle"></div>';
-    html += '<div class="modal-title">' + (isFood ? '🍴 开封即用完' : '🔓 开封 - 选品牌') + '</div>';
+    html += '<div class="modal-title">' + (isOneShot ? '⚡ 开封即用完' : '🔓 开封 - 选品牌') + '</div>';
     html += '<div style="text-align:center;margin-bottom:12px;font-size:14px;font-weight:600">' + escapeHtml(item.name) + '</div>';
-    if (isFood) {
-      html += '<div style="text-align:center;margin-bottom:10px;font-size:12px;color:var(--text-secondary)">食品类开封后自动标记为已用完</div>';
+    if (isOneShot) {
+      html += '<div style="text-align:center;margin-bottom:10px;font-size:12px;color:var(--text-secondary)">开袋即用完：开封后自动标记为已用完</div>';
     }
     available.forEach(function(v) {
       var statusBadge = '';
@@ -2822,22 +2782,22 @@ function openVariantItem(itemId, variantId) {
   if (!v) return;
 
   // 食品类：弹一个小弹窗选数量（默认 1），确认后直接标记用完
-  if (isFoodItem(item, currentZoneId)) {
+  if (isOneShotItem(item)) {
     var maxStock = v.stock || 1;
     var html = '<div class="modal-handle"></div>';
-    html += '<div class="modal-title">🍴 开封食用</div>';
+    html += '<div class="modal-title">⚡ 开封即用完</div>';
     html += '<div style="text-align:center;margin-bottom:16px">';
     html += '<div style="font-size:16px;font-weight:700">' + escapeHtml(item.name) + '</div>';
     html += '<div style="font-size:14px;color:var(--accent)">' + escapeHtml(v.brand) + '</div>';
     html += '<div style="font-size:13px;color:var(--text-secondary)">库存：' + v.stock + (item.unit||'') + '</div>';
     html += '</div>';
-    html += '<div class="form-group"><label class="form-label">本次吃几个</label>';
+    html += '<div class="form-group"><label class="form-label">本次用几个</label>';
     html += '<div class="stepper" style="justify-content:center">';
     html += '<button onclick="adjustOpenQty(-1)">−</button>';
     html += '<span class="stepper-val" id="open-qty-val">1</span>';
     html += '<button onclick="adjustOpenQty(1)">＋</button>';
     html += '</div></div>';
-    html += '<button class="btn btn-primary btn-full" onclick="confirmOpen(\'' + itemId + '\',\'' + variantId + '\',true)">确认吃掉</button>';
+    html += '<button class="btn btn-primary btn-full" onclick="confirmOpen(\'' + itemId + '\',\'' + variantId + '\',true)">确认标记用完</button>';
     html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">取消</button>';
     document.getElementById('modal-content').innerHTML = html;
     document.getElementById('modal-overlay').classList.add('show');
@@ -2910,7 +2870,7 @@ function confirmOpen(itemId, variantId, markAsUsed) {
   saveDB();
   closeModal();
   openCardDetail(currentZoneId, itemId);
-  toast('已' + (markAsUsed ? '开封并吃完' : '开封') + ' ' + escapeHtml(v.brand) + '，库存-' + qty);
+  toast('已' + (markAsUsed ? '开封并标记用完' : '开封') + ' ' + escapeHtml(v.brand) + '，库存-' + qty);
 }
 
 function confirmFinish(itemId, variantId) {
@@ -3245,8 +3205,8 @@ function openItemForm(itemId) {
     html += '</div>';
 
     html += '<div class="form-group">';
-    html += '<label class="form-label">开袋即使用</label>';
-    html += '<div class="switch-row"><span class="switch-desc">开封当天即视为用完（适用于开封后马上吃完的食品类）</span>';
+    html += '<label class="form-label">开袋即用完</label>';
+    html += '<div class="switch-row"><span class="switch-desc">开封后自动标记为已用完（适合食品、小样、一次性用品，由你手动决定）</span>';
     html += '<label class="switch"><input type="checkbox" id="item-oneshot"' + (item && item.oneShot === true ? ' checked' : '') + '><span class="slider"></span></label>';
     html += '</div></div>';
 
@@ -4983,23 +4943,19 @@ function showAlertDetail(type) {
         if (getItemStatus(it).lowStockSoft) items.push({item: it, zone: zone});
       });
     });
-  } else if (type === 'overStock') {
-    title = '🔵 囤太多（用到过期也用不完）';
+  } else if (type === 'inUse') {
+    title = '🔓 使用中（已开封正在用）';
     DB.zones.forEach(function(zone) {
       if (zone.type !== 'consumable') return;
       zone.items.forEach(function(it) {
-        if (getItemStatus(it).overStock) items.push({item: it, zone: zone});
+        if (getItemStatus(it).hasInUse) items.push({item: it, zone: zone});
       });
     });
-  } else if (type === 'idle') {
-    title = '🟣 闲置中（超过6个月没用）';
+  } else if (type === 'stockpile') {
+    title = '📦 囤货区（买了未开封）';
     DB.zones.forEach(function(zone) {
-      if (zone.type !== 'durable') return;
       zone.items.forEach(function(it) {
-        if (it.lastUsedDate) {
-          var days = daysBetween(new Date(it.lastUsedDate), new Date());
-          if (days > 180) items.push({item: it, zone: zone, days: days});
-        }
+        if (getItemStatus(it).allUnopened) items.push({item: it, zone: zone});
       });
     });
   }
@@ -5009,17 +4965,28 @@ function showAlertDetail(type) {
   if (items.length === 0) {
     html += '<div class="empty-state"><div class="empty-icon">✓</div><div class="empty-text">没有需要关注的</div></div>';
   } else {
+    if (type === 'stockpile') {
+      items.sort(function(a, b) { return a.zone.name.localeCompare(b.zone.name); });
+    }
     html += '<div style="margin-bottom:16px;font-size:13px;color:var(--text-secondary)">共 ' + items.length + ' 件</div>';
+    var lastZone = null;
+    var zoneCount = {};
+    if (type === 'stockpile') {
+      items.forEach(function(e) { zoneCount[e.zone.name] = (zoneCount[e.zone.name] || 0) + 1; });
+    }
     items.forEach(function(entry) {
       var it = entry.item, zone = entry.zone;
       var status = getItemStatus(it);
+      if (type === 'stockpile' && zone.name !== lastZone) {
+        html += '<div style="font-weight:700;font-size:14px;margin:14px 0 6px;color:var(--text)">' + zone.icon + ' ' + escapeHtml(zone.name) + ' · ' + zoneCount[zone.name] + '件未开封</div>';
+        lastZone = zone.name;
+      }
       var bgColor = '#fff';
       if (type === 'expired') bgColor = 'rgba(255,59,48,0.06)';
       else if (type === 'expiring') bgColor = 'rgba(255,149,0,0.06)';
       else if (type === 'lowStock') bgColor = 'rgba(255,149,0,0.06)';
       else if (type === 'lowStockSoft') bgColor = 'rgba(90,200,250,0.06)';
-      else if (type === 'overStock') bgColor = 'rgba(90,200,250,0.06)';
-      else if (type === 'idle') bgColor = 'rgba(175,82,222,0.06)';
+      else if (type === 'stockpile') bgColor = 'rgba(142,142,147,0.06)';
 
       html += '<div style="display:flex;gap:10px;padding:12px;border-radius:10px;background:' + bgColor + ';margin-bottom:8px;cursor:pointer" onclick="closeModal();setTimeout(function(){enterZone(\'' + zone.id + '\')},200)">';
       // 照片
@@ -5032,7 +4999,7 @@ function showAlertDetail(type) {
       html += '</div>';
       // 信息
       html += '<div style="flex:1;min-width:0">';
-      html += '<div style="font-weight:700;font-size:15px">' + escapeHtml(it.name) + '</div>';
+      html += '<div style="font-weight:700;font-size:15px">' + escapeHtml(it.name) + (it.oneShot ? ' <span style="font-size:11px;color:#fff;background:rgba(255,149,0,0.92);padding:1px 6px;border-radius:6px;font-weight:600;vertical-align:middle">⚡即用完</span>' : '') + '</div>';
       html += '<div style="font-size:12px;color:var(--text-secondary)">' + zone.icon + ' ' + escapeHtml(zone.name) + '</div>';
       if (type === 'expired') {
         html += '<div style="font-size:13px;color:var(--red);font-weight:600;margin-top:2px">⚠️ 已过期' + (status.daysLeft!==null?'（超期'+Math.abs(status.daysLeft)+'天）':'') + '</div>';
@@ -5040,12 +5007,15 @@ function showAlertDetail(type) {
         html += '<div style="font-size:13px;color:var(--orange);font-weight:600;margin-top:2px">⏰ 还剩 ' + status.daysLeft + ' 天过期</div>';
       } else if (type === 'lowStock') {
         html += '<div style="font-size:13px;color:var(--orange);font-weight:600;margin-top:2px">📦 库存仅剩 ' + it.stock + (it.unit||'') + '（告急阈值' + (it.stockThreshold||1) + '）</div>';
-      } else if (type === 'overStock') {
-        var rate = calcUsageRate(it);
-        var monthsLeft = rate > 0 ? (it.stock / rate).toFixed(1) : '?';
-        html += '<div style="font-size:13px;color:var(--blue);font-weight:600;margin-top:2px">📦 库存' + it.stock + (it.unit||'') + '，按消耗速率够用' + monthsLeft + '月</div>';
-      } else if (type === 'idle') {
-        html += '<div style="font-size:13px;color:var(--purple);font-weight:600;margin-top:2px">🕐 已' + Math.floor(entry.days/30) + '个月没用</div>';
+      } else if (type === 'lowStockSoft') {
+        var est = status.estDaysLeft;
+        html += '<div style="font-size:13px;color:var(--blue);font-weight:600;margin-top:2px">⏳ 预计 ' + (est!==null?est:'?') + ' 天内用完</div>';
+      } else if (type === 'inUse') {
+        var activeBrands = (it.variants||[]).filter(function(v){ return v.opened && !v.usedUp; }).map(function(v){ return v.brand||'未命名'; });
+        html += '<div style="font-size:13px;color:var(--green);font-weight:600;margin-top:2px">🔓 使用中：' + (activeBrands.join('、') || '—') + '</div>';
+      } else if (type === 'stockpile') {
+        var totalS = getTotalStock(it);
+        html += '<div style="font-size:13px;color:var(--text-secondary);font-weight:600;margin-top:2px">📦 库存 ' + (totalS||0) + (it.unit||'') + ' · 未开封</div>';
       }
       html += '</div>';
       html += '</div>';
@@ -5062,8 +5032,8 @@ function filterExpired() { showAlertDetail('expired'); }
 function filterExpiring() { showAlertDetail('expiring'); }
 function filterLowStock() { showAlertDetail('lowStock'); }
 function filterLowStockSoft() { showAlertDetail('lowStockSoft'); }
-function filterOverStock() { showAlertDetail('overStock'); }
-function filterIdle() { showAlertDetail('idle'); }
+function filterInUse() { showAlertDetail('inUse'); }
+function filterStockpile() { showAlertDetail('stockpile'); }
 </script>
 </body>
 </html>
