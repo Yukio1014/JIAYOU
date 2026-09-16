@@ -381,6 +381,11 @@ body {
 
 /* 卡片背面 */
 .detail-back { padding: 16px; }
+.sticky-actions {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; gap: 8px; margin: -2px -16px 14px; padding: 8px 16px;
+  background: var(--card-bg, #fff); border-bottom: 1px solid var(--border, #eee);
+}
 .detail-back .back-header {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 14px;
@@ -2208,6 +2213,15 @@ function renderCardBack(item, zone) {
   html += '</div>';
   html += '</div>';
 
+  // === 吸顶操作条（补给品：开封/补货/盘点，滚动时始终可见） ===
+  if (zone.type === 'consumable') {
+    html += '<div class="sticky-actions">';
+    html += '<button class="btn btn-primary btn-sm" style="flex:1" onclick="openItem(\'' + item.id + '\')">🔓 开封</button>';
+    html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="openRestockForm(\'' + item.id + '\')">📦 补货</button>';
+    html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="openStockAuditForm(\'' + item.id + '\')">📦 盘点</button>';
+    html += '</div>';
+  }
+
   // === 基本信息 ===
   html += '<div class="back-section">';
   html += '<div class="back-section-title">基本信息</div>';
@@ -2308,7 +2322,6 @@ function renderCardBack(item, zone) {
         }
         html += '</div>';
       });
-      html += '<button class="open-btn" style="margin-top:8px" onclick="openItem(\'' + item.id + '\')">🔓 再开封一个</button>';
     } else if (item.opened) {
       if (item.usedUp) {
         // 已用完
@@ -2385,9 +2398,6 @@ function renderCardBack(item, zone) {
       html += '<div class="back-row"><span class="back-label" style="color:var(--text-tertiary)">数据不足，暂无法估算</span></div>';
       html += '<div style="font-size:12px;color:var(--text-tertiary);margin-top:4px">记录几次使用后会给出采购建议</div>';
     }
-    html += '<div style="display:flex;gap:8px;margin-top:10px">';
-    html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="openStockAuditForm(\'' + item.id + '\')">📦 盘点库存</button>';
-    html += '</div>';
     html += '</div>';
 
     // === 价格历史 ===
@@ -2479,31 +2489,7 @@ function renderCardBack(item, zone) {
       html += '<div style="padding:8px 0;font-size:13px;color:var(--text-tertiary)">还没有件数记录</div>';
     }
     html += '</div>';
-
-    // 使用情况
-    html += '<div class="back-section">';
-    html += '<div class="back-section-title">使用情况</div>';
-    if (item.lastUsedDate) {
-      var dDays2 = daysBetween(new Date(item.lastUsedDate), new Date());
-      html += '<div class="back-row"><span class="back-label">最后使用</span><span class="back-value">' + formatDate(item.lastUsedDate) + '</span></div>';
-      if (dDays2 > 180) {
-        html += '<div style="padding:8px;border-radius:8px;background:rgba(175,82,222,0.1);color:var(--purple);font-size:13px;font-weight:600;margin-top:4px">🕐 已' + Math.floor(dDays2/30) + '个月没用，考虑断舍离？</div>';
-      }
-    } else {
-      html += '<div class="back-row"><span class="back-label" style="color:var(--text-tertiary)">未记录</span></div>';
-    }
-    html += '<button class="btn btn-outline btn-sm" style="margin-top:8px;width:100%" onclick="markUsed(\'' + item.id + '\')">📍 标记今天用过</button>';
-    html += '</div>';
   }
-
-  // === 操作按钮 ===
-  html += '<div style="display:flex;gap:8px;margin-top:8px">';
-  html += '<button class="btn btn-outline" style="flex:1" onclick="editItem(\'' + item.id + '\')">✏ 编辑</button>';
-  if (zone.type === 'consumable') {
-    html += '<button class="btn btn-outline" style="flex:1" onclick="openRestockForm(\'' + item.id + '\')">📦 补货</button>';
-  }
-  html += '</div>';
-  html += '<button class="btn btn-danger" style="width:100%;margin-top:8px" onclick="deleteItem(\'' + item.id + '\')">🗑 删除</button>';
 
   html += '</div>';
   document.getElementById('flip-back').innerHTML = html;
