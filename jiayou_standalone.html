@@ -2729,19 +2729,33 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791036564 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791036564';
+// deploy.py 部署时会把 1791036978 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791036978';
 
-function checkAppUpdate() {
+function checkAppUpdate(manual) {
   try {
-    if (!APP_VERSION || APP_VERSION.indexOf('__BUILD') === 0) return; // 本地开发未注入版本号
+    if (!APP_VERSION || APP_VERSION.indexOf('__BUILD') === 0) {
+      if (manual) toast('当前为本地版本，无法检查更新');
+      return;
+    }
+    if (manual) toast('🔍 正在检查更新…');
     fetch('version.json?t=' + Date.now(), { cache: 'no-store' })
       .then(function(r) { return r.ok ? r.json() : null; })
       .then(function(data) {
         var remote = data && String(data.version || '');
-        if (!remote || remote === APP_VERSION) return; // 版本一致，无需更新
+        if (!remote) {
+          if (manual) toast('检查失败，请检查网络');
+          return;
+        }
+        if (remote === APP_VERSION) { // 版本一致，无需更新
+          if (manual) toast('✅ 已是最新版本');
+          return;
+        }
         var key = 'jiayou_redirected_' + remote;
-        if (sessionStorage.getItem(key)) return; // 已为该版本跳转过，防循环
+        if (sessionStorage.getItem(key)) { // 已为该版本跳转过，防循环
+          if (manual) toast('已加载新版本，请关闭后重新打开');
+          return;
+        }
         sessionStorage.setItem(key, '1');
         toast('🔄 发现新版本，正在更新…');
         setTimeout(function() {
@@ -2749,13 +2763,23 @@ function checkAppUpdate() {
           location.replace(location.pathname + '?v=' + remote + (location.hash || ''));
         }, 600);
       })
-      .catch(function() {});
+      .catch(function() {
+        if (manual) toast('检查失败，请检查网络');
+      });
   } catch(e) {}
 }
-// 每次切回前台（从后台唤醒 App）时检查一次
+// 每次切回前台（从后台唤醒 App）时静默检查一次
 document.addEventListener('visibilitychange', function() {
-  if (!document.hidden) checkAppUpdate();
+  if (!document.hidden) checkAppUpdate(false);
 });
+
+// 把构建时间戳转成可读的更新时间
+function getAppVersionText() {
+  if (!APP_VERSION || APP_VERSION.indexOf('__BUILD') === 0) return '本地开发版';
+  var d = new Date(parseInt(APP_VERSION, 10) * 1000);
+  if (isNaN(d.getTime())) return APP_VERSION;
+  return formatDateTime(d.toISOString()) || APP_VERSION;
+}
 
 // ========== 开封 ==========
 function openItem(itemId) {
@@ -4809,6 +4833,14 @@ function renderSettings() {
   html += '<div class="setting-row"><div class="setting-label">目标锁定</div><div class="setting-value">' + DB.pool.length + '件</div></div>';
   html += '<div class="setting-row"><div class="setting-label">放弃记录</div><div class="setting-value">' + (DB.poolHistory||[]).length + '件</div></div>';
   html += '</div>';
+
+  // 版本与更新
+  html += '<div class="section-title">版本与更新</div>';
+  html += '<div class="setting-group">';
+  html += '<div class="setting-row"><div class="setting-label">当前版本</div><div class="setting-value">' + getAppVersionText() + '</div></div>';
+  html += '<div class="setting-row" onclick="checkAppUpdate(true)"><div class="setting-label">🔄 检查更新</div><div class="setting-value">点击手动检查</div></div>';
+  html += '</div>';
+  html += '<div style="padding:0 12px 8px;font-size:12px;color:var(--text-tertiary);line-height:1.5">App 每次打开和切回前台会自动检查更新，不用去浏览器刷新或重新添加到桌面。更新只换界面代码，不会动你的数据。</div>';
 
   // 关于
   html += '<div style="text-align:center;padding:20px;color:var(--text-tertiary);font-size:13px">';
