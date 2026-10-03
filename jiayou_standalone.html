@@ -354,13 +354,17 @@ body {
   -webkit-backface-visibility: hidden;
   border-radius: 20px; overflow: hidden;
   box-shadow: var(--shadow-lg);
+  transition: visibility 0s 0.3s;
 }
 .flip-front { background: var(--card-bg); }
 .flip-back {
-  position: absolute; top: 0; left: 0;
+  position: absolute; top: 0; left: 0; min-height: 100%;
   transform: rotateY(180deg); background: var(--card-bg);
   max-height: 85vh; overflow-y: auto;
 }
+/* iOS Safari backface 失效兜底：翻到背面彻底隐藏正面，翻回时隐藏背面（0.3s 后切换=翻转过半时） */
+.flip-inner.flipped .flip-front { visibility: hidden; }
+.flip-inner:not(.flipped) .flip-back { visibility: hidden; }
 
 /* 卡片正面（弹窗版） */
 .detail-front { padding: 0; }
@@ -2671,6 +2675,9 @@ document.addEventListener('DOMContentLoaded', async function() {
   // 立即更新云端状态 UI（避免卡在静态"初始化..."文字）
   updateCloudUI();
 
+  // 检查是否有新版本（有则提示并自动刷新）
+  checkAppUpdate();
+
   // 初始化认证 + 云端同步，全部后台进行，不阻塞界面
   setTimeout(async function() {
     try {
@@ -2720,6 +2727,35 @@ function closeCardDetail() {
   currentDetailItem = null;
   currentDetailZone = null;
 }
+
+// ========== 自动更新检查 ==========
+// deploy.py 部署时会把 1791036564 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791036564';
+
+function checkAppUpdate() {
+  try {
+    if (!APP_VERSION || APP_VERSION.indexOf('__BUILD') === 0) return; // 本地开发未注入版本号
+    fetch('version.json?t=' + Date.now(), { cache: 'no-store' })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(data) {
+        var remote = data && String(data.version || '');
+        if (!remote || remote === APP_VERSION) return; // 版本一致，无需更新
+        var key = 'jiayou_redirected_' + remote;
+        if (sessionStorage.getItem(key)) return; // 已为该版本跳转过，防循环
+        sessionStorage.setItem(key, '1');
+        toast('🔄 发现新版本，正在更新…');
+        setTimeout(function() {
+          // 带版本参数刷新，绕过 iOS PWA 的顽固缓存
+          location.replace(location.pathname + '?v=' + remote + (location.hash || ''));
+        }, 600);
+      })
+      .catch(function() {});
+  } catch(e) {}
+}
+// 每次切回前台（从后台唤醒 App）时检查一次
+document.addEventListener('visibilitychange', function() {
+  if (!document.hidden) checkAppUpdate();
+});
 
 // ========== 开封 ==========
 function openItem(itemId) {
