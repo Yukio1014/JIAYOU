@@ -2947,8 +2947,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791221551 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791221551';
+// deploy.py 部署时会把 1791221887 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791221887';
 
 function checkAppUpdate(manual) {
   try {
@@ -5243,7 +5243,15 @@ function taskOpenForm(id) {
   html += '<button class="btn btn-primary btn-full" onclick="taskFormSave(\'' + (id || '') + '\')">' + (editing ? '保存修改' : '加入委托') + '</button>';
   document.getElementById('modal-content').innerHTML = html;
   document.getElementById('modal-overlay').classList.add('show');
-  if (editing && editing.zoneId) taskUpdateCategories();
+  if (editing && editing.zoneId) {
+    taskUpdateCategories();
+    // 回填已绑定的分类（否则下拉停在第一项，保存会改错分类）
+    var selC = document.getElementById('task-category');
+    if (selC && editing.categoryId) selC.value = editing.categoryId;
+    taskRefreshLockInfo();
+  } else {
+    taskRefreshLockInfo();
+  }
   taskUpdateRange();
 }
 function taskPlanRows() {
@@ -5525,6 +5533,7 @@ function taskFormSave(id) {
       t.plans = plans;
       t.zoneId = zoneId;
       t.categoryId = catId;
+      t.sourceItemId = t.sourceItemId || (plans[0] && plans[0].sourceItemId) || null;
     }
   } else {
     DB.tasks.push({
@@ -5533,6 +5542,7 @@ function taskFormSave(id) {
       note: document.getElementById('task-note').value.trim(),
       lockedPlanId: null, plans: plans,
       zoneId: zoneId, categoryId: catId, photos: [],
+      sourceItemId: (plans[0] && plans[0].sourceItemId) || null,
       date: new Date().toISOString()
     });
   }
