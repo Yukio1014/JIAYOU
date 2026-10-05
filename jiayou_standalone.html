@@ -2947,8 +2947,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791220914 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791220914';
+// deploy.py 部署时会把 1791221551 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791221551';
 
 function checkAppUpdate(manual) {
   try {
@@ -5036,11 +5036,16 @@ function doWin(t) {
         var v = null;
         (item.variants || []).forEach(function (vv) { if (vv.id === plan.sourceVariantId) v = vv; });
         if (v) {
-          var vPackQty = v.packQty || 1;
-          v.stock = (v.stock || 0) + qty * vPackQty;
+          // 容量数：以本次采购为准（线上套餐内含若变化，同步更新）
+          var isWV = /kg|公斤|千克/i.test(plan.unit || '');
+          var vPackQty = (+plan.spec > 0) ? +plan.spec : (v.packQty || 1);
+          v.packQty = vPackQty;
+          if (isWV && +plan.spec > 0) v.packWeight = +plan.spec;
+          if (plan.unit) v.packUnit = plan.unit;
           v.packCount = (v.packCount || 0) + qty;
+          v.stock = (v.stock || 0) + qty * vPackQty;
           if (plan.comboPrice > 0) v.packPrice = plan.comboPrice;
-          if (plan.amount > 0) { v.price = v.stock > 0 ? Math.round((totalPrice / v.stock) * 100) / 100 : plan.amount; v.totalPrice = totalPrice; }
+          if (plan.amount > 0) { v.totalPrice = totalPrice; v.price = v.stock > 0 ? Math.round((totalPrice / v.stock) * 100) / 100 : plan.amount; }
           if (plan.photos && plan.photos.length) v.photos = plan.photos.slice();
           if (!item.variants) item.variants = [];
           item.currentPrice = item.variants.reduce(function (s, x) { return s + (x.totalPrice || ((x.price || 0) * (x.stock || 0))); }, 0);
@@ -5211,6 +5216,7 @@ function doTaskClear() {
 // ---------- 新增 / 编辑表单 ----------
 function taskOpenForm(id) {
   var editing = id ? taskById(id) : null;
+  taskState.refPreset = null;
   taskState.formPlans = editing
     ? (editing.plans || []).map(function (p) { return Object.assign({}, p); })
     : [{ id: planNextId(), name: '', amount: 0, note: '', status: 'open', pinned: false, comboPrice: 0, qty: 0, spec: 0, unit: '', photos: [], buy: true, _calcOpen: false }];
@@ -5219,21 +5225,20 @@ function taskOpenForm(id) {
   html += '<div class="form-group"><label class="form-label">名称</label><input type="text" class="form-input" id="task-name" maxlength="40" placeholder="如：面霜 / 洗牙 / 医美" value="' + escTask(editing ? editing.name : '') + '"></div>';
   html += '<div class="form-group"><label class="form-label">创建日期</label><input type="date" class="form-input" id="task-date" value="' + (editing && editing.createdAt ? editing.createdAt : new Date().toISOString().slice(0, 10)) + '"></div>';
   html += '<div class="form-group"><label class="form-label">整体备注（淘宝链接等）</label><textarea class="form-textarea" id="task-note" placeholder="情报链接、整体备注">' + (editing ? escTask(editing.note || '') : '') + '</textarea></div>';
-  // 从已有产品引用：避免重复手填品牌/规格
-  html += '<div class="form-group"><label class="form-label">📦 从已有产品引用（自动带入品牌/规格，省去手填）</label>';
-  html += '<div style="display:flex;gap:6px;margin-bottom:8px">';
-  html += '<select class="form-select" id="ref-zone" onchange="taskRefZone()"><option value="">选领地</option>';
+  // 从已有产品引用：搜索式（不用记领地/分类，输名称即可）
+  html += '<div class="form-group"><label class="form-label">📦 从已有产品引用（输名称搜索，自动带入品牌/规格）</label>';
+  html += '<input type="text" class="form-input" id="ref-kw" placeholder="🔍 输入名称，如：猫粮 / 面霜" oninput="taskRefSearch(this.value)" autocomplete="off">';
+  html += '<div style="display:flex;gap:6px;margin-top:6px">';
+  html += '<select class="form-select" id="ref-zone" onchange="taskRefSearch(document.getElementById(\'ref-kw\').value)" style="flex:1"><option value="">全部领地（可不选）</option>';
   DB.zones.forEach(function (z) { html += '<option value="' + z.id + '">' + z.icon + ' ' + escTask(z.name) + '</option>'; });
   html += '</select>';
-  html += '<select class="form-select" id="ref-cat" onchange="taskRefCat()"><option value="">选分类</option></select>';
-  html += '<select class="form-select" id="ref-item"><option value="">选产品</option></select>';
   html += '</div>';
-  html += '<button class="btn btn-outline btn-sm" style="width:100%;margin-bottom:2px" onclick="taskRefAdd()">＋ 引用该产品下的品牌</button>';
+  html += '<div id="ref-results" style="max-height:220px;overflow-y:auto;margin-top:8px"></div>';
   html += '</div>';
   html += '<div class="form-group"><label class="form-label" id="task-range"></label><div id="task-plan-list">' + taskPlanRows() + '</div><button class="btn btn-outline btn-sm" style="width:100%;margin-top:4px" onclick="taskAddPlan()">＋ 添加备选方案</button></div>';
-  html += '<div class="form-group"><label class="form-label">绑定领地（凯旋后数量同步到此领地库存）</label><select class="form-select" id="task-zone" onchange="taskUpdateCategories()"><option value="">不绑定</option>';
+  html += '<div class="form-group"><label class="form-label">绑定领地（引用产品会自动锁定，无需手选）</label><select class="form-select" id="task-zone" onchange="taskUpdateCategories()"><option value="">不绑定</option>';
   DB.zones.forEach(function (z) { html += '<option value="' + z.id + '" ' + (editing && editing.zoneId === z.id ? 'selected' : '') + '>' + z.icon + ' ' + escTask(z.name) + '</option>'; });
-  html += '</select></div>';
+  html += '</select><div id="task-lockinfo" style="font-size:12px;margin-top:6px"></div></div>';
   html += '<div class="form-group" id="task-cat-group" style="display:' + (editing && editing.zoneId ? 'block' : 'none') + '"><label class="form-label">分类</label><select class="form-select" id="task-category"></select></div>';
   html += '<button class="btn btn-primary btn-full" onclick="taskFormSave(\'' + (id || '') + '\')">' + (editing ? '保存修改' : '加入委托') + '</button>';
   document.getElementById('modal-content').innerHTML = html;
@@ -5306,6 +5311,7 @@ function taskUpdateCategories() {
   var zone = getZone(zoneId); if (!zone) return;
   sel.innerHTML = '';
   zone.categories.forEach(function (c) { var label = c.parentId ? getCategoryPath(zoneId, c.id) : c.name; sel.innerHTML += '<option value="' + c.id + '">' + escTask(label) + '</option>'; });
+  taskRefreshLockInfo();
 }
 function taskUploadPlanPhoto(i) {
   var input = document.getElementById('photo-input');
@@ -5323,52 +5329,88 @@ function taskUploadPlanPhoto(i) {
   };
   input.click();
 }
-function taskRefZone() {
-  var zoneId = document.getElementById('ref-zone').value;
-  var catSel = document.getElementById('ref-cat'); if (!catSel) return;
-  catSel.innerHTML = '<option value="">选分类</option>';
-  var itemSel = document.getElementById('ref-item'); if (itemSel) itemSel.innerHTML = '<option value="">选产品</option>';
-  var zone = getZone(zoneId); if (!zone) return;
-  zone.categories.forEach(function (c) {
-    catSel.innerHTML += '<option value="' + c.id + '">' + escTask(c.name) + '</option>';
-    if (c.children) c.children.forEach(function (sub) { catSel.innerHTML += '<option value="' + sub.id + '">' + escTask(c.name + ' · ' + sub.name) + '</option>'; });
+// 引用搜索：跨领地匹配物品名/品牌名，点选即引用（不用记领地/分类）
+function taskRefSearch(kw) {
+  var box = document.getElementById('ref-results'); if (!box) return;
+  var zfEl = document.getElementById('ref-zone');
+  var zoneFilter = zfEl ? zfEl.value : '';
+  var preset = taskState.refPreset || null;
+  kw = (kw || '').trim().toLowerCase();
+  var hits = [];
+  DB.zones.forEach(function (z) {
+    if (zoneFilter && z.id !== zoneFilter) return;
+    (z.items || []).forEach(function (it) {
+      if (preset && (z.id !== preset.zoneId || (it.categoryId || null) !== (preset.categoryId || null))) return;
+      if (kw === '') { hits.push({ zone: z, item: it }); return; }
+      var inName = (it.name || '').toLowerCase().indexOf(kw) >= 0;
+      var inBrand = (it.variants || []).some(function (v) { return (v.brand || '').toLowerCase().indexOf(kw) >= 0; });
+      if (inName || inBrand) hits.push({ zone: z, item: it });
+    });
   });
-}
-function taskRefCat() {
-  var zoneId = document.getElementById('ref-zone').value;
-  var catId = document.getElementById('ref-cat').value;
-  var itemSel = document.getElementById('ref-item'); if (!itemSel) return;
-  itemSel.innerHTML = '<option value="">选产品</option>';
-  var zone = getZone(zoneId); if (!zone) return;
-  zone.items.filter(function (it) { return !catId || it.categoryId === catId; }).forEach(function (it) {
-    itemSel.innerHTML += '<option value="' + it.id + '">' + escTask(it.name) + '</option>';
+  if (kw === '' && !preset && !zoneFilter) {
+    box.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary);padding:6px 2px">🔍 输入名称搜索（跨所有领地），或选领地浏览全部产品</div>';
+    return;
+  }
+  if (!hits.length) { box.innerHTML = '<div style="font-size:12px;color:var(--text-tertiary);padding:6px 2px">未找到匹配的产品</div>'; return; }
+  var html = '';
+  hits.slice(0, 30).forEach(function (h) {
+    var cp = getCategoryPath(h.zone.id, h.item.categoryId);
+    var nb = (h.item.variants || []).length;
+    html += '<div style="display:flex;gap:8px;align-items:center;padding:8px 10px;border:1px solid var(--separator);border-radius:8px;margin-bottom:6px;cursor:pointer;background:var(--card-bg)" onclick="taskRefPick(\'' + h.zone.id + '\',\'' + h.item.id + '\')">';
+    html += '<div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:600">' + escTask(h.item.name) + '</div>';
+    html += '<div style="font-size:11px;color:var(--text-secondary)">' + h.zone.icon + ' ' + escTask(h.zone.name) + (cp ? ' · ' + escTask(cp) : '') + ' · ' + nb + ' 个品牌</div></div>';
+    html += '<div style="font-size:12px;color:var(--accent);font-weight:600;flex-shrink:0">引用 ›</div>';
+    html += '</div>';
   });
+  if (hits.length > 30) html += '<div style="font-size:11px;color:var(--text-tertiary);padding:2px">仅显示前 30 条，继续输入可缩小范围</div>';
+  box.innerHTML = html;
 }
-function taskRefAdd() {
-  var zoneId = document.getElementById('ref-zone') ? document.getElementById('ref-zone').value : '';
-  var itemId = document.getElementById('ref-item') ? document.getElementById('ref-item').value : '';
-  if (!itemId) { toast('请先选择要引用的产品'); return; }
-  var zone = getZone(zoneId); if (!zone) { toast('请选择领地'); return; }
+// 选中产品：自动锁定领地+分类、带入品牌/现价/规格，方案带来源以便凯旋自动回写
+function taskRefPick(zoneId, itemId) {
+  var zone = getZone(zoneId); if (!zone) return;
   var item = getItem(zoneId, itemId); if (!item) { toast('未找到产品'); return; }
-  var zSel = document.getElementById('task-zone'); if (zSel) { zSel.value = zoneId; taskUpdateCategories(); }
-  var cSel = document.getElementById('task-category'); if (cSel && item.categoryId) cSel.value = item.categoryId;
-  var nEl = document.getElementById('task-name'); if (nEl && !nEl.value.trim()) nEl.value = item.name;
+  taskState.refPreset = null;
+  // 自动锁定领地 / 分类（用户无需手选）
+  var zSel = document.getElementById('task-zone');
+  if (zSel) { zSel.value = zoneId; taskUpdateCategories(); }
+  var cSel = document.getElementById('task-category');
+  if (cSel && item.categoryId) cSel.value = item.categoryId;
+  var nEl = document.getElementById('task-name');
+  if (nEl && !nEl.value.trim()) nEl.value = item.name;
+  var pid = planNextId();
   if (item.variants && item.variants.length) {
     item.variants.forEach(function (v) {
       taskState.formPlans.push({
-        id: planNextId(), name: v.brand || '未命名', amount: Math.round((+v.price || 0) * 100) / 100, note: '', status: 'open', pinned: false,
-        comboPrice: 0, qty: 0, spec: Math.round((+v.packQty || 1) * 100) / 100, unit: (v.packUnit || ''), photos: (v.photos || []).slice(), buy: true, sourceItemId: item.id, sourceVariantId: v.id, _calcOpen: false
+        id: pid++, name: v.brand || '未命名', amount: 0, note: '', status: 'open', pinned: false,
+        comboPrice: Math.round(((+v.packPrice || +v.price || 0)) * 100) / 100, qty: 0,
+        spec: v.packQty || 1, unit: v.packUnit || item.unit || '个',
+        photos: (v.photos || []).slice(), buy: true, sourceItemId: item.id, sourceVariantId: v.id, _calcOpen: false
       });
     });
   } else {
     taskState.formPlans.push({
-      id: planNextId(), name: item.name || '未命名', amount: Math.round((+item.currentPrice || 0) * 100) / 100, note: '', status: 'open', pinned: false,
-      comboPrice: 0, qty: 0, spec: 0, unit: '', photos: (item.photos || []).slice(), buy: true, sourceItemId: item.id, sourceVariantId: null, _calcOpen: false
+      id: pid++, name: item.name || '未命名', amount: 0, note: '', status: 'open', pinned: false,
+      comboPrice: Math.round((+item.currentPrice || 0) * 100) / 100, qty: 0,
+      spec: 1, unit: item.unit || '个',
+      photos: (item.photos || []).slice(), buy: true, sourceItemId: item.id, sourceVariantId: null, _calcOpen: false
     });
   }
+  var box = document.getElementById('ref-results'); if (box) box.innerHTML = '';
+  var kwEl = document.getElementById('ref-kw'); if (kwEl) kwEl.value = '';
   document.getElementById('task-plan-list').innerHTML = taskPlanRows();
   taskUpdateRange();
-  toast('已引用，请补填套餐数/每份价/每份重');
+  taskRefreshLockInfo();
+  toast('🔗 已引用「' + item.name + '」，领地已自动锁定，请补填数量/价格');
+}
+// 绑定领地的确认信息：让用户看到"凯旋会同步到哪"
+function taskRefreshLockInfo() {
+  var el = document.getElementById('task-lockinfo'); if (!el) return;
+  var zoneId = document.getElementById('task-zone') ? document.getElementById('task-zone').value : '';
+  if (!zoneId) { el.innerHTML = '<span style="color:var(--orange)">⚠️ 未绑定领地：纯新物品凯旋后无处落库存（引用来的物品不受影响）</span>'; return; }
+  var zone = getZone(zoneId);
+  var catId = document.getElementById('task-category') ? document.getElementById('task-category').value : '';
+  var cp = catId ? getCategoryPath(zoneId, catId) : '';
+  el.innerHTML = '<span style="color:var(--green)">✅ 凯旋后自动同步到：' + (zone ? zone.icon + ' ' + escTask(zone.name) : '') + (cp ? ' · ' + escTask(cp) : '') + '</span>';
 }
 // 一键把已有物品「复制成待接委托」：免手输，进去再补套餐数/价格，凯旋后自动回写库存
 function taskFromItem(zoneId, itemId, skipJump) {
@@ -5444,8 +5486,11 @@ function taskOpenFormFromCategory(zoneId, categoryId) {
   taskOpenForm(null);
   var zSel = document.getElementById('task-zone'); if (zSel) { zSel.value = zoneId; taskUpdateCategories(); }
   var cSel = document.getElementById('task-category'); if (cSel && categoryId) cSel.value = categoryId;
-  var rz = document.getElementById('ref-zone'); if (rz) { rz.value = zoneId; taskRefZone(); }
-  var rc = document.getElementById('ref-cat'); if (rc && categoryId) { rc.value = categoryId; taskRefCat(); }
+  var rz = document.getElementById('ref-zone'); if (rz) rz.value = zoneId;
+  // 预置为该分类：打开表单即列出该分类下的产品，点一下即可引用
+  taskState.refPreset = { zoneId: zoneId, categoryId: categoryId || null };
+  taskRefSearch('');
+  taskRefreshLockInfo();
 }
 function taskFormSave(id) {
   var name = document.getElementById('task-name').value.trim();
