@@ -1379,6 +1379,8 @@ function mergeDB(defaults, loaded) {
   if (result.pool && !result.tasks.length) {
     migratePoolToTasks(result);
   }
+  // 补给品套餐模型迁移（只增字段，零破坏：stock/totalPrice/price 原值不动）
+  migrateConsumablePackages(result);
   return result;
 }
 
@@ -1433,6 +1435,31 @@ function legacyPoolToTask(p, isHistory, nid, npid) {
   };
 }
 
+// 补给品套餐模型迁移：只增字段，零破坏旧数据
+// 字段约定：stock = 小单位总数（不变）；packQty=每套餐内含小单位数(默认1)；
+// packCount=套餐数(默认=stock，packQty=1时等价)；packPrice=每套餐价(默认=totalPrice)；
+// packUnit=小单位名；packWeight=每套餐重量KG(默认0)；consumeMode=物品级消耗模式
+function migrateConsumablePackages(db) {
+  if (!db.zones) return;
+  db.zones.forEach(function(zone) {
+    if (zone.type !== 'consumable') return; // 仅补给品
+    (zone.items || []).forEach(function(item) {
+      // 物品级消耗模式：oneShot→unit（开袋即用完/小单位），其余→pack（套餐消耗）
+      if (item.consumeMode !== 'pack' && item.consumeMode !== 'unit') {
+        item.consumeMode = (item.oneShot === true) ? 'unit' : 'pack';
+      }
+      (item.variants || []).forEach(function(v) {
+        if (typeof v.packQty === 'undefined') v.packQty = 1;
+        if (typeof v.packCount === 'undefined') v.packCount = (v.stock || 0); // packQty=1时等价
+        if (typeof v.packPrice === 'undefined') v.packPrice = v.totalPrice || 0;
+        if (typeof v.packUnit === 'undefined') v.packUnit = item.unit || '个';
+        if (typeof v.packWeight === 'undefined') v.packWeight = 0;
+        // stock / price / totalPrice 原值一律不动
+      });
+    });
+  });
+}
+
 function genId() {
   return Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
 }
@@ -1443,6 +1470,37 @@ function getTotalStock(item) {
     return item.variants.reduce(function(s, v) { return s + (v.stock || 0); }, 0);
   }
   return item.stock || 0;
+}
+
+// ===== 套餐模型展示辅助 =====
+// 折算单价：有重量→每KG单价，否则→每小单位单价
+function variantUnitPrice(v) {
+  var tp = v.totalPrice || 0;
+  if (v.packWeight && v.packWeight > 0) return tp / v.packWeight;
+  var stock = v.stock || 0;
+  if (stock > 0) return tp / stock;
+  return v.price || 0;
+}
+// 库存展示文本：packQty>1 时显示"X套 (+余Y个)"
+function variantPackText(v, item) {
+  var stock = v.stock || 0;
+  var pq = v.packQty || 1;
+  var unit = v.packUnit || (item && item.unit) || '个';
+  if (pq > 1 && stock > 0) {
+    var packs = Math.floor(stock / pq);
+    var rem = stock % pq;
+    var t = packs + ' 套';
+    if (rem > 0) t += ' + ' + rem + ' ' + unit;
+    return t + '（' + stock + unit + '）';
+  }
+  return stock + ' ' + unit;
+}
+// 比价提示文本（重量或单价维度）
+function variantPriceCompareText(v) {
+  if (v.packWeight && v.packWeight > 0) return '每KG ¥' + variantUnitPrice(v).toFixed(2);
+  var stock = v.stock || 0;
+  if (stock > 0) return '每' + (v.packUnit || '个') + ' ¥' + (variantUnitPrice(v)).toFixed(2);
+  return '每' + (v.packUnit || '个') + ' ¥' + (v.price || 0).toFixed(2);
 }
 
 // 耐用品：计算单件物品的总金额（优先用各款 totalPrice，否则用 单价×件数）
@@ -1476,7 +1534,8 @@ function ensureVariants(item) {
       openDate: item.openDate || null, finishDate: item.finishDate || null,
       usedUp: item.usedUp || false, openQty: item.openQty || 0,
       feeling: item.feeling || null, shelfLife: item.shelfLife || null,
-      productionDate: item.productionDate || null
+      productionDate: item.productionDate || null,
+      packCount: item.stock || 0, packPrice: item.currentPrice || 0, packQty: 1, packUnit: item.unit || '个', packWeight: 0
     }];
   }
 }
@@ -1963,11 +2022,17 @@ function renderAIAnalysis() {
     zone.items.forEach(function(it) {
       var rate = calcUsageRate(it);
       var status = getItemStatus(it);
-      if (rate > 0 && it.stock !== undefined) {
-        var monthsLeft = it.stock / rate;
+      var totS = getTotalStock(it);
+      if (rate > 0 && totS !== undefined) {
+        var monthsLeft = totS / rate;
         if (status.lowStock || monthsLeft < 1) {
-          var suggestQty = Math.ceil(rate * 6); // 建议买半年量
-          buySuggestions.push({ name: it.name, qty: suggestQty, unit: it.unit || '个', reason: '库存仅够' + monthsLeft.toFixed(1) + '月' });
+          var suggestQty = Math.ceil(rate * 6); // 建议买半年量（小单位）
+          var reason = '库存仅够' + monthsLeft.toFixed(1) + '月';
+          if (it.consumeMode === 'pack' && it.variants && it.variants.length && (it.variants[0].packQty || 1) > 1) {
+            var apq = it.variants[0].packQty;
+            reason += '（约 ' + Math.ceil(suggestQty / Math.max(1, apq)) + ' 套）';
+          }
+          buySuggestions.push({ name: it.name, qty: suggestQty, unit: it.unit || '个', reason: reason });
         }
       }
     });
@@ -2263,7 +2328,12 @@ function renderCardFront(item, zone) {
       if (pct > 60) barClass = 'high';
       else if (pct > 30) barClass = 'mid';
       html += '<div style="margin-top:14px">';
-      html += '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:13px;color:var(--text-secondary)">库存</span><span style="font-weight:700">' + totalStock + (item.unit||'') + '</span></div>';
+      var packHintF = '';
+      if (item.consumeMode === 'pack' && item.variants && item.variants.length && (item.variants[0].packQty || 1) > 1) {
+        var avgPqF = item.variants.reduce(function(s, v) { return s + (v.packQty || 1); }, 0) / item.variants.length;
+        packHintF = '（约 ' + Math.floor(totalStock / avgPqF) + ' 套）';
+      }
+      html += '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:13px;color:var(--text-secondary)">库存</span><span style="font-weight:700">' + totalStock + (item.unit||'') + packHintF + '</span></div>';
       html += '<div class="stock-bar ' + barClass + '"><div class="stock-fill" style="width:' + pct + '%"></div></div>';
       html += '</div>';
     }
@@ -2357,17 +2427,17 @@ function renderCardBack(item, zone) {
           html += ' <span style="color:var(--green);font-size:11px;font-weight:600">已用完</span>';
         }
         html += '</div>';
-        // 价格展示：多库存显示"单价 × 库存 = 总价"，单库存显示单价
-        var cVQty = v.stock || 0;
-        var cVUnit = v.price || 0;
-        var cVTotal = v.totalPrice || (cVUnit * cVQty);
+        // 套餐价格展示：套餐数×套餐价=总价 + 折算单价比价
+        var cVTotal = v.totalPrice || 0;
+        var pq = v.packQty || 1;
         var priceText;
-        if (cVQty > 1 && cVUnit > 0) {
-          priceText = '¥' + cVUnit.toFixed(2) + ' × ' + cVQty + ' = ¥' + cVTotal.toFixed(2) + ' · ' + cVQty + (item.unit||'');
+        if (pq > 1) {
+          priceText = v.packCount + '套 × ¥' + (v.packPrice||0).toFixed(2) + ' = ¥' + cVTotal.toFixed(2);
         } else {
-          priceText = '¥' + cVTotal.toFixed(2) + ' · ' + cVQty + (item.unit||'');
+          priceText = '¥' + cVTotal.toFixed(2);
         }
         html += '<div style="font-weight:700">' + priceText + '</div>';
+        html += '<div style="font-size:11px;color:var(--text-secondary)">' + variantPriceCompareText(v) + ' · 库存 ' + variantPackText(v, item) + '</div>';
         html += '</div>';
         // 使用感受：有任意内容就显示
         if (v.feeling && (v.feeling.rating || (v.feeling.tags && v.feeling.tags.length > 0) || v.feeling.notes)) {
@@ -2484,6 +2554,13 @@ function renderCardBack(item, zone) {
       html += '<div style="font-size:13px;line-height:1.7">';
       html += '· 半年量：<strong>' + halfQty + (item.unit||'个') + '</strong><br>';
       html += '· 一年量：<strong>' + yearQty + (item.unit||'个') + '</strong><br>';
+      // 套餐维度补货建议
+      if (item.consumeMode === 'pack' && item.variants && item.variants.length && (item.variants[0].packQty || 1) > 1) {
+        var avgPq = item.variants.reduce(function(s, v) { return s + (v.packQty || 1); }, 0) / item.variants.length;
+        var yearPacks = Math.ceil(yearQty / avgPq);
+        html += '· 年耗约 <strong>' + yearPacks + ' 套</strong>（每套约 ' + avgPq + (item.unit||'个') + '）<br>';
+        html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px">线上套餐内含若变化，按当前每套 ' + avgPq + (item.unit||'个') + ' 换算，明年约买 ' + Math.max(1, yearPacks) + ' 套</div>';
+      }
       if (rate2 > 0) {
         var monthEst = Math.ceil((totalStock2 || 0) / rate2);
         html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">当前库存约够用 ' + monthEst + ' 个月</div>';
@@ -2820,8 +2897,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791216121 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791216121';
+// deploy.py 部署时会把 1791219331 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791219331';
 
 function checkAppUpdate(manual) {
   try {
@@ -2944,6 +3021,32 @@ function openVariantItem(itemId, variantId) {
     return;
   }
 
+  // 套餐消耗：开一整套，用完再开下一整套
+  if ((item.consumeMode || 'pack') === 'pack') {
+    var pq = Math.min(v.packQty || 1, v.stock || 1);
+    var html = '<div class="modal-handle"></div>';
+    html += '<div class="modal-title">🔓 开封使用（套餐）</div>';
+    html += '<div style="text-align:center;margin-bottom:16px">';
+    html += '<div style="font-size:16px;font-weight:700">' + escapeHtml(item.name) + '</div>';
+    html += '<div style="font-size:14px;color:var(--accent)">' + escapeHtml(v.brand) + '</div>';
+    html += '<div style="font-size:13px;color:var(--text-secondary)">库存：' + v.stock + (item.unit||'') + '（每套 ' + (v.packQty||1) + (v.packUnit||'个') + '）</div>';
+    html += '</div>';
+    html += '<div style="text-align:center;padding:14px;background:var(--bg);border-radius:10px;margin-bottom:16px;font-size:14px">';
+    html += '将开一整套：<strong>' + pq + ' ' + (v.packUnit||'个') + '</strong><br><span style="font-size:12px;color:var(--text-secondary)">用完这一整套后再开下一整套</span></div>';
+    html += '<div class="form-group">';
+    html += '<label class="form-label">开始使用日期</label>';
+    html += '<input type="date" class="form-input" id="open-date" value="' + new Date().toISOString().split('T')[0] + '">';
+    html += '</div>';
+    html += '<button class="btn btn-primary btn-full" onclick="confirmOpen(\'' + itemId + '\',\'' + variantId + '\')">确认开封一整套</button>';
+    html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">取消</button>';
+    document.getElementById('modal-content').innerHTML = html;
+    document.getElementById('modal-overlay').classList.add('show');
+    window._openQty = pq;
+    window._maxOpenQty = v.stock || 1;
+    window._openVariantId = variantId;
+    return;
+  }
+
   var maxQty = v.stock || 1;
   var html = '<div class="modal-handle"></div>';
   html += '<div class="modal-title">🔓 开封使用</div>';
@@ -2983,6 +3086,7 @@ function confirmOpen(itemId, variantId, markAsUsed) {
   var v = item.variants.find(function(v) { return v.id === variantId; });
   if (!v) return;
   var qty = window._openQty || 1;
+  if (qty > (v.stock || 0)) qty = v.stock || 0; // 不超过现有库存
   var dateInput = document.getElementById('open-date');
   var date = dateInput ? dateInput.value : new Date().toISOString().split('T')[0];
   var nowISO = new Date(date).toISOString();
@@ -3333,12 +3437,33 @@ function openItemForm(itemId) {
     var variants = (item && item.variants && item.variants.length > 0) ? item.variants : [];
     if (variants.length === 0) variants = [{ id: genId(), brand: item?item.name:'', stock: item?(item.stock||0):0, price: item?(item.currentPrice||0):0, totalPrice: 0, photos: [] }];
     window._editVariants = variants.map(function(v) {
-      return { id: v.id, brand: v.brand||'', stock: v.stock||0, price: v.price||0, totalPrice: v.totalPrice||0, photos: (v.photos||[]).slice() };
+      return {
+        id: v.id, brand: v.brand||'', stock: v.stock||0, price: v.price||0, totalPrice: v.totalPrice||0,
+        packCount: (typeof v.packCount!=='undefined'?v.packCount:(v.stock||0)),
+        packPrice: (typeof v.packPrice!=='undefined'?v.packPrice:(v.totalPrice||0)),
+        packQty: (typeof v.packQty!=='undefined'?v.packQty:1),
+        packUnit: v.packUnit||(item?item.unit||'个':'个'),
+        packWeight: (typeof v.packWeight!=='undefined'?v.packWeight:0),
+        photos: (v.photos||[]).slice()
+      };
     });
     window._editVariantPhotos = variants.map(function(v) { return (v.photos||[]).slice(); });
     html += renderConsumableVariantRows();
     html += '</div>';
     html += '<button class="btn btn-outline btn-sm" style="margin-top:6px;width:100%" onclick="addConsumableVariantRow()">＋ 添加品牌</button>';
+    html += '</div>';
+
+    // 消耗模式（用户手动定义，系统不自动猜）
+    var mPack = (!item || item.consumeMode !== 'unit');
+    var mUnit = (item && item.consumeMode === 'unit');
+    html += '<div class="form-group">';
+    html += '<label class="form-label">消耗模式（你手动定义）</label>';
+    html += '<div style="display:flex;gap:8px">';
+    html += '<button type="button" class="btn ' + (mPack ? 'btn-primary' : 'btn-outline') + '" style="flex:1" data-cmode="pack" onclick="setConsumeMode(\'pack\')">📦 套餐消耗</button>';
+    html += '<button type="button" class="btn ' + (mUnit ? 'btn-primary' : 'btn-outline') + '" style="flex:1" data-cmode="unit" onclick="setConsumeMode(\'unit\')">🔢 小单位消耗</button>';
+    html += '</div>';
+    html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">套餐消耗：开一整套用，用完再开下一整套（纸巾/猫粮/凝珠）。小单位消耗：每次取一个小单位，包装只是采购打包（面膜/小样）。</div>';
+    html += '<input type="hidden" id="item-consumemode" value="' + (mUnit ? 'unit' : 'pack') + '">';
     html += '</div>';
 
     html += '<div class="form-group">';
@@ -3373,6 +3498,16 @@ function openItemForm(itemId) {
   // 初始化子分类选项（编辑时回填已选子分类）
   window._itemSelSubId = selSubId || '';
   updateItemSubcategoryOptions(zone.id, selMainId);
+}
+
+// 切换消耗模式（套餐/小单位）
+function setConsumeMode(m) {
+  var el = document.getElementById('item-consumemode');
+  if (el) el.value = m;
+  document.querySelectorAll('[data-cmode]').forEach(function(b) {
+    var on = b.getAttribute('data-cmode') === m;
+    b.className = 'btn ' + (on ? 'btn-primary' : 'btn-outline');
+  });
 }
 
 // 根据所选大类填充子分类下拉（选填）
@@ -3445,20 +3580,30 @@ function renderConsumableVariantRows() {
       html += '<span style="font-size:20px;color:var(--text-tertiary)">📷</span>';
     }
     html += '</div>';
-    // 品牌名 + 库存 + 单价×库存=总价 三联动
+    // 品牌名 + 套餐数 × 套餐价 = 总价（套餐模型）
     html += '<div style="flex:1;display:flex;flex-direction:column;gap:4px">';
     html += '<input type="text" class="form-input" style="font-size:14px" placeholder="品牌名" value="' + escapeHtml(v.brand) + '" onchange="updateConsumableVariantField(' + i + ',\'brand\',this.value)">';
-    // 库存 × 单价 = 总价 三联动（单行紧凑布局，与耐用品一致）
-    var cUnit = v.price || 0;
+    // 套餐数 × 套餐价 = 总价（单行紧凑）
+    var cPack = v.packCount || 0;
+    var cPackPrice = v.packPrice || 0;
+    var cPackQty = v.packQty || 1;
+    var cWeight = v.packWeight || 0;
     var cStock = v.stock || 0;
-    var cTotal = v.totalPrice || (cUnit * cStock);
-    html += '<div style="display:flex;gap:6px;align-items:center">';
-    html += '<input type="number" class="form-input" style="font-size:13px;flex:1" placeholder="库存" value="' + (cStock||'') + '" oninput="onConsumablePriceInput(' + i + ',\'stock\',this.value)" step="0.5">';
+    var cTotal = v.totalPrice || (cPackPrice * cPack);
+    html += '<div style="display:flex;gap:4px;align-items:center">';
+    html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="套餐数" value="' + (cPack||'') + '" oninput="onConsumablePriceInput(' + i + ',\'pack\',this.value)" step="1">';
     html += '<span style="font-size:12px;color:var(--text-tertiary)">×</span>';
-    html += '<input type="number" class="form-input" style="font-size:13px;flex:1" placeholder="单价" value="' + (cUnit||'') + '" oninput="onConsumablePriceInput(' + i + ',\'unit\',this.value)" step="0.01">';
+    html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="套餐价" value="' + (cPackPrice||'') + '" oninput="onConsumablePriceInput(' + i + ',\'packprice\',this.value)" step="0.01">';
     html += '<span style="font-size:12px;color:var(--text-tertiary)">=</span>';
-    html += '<input type="number" class="form-input" style="font-size:13px;flex:1" placeholder="总价" value="' + (cTotal||'') + '" oninput="onConsumablePriceInput(' + i + ',\'total\',this.value)" step="0.01">';
+    html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="总价" value="' + (cTotal||'') + '" oninput="onConsumablePriceInput(' + i + ',\'total\',this.value)" step="0.01">';
     html += '</div>';
+    // 每套含数 + 每套重量（用于折算单价比价）
+    html += '<div style="display:flex;gap:4px;align-items:center;margin-top:2px">';
+    html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="每套含(个/包/颗)" value="' + (cPackQty>1?cPackQty:'') + '" oninput="onConsumablePriceInput(' + i + ',\'packqty\',this.value)" step="1" title="每套餐内含多少个小单位，如纸巾一套30包">';
+    html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="每套重量KG" value="' + (cWeight||'') + '" oninput="onConsumablePriceInput(' + i + ',\'weight\',this.value)" step="0.01" title="猫粮等按重量比价时填">';
+    html += '</div>';
+    // 库存提示（衍生，非编辑）
+    html += '<div id="packstock-' + i + '" style="font-size:11px;color:var(--text-secondary);margin-top:2px">📦 库存 = ' + cStock + ' ' + (v.packUnit||'个') + (cPackQty>1 ? '（约 ' + (Math.floor(cStock/cPackQty)) + ' 套）':'') + '</div>';
     html += '</div>';
     // 删除按钮
     if (variants.length > 1) {
@@ -3492,32 +3637,41 @@ function onConsumablePriceInput(idx, which, val) {
   var row = document.querySelectorAll('.consumable-variant-row')[idx];
   if (!row) return;
   var inputs = row.querySelectorAll('input[type=number]');
-  // inputs[0]=库存 [1]=单价 [2]=总价
-  var stockEl = inputs[0], unitEl = inputs[1], totalEl = inputs[2];
-  if (which === 'stock') {
-    var s = parseFloat(val) || 0;
-    v.stock = s;
-    var u = v.price || 0;
-    v.totalPrice = +(u * s).toFixed(2);
-    if (totalEl) totalEl.value = v.totalPrice || '';
-  } else if (which === 'unit') {
-    var u2 = parseFloat(val) || 0;
-    v.price = u2;
-    var s2 = v.stock || 0;
-    v.totalPrice = +(u2 * s2).toFixed(2);
-    if (totalEl) totalEl.value = v.totalPrice || '';
+  // inputs[0]=套餐数 [1]=套餐价 [2]=总价 [3]=每套含数 [4]=重量
+  var packEl = inputs[0], priceEl = inputs[1], totalEl = inputs[2], qtyEl = inputs[3], weightEl = inputs[4];
+  var packCount = parseFloat(v.packCount) || 0;
+  var packPrice = parseFloat(v.packPrice) || 0;
+  var packQty = parseFloat(v.packQty) || 1;
+  var weight = parseFloat(v.packWeight) || 0;
+  if (which === 'pack') {
+    packCount = parseFloat(val) || 0; v.packCount = packCount;
+  } else if (which === 'packprice') {
+    packPrice = parseFloat(val) || 0; v.packPrice = packPrice;
   } else if (which === 'total') {
-    var t = parseFloat(val) || 0;
-    v.totalPrice = t;
-    var s3 = v.stock || 0;
-    v.price = s3 > 0 ? +(t / s3).toFixed(2) : 0;
-    if (unitEl) unitEl.value = v.price || '';
+    var t = parseFloat(val) || 0; v.totalPrice = t;
+    if (packCount > 0) { packPrice = t / packCount; v.packPrice = packPrice; }
+  } else if (which === 'packqty') {
+    packQty = parseFloat(val) || 1; v.packQty = packQty;
+  } else if (which === 'weight') {
+    weight = parseFloat(val) || 0; v.packWeight = weight;
   }
+  // 重算：总价 = 套餐数 × 套餐价；库存 = 套餐数 × 每套含数；单价 = 总价 / 库存
+  v.totalPrice = Math.round(packCount * packPrice * 100) / 100;
+  var stock = Math.max(0, Math.round(packCount * packQty));
+  v.stock = stock;
+  v.price = stock > 0 ? Math.round((v.totalPrice / stock) * 100) / 100 : (packPrice || 0);
+  if (packEl) packEl.value = packCount || '';
+  if (priceEl) priceEl.value = packPrice || '';
+  if (totalEl) totalEl.value = v.totalPrice || '';
+  if (qtyEl) qtyEl.value = (packQty > 1 ? packQty : '');
+  if (weightEl) weightEl.value = weight || '';
+  var hint = document.getElementById('packstock-' + idx);
+  if (hint) hint.innerHTML = '📦 库存 = ' + stock + ' ' + (v.packUnit||'个') + (packQty > 1 ? '（约 ' + (Math.floor(stock / packQty)) + ' 套）' : '');
 }
 function addConsumableVariantRow() {
   window._editVariants = window._editVariants || [];
   window._editVariantPhotos = window._editVariantPhotos || [];
-  window._editVariants.push({ id: genId(), brand: '', stock: 0, price: 0, totalPrice: 0, photos: [] });
+  window._editVariants.push({ id: genId(), brand: '', stock: 0, price: 0, totalPrice: 0, packCount: 1, packPrice: 0, packQty: 1, packUnit: '个', packWeight: 0, photos: [] });
   window._editVariantPhotos.push([]);
   document.getElementById('variant-list').innerHTML = renderConsumableVariantRows();
 }
@@ -3818,7 +3972,12 @@ function saveItem() {
         totalPrice: ev.totalPrice || +(evPrice * evStock).toFixed(2),
         channel: '', photos: (editPhotos[i] || []).slice(),
         opened: false, openDate: null, finishDate: null,
-        usedUp: false, openQty: 0, feeling: null, shelfLife: null, productionDate: null
+        usedUp: false, openQty: 0, feeling: null, shelfLife: null, productionDate: null,
+        packCount: (typeof ev.packCount !== 'undefined' ? ev.packCount : evStock),
+        packPrice: (typeof ev.packPrice !== 'undefined' ? ev.packPrice : (ev.totalPrice || 0)),
+        packQty: (typeof ev.packQty !== 'undefined' ? ev.packQty : 1),
+        packUnit: ev.packUnit || '个',
+        packWeight: (typeof ev.packWeight !== 'undefined' ? ev.packWeight : 0)
       };
     });
     // 合并变体照片，用于卡片展示
@@ -3837,6 +3996,7 @@ function saveItem() {
     data.productionDate = prodDate ? new Date(prodDate).toISOString() : null;
     data.stockThreshold = parseFloat(document.getElementById('item-threshold').value) || 1;
     data.oneShot = !!document.getElementById('item-oneshot').checked;
+    data.consumeMode = (document.getElementById('item-consumemode') ? document.getElementById('item-consumemode').value : 'pack') || 'pack';
   } else {
     // 耐用品：从件数编辑器读取
     var dEditVariants = window._editVariants || [];
@@ -4104,7 +4264,13 @@ function markUsed(itemId) {
 function openStockAuditForm(itemId) {
   var item = getItem(currentZoneId, itemId);
   if (!item) return;
-  var currentStock = getTotalStock(item);
+  var variants0 = item.variants && item.variants.length > 0 ? item.variants : [];
+  var currentStock = 0;
+  if (variants0.length > 0) {
+    variants0.forEach(function(v) { if (!(item.consumeMode === 'pack' && v.opened && !v.usedUp)) currentStock += (v.stock || 0); });
+  } else {
+    currentStock = getTotalStock(item);
+  }
   var unit = item.unit || '个';
   var html = '<div class="modal-handle"></div>';
   html += '<div class="modal-title">📦 库存盘点</div>';
@@ -4118,19 +4284,31 @@ function openStockAuditForm(itemId) {
     html += '<div class="form-group" style="margin-bottom:8px"><label class="form-label">按品牌清点实际数量</label></div>';
     html += '<div style="max-height:360px;overflow-y:auto;margin-bottom:12px" id="audit-variant-list">';
     variants.forEach(function(v, i) {
+      var isInUse = (item.consumeMode === 'pack' && v.opened && !v.usedUp);
+      var pq = v.packQty || 1;
+      var packHint = pq > 1 ? '（约 ' + Math.floor((v.stock||0)/pq) + ' 套）' : '';
       html += '<div style="display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--separator)">';
       html += '<div style="flex:1;min-width:0">';
       html += '<div style="font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(v.brand || ('品牌' + (i+1))) + '</div>';
-      html += '<div style="font-size:12px;color:var(--text-secondary)">当前 ' + (v.stock || 0) + unit + '</div>';
+      if (isInUse) {
+        html += '<div style="font-size:12px;color:var(--orange)">使用中 · 跳过盘点 ' + packHint + '</div>';
+      } else {
+        html += '<div style="font-size:12px;color:var(--text-secondary)">当前 ' + (v.stock || 0) + unit + ' ' + packHint + '</div>';
+      }
       html += '</div>';
-      html += '<input type="number" class="form-input audit-variant-stock" data-idx="' + i + '" value="' + (v.stock || 0) + '" min="0" step="0.5" style="width:90px;text-align:center;font-size:16px;font-weight:600;flex-shrink:0" oninput="updateAuditTotal()">';
+      if (isInUse) {
+        html += '<div style="font-size:12px;color:var(--text-tertiary);flex-shrink:0">—</div>';
+      } else {
+        html += '<input type="number" class="form-input audit-variant-stock" data-idx="' + i + '" data-recorded="' + (v.stock || 0) + '" value="' + (v.stock || 0) + '" min="0" step="0.5" style="width:90px;text-align:center;font-size:16px;font-weight:600;flex-shrink:0" oninput="updateAuditTotal()">';
+      }
       html += '</div>';
     });
     html += '</div>';
-    html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;margin-bottom:12px;border-top:1px solid var(--separator)">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;margin-bottom:8px;border-top:1px solid var(--separator)">';
     html += '<span style="font-size:14px;font-weight:700">实际总数</span>';
     html += '<span style="font-size:18px;font-weight:700;color:var(--primary)" id="audit-total" data-unit="' + unit + '">' + currentStock + unit + '</span>';
     html += '</div>';
+    html += '<div id="audit-diff" style="font-size:13px;margin-bottom:12px"></div>';
   } else {
     html += '<div class="form-group"><label class="form-label">实际数量（清点实物）</label>';
     html += '<input type="number" class="form-input" id="audit-stock" value="' + currentStock + '" min="0" step="0.5" style="font-size:24px;text-align:center;font-weight:700"></div>';
@@ -4145,14 +4323,26 @@ function openStockAuditForm(itemId) {
 
 function updateAuditTotal() {
   var inputs = document.querySelectorAll('.audit-variant-stock');
-  var total = 0;
+  var total = 0, recorded = 0;
   inputs.forEach(function(el) {
     total += parseFloat(el.value) || 0;
+    recorded += parseFloat(el.getAttribute('data-recorded')) || 0;
   });
   var totalEl = document.getElementById('audit-total');
   if (totalEl) {
     var unit = totalEl.getAttribute('data-unit') || '个';
     totalEl.textContent = total + unit;
+  }
+  var diffEl = document.getElementById('audit-diff');
+  if (diffEl) {
+    var diff = Math.round((recorded - total) * 100) / 100;
+    if (Math.abs(diff) >= 0.5) {
+      diffEl.innerHTML = '⚠️ 与系统记录差 ' + (diff > 0 ? '+' : '') + diff + (totalEl ? totalEl.getAttribute('data-unit') : '个') + '（保存将按实际校正，你可再微调）';
+      diffEl.style.color = 'var(--red)';
+    } else {
+      diffEl.textContent = '与系统记录一致 ✓';
+      diffEl.style.color = 'var(--green)';
+    }
   }
 }
 
@@ -4160,21 +4350,21 @@ function saveStockAudit(itemId) {
   var item = getItem(currentZoneId, itemId);
   if (!item) return;
   var variants = item.variants && item.variants.length > 0 ? item.variants : [];
-  var recorded = getTotalStock(item);
+  var recorded = 0;
+  (item.variants || []).forEach(function(v) { if (!(item.consumeMode === 'pack' && v.opened && !v.usedUp)) recorded += (v.stock || 0); });
   var actual = 0;
 
   if (variants.length > 0) {
-    var newStocks = [];
-    var hasInvalid = false;
+    var ok = true;
     variants.forEach(function(v, i) {
       var input = document.querySelector('.audit-variant-stock[data-idx="' + i + '"]');
-      var val = parseFloat(input ? input.value : NaN);
-      if (isNaN(val) || val < 0) { hasInvalid = true; val = 0; }
-      newStocks.push(val);
+      if (!input) return; // 使用中跳过盘点，保留原 stock
+      var val = parseFloat(input.value);
+      if (isNaN(val) || val < 0) { toast('请输入有效数量'); ok = false; return; }
+      v.stock = val;
       actual += val;
     });
-    if (hasInvalid) { toast('请输入有效数量'); return; }
-    variants.forEach(function(v, i) { v.stock = newStocks[i]; });
+    if (!ok) return;
   } else {
     var input = document.getElementById('audit-stock');
     actual = parseFloat(input ? input.value : NaN);
@@ -4771,9 +4961,11 @@ function doWin(t) {
         var v = null;
         (item.variants || []).forEach(function (vv) { if (vv.id === plan.sourceVariantId) v = vv; });
         if (v) {
-          v.stock = (v.stock || 0) + qty;
-          if (d.totalSpec > 0) { v.specQty = d.totalSpec; v.specUnit = plan.unit || v.specUnit; }
-          if (plan.amount > 0) { v.price = plan.amount; v.totalPrice = totalPrice; }
+          var vPackQty = v.packQty || 1;
+          v.stock = (v.stock || 0) + qty * vPackQty;
+          v.packCount = (v.packCount || 0) + qty;
+          if (plan.comboPrice > 0) v.packPrice = plan.comboPrice;
+          if (plan.amount > 0) { v.price = v.stock > 0 ? Math.round((totalPrice / v.stock) * 100) / 100 : plan.amount; v.totalPrice = totalPrice; }
           if (plan.photos && plan.photos.length) v.photos = plan.photos.slice();
           if (!item.variants) item.variants = [];
           item.currentPrice = item.variants.reduce(function (s, x) { return s + (x.totalPrice || ((x.price || 0) * (x.stock || 0))); }, 0);
@@ -4787,10 +4979,16 @@ function doWin(t) {
       var item2 = findItemByIdGlobal(plan.sourceItemId);
       if (item2) {
         if (!item2.variants) item2.variants = [];
+        var isW = /kg|公斤|千克|千克/i.test(plan.unit || '');
+        var nvSpec = plan.spec || 1;
+        var nvPackQty = isW ? 1 : nvSpec;
+        var nvPackWeight = isW ? (nvSpec || 0) : 0;
+        var nvStock = qty * nvPackQty;
         var nv = {
-          id: genId(), brand: plan.name || '新品牌', stock: qty, price: plan.amount || 0,
-          totalPrice: totalPrice, specQty: d.totalSpec || 0, specUnit: plan.unit || '',
-          photos: (plan.photos || []).slice(), notes: (plan.note || '')
+          id: genId(), brand: plan.name || '新品牌',
+          packCount: qty, packPrice: plan.comboPrice || 0, packQty: nvPackQty, packUnit: (isW ? '份' : (plan.unit || '个')), packWeight: nvPackWeight,
+          stock: nvStock, price: nvStock > 0 ? Math.round((totalPrice / nvStock) * 100) / 100 : (plan.amount || 0), totalPrice: totalPrice,
+          photos: (plan.photos || []).slice(), notes: (plan.note || ''), opened: false, usedUp: false, openQty: 0, feeling: null, shelfLife: null, productionDate: null
         };
         item2.variants.push(nv);
         item2.currentPrice = item2.variants.reduce(function (s, x) { return s + (x.totalPrice || ((x.price || 0) * (x.stock || 0))); }, 0);
@@ -4805,9 +5003,15 @@ function doWin(t) {
       var unit = plan.unit || (zone.type === 'durable' ? '件' : '个');
       var note3 = (t.note || '');
       if (d.totalSpec > 0) note3 += (note3 ? '\n' : '') + '规格总量：' + trimNum(d.totalSpec) + ' ' + unit;
+      var isW3 = /kg|公斤|千克|千克/i.test(unit || '');
+      var spec3 = plan.spec || 1;
+      var packQty3 = isW3 ? 1 : spec3;
+      var packWeight3 = isW3 ? (spec3 || 0) : 0;
+      var stock3 = qty * packQty3;
       var newItem = {
         id: genId(), name: plan.name || t.name, categoryId: t.categoryId || null,
-        stock: qty, unit: unit, currentPrice: plan.amount || 0,
+        consumeMode: 'pack', packCount: qty, packPrice: plan.comboPrice || 0, packQty: packQty3, packUnit: (isW3 ? '份' : unit), packWeight: packWeight3,
+        stock: stock3, unit: unit, currentPrice: plan.amount || 0,
         channel: '', location: '', notes: note3,
         photos: (plan.photos ? plan.photos.slice() : []),
         usageRecords: [], priceHistory: [], createdAt: new Date().toISOString()
@@ -5078,7 +5282,7 @@ function taskRefAdd() {
     item.variants.forEach(function (v) {
       taskState.formPlans.push({
         id: planNextId(), name: v.brand || '未命名', amount: Math.round((+v.price || 0) * 100) / 100, note: '', status: 'open', pinned: false,
-        comboPrice: 0, qty: 0, spec: Math.round((+v.specQty || 0) * 100) / 100, unit: (v.specUnit || ''), photos: (v.photos || []).slice(), buy: true, sourceItemId: item.id, sourceVariantId: v.id, _calcOpen: false
+        comboPrice: 0, qty: 0, spec: Math.round((+v.packQty || 1) * 100) / 100, unit: (v.packUnit || ''), photos: (v.photos || []).slice(), buy: true, sourceItemId: item.id, sourceVariantId: v.id, _calcOpen: false
       });
     });
   } else {
@@ -5423,7 +5627,12 @@ function showAlertDetail(type) {
       } else if (type === 'expiring') {
         html += '<div style="font-size:13px;color:var(--orange);font-weight:600;margin-top:2px">⏰ 还剩 ' + status.daysLeft + ' 天过期</div>';
       } else if (type === 'lowStock') {
-        html += '<div style="font-size:13px;color:var(--orange);font-weight:600;margin-top:2px">📦 库存仅剩 ' + it.stock + (it.unit||'') + '（告急阈值' + (it.stockThreshold||1) + '）</div>';
+        var lowPack = '';
+        if (it.consumeMode === 'pack' && it.variants && it.variants.length && (it.variants[0].packQty || 1) > 1) {
+          var totS = getTotalStock(it);
+          lowPack = '（约 ' + Math.floor(totS / Math.max(1, it.variants[0].packQty)) + ' 套）';
+        }
+        html += '<div style="font-size:13px;color:var(--orange);font-weight:600;margin-top:2px">📦 库存仅剩 ' + getTotalStock(it) + (it.unit||'') + lowPack + '（告急阈值' + (it.stockThreshold||1) + '）</div>';
       } else if (type === 'lowStockSoft') {
         var est = status.estDaysLeft;
         html += '<div style="font-size:13px;color:var(--blue);font-weight:600;margin-top:2px">⏳ 预计 ' + (est!==null?est:'?') + ' 天内用完</div>';
