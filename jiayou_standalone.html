@@ -565,6 +565,38 @@ body {
 .status-pending { background: rgba(255,149,0,0.15); color: var(--orange); }
 .status-decided { background: rgba(0,122,255,0.15); color: var(--accent); }
 .status-given-up { background: rgba(142,142,147,0.15); color: var(--text-secondary); }
+.status-win { background: rgba(255,179,0,0.18); color: #B8860B; }
+
+/* ========== 任务委托 ========== */
+.task-tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+.task-tab { flex: 1; text-align: center; padding: 9px 4px; border-radius: 10px; font-size: 13px; font-weight: 700; color: var(--text-secondary); background: var(--bg); border: 1.5px solid transparent; cursor: pointer; transition: transform .12s; }
+.task-tab:active { transform: scale(0.96); }
+.task-banner { border-radius: 12px; padding: 12px 14px; font-size: 14px; font-weight: 700; color: #fff; margin-bottom: 14px; line-height: 1.4; }
+.task-banner.orange { background: linear-gradient(135deg,#FF9500,#FFB340); }
+.task-banner.green { background: linear-gradient(135deg,#34C759,#5AD680); }
+.task-toolbar { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; }
+.task-tool-btn { padding: 7px 12px; border-radius: 10px; background: var(--bg); border: 1.5px solid var(--separator); font-size: 13px; font-weight: 600; color: var(--text); cursor: pointer; }
+.task-tool-btn.on { border-color: var(--accent); color: var(--accent); }
+.task-tool-btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.task-toolbar .spacer { flex: 1; }
+.task-search-row { margin-bottom: 12px; }
+.task-back { max-height: 0; overflow: hidden; transition: max-height .3s ease; }
+.task-card.flipped .task-back { max-height: 3000px; }
+.task-back-inner { padding-top: 10px; margin-top: 10px; border-top: 1px dashed var(--separator); }
+.task-plan-row { display: flex; gap: 8px; align-items: flex-start; padding: 8px; background: var(--bg); border-radius: 8px; margin-bottom: 8px; }
+.task-plan-row .pp-name { font-weight: 600; font-size: 14px; }
+.task-calc-label { font-size: 12px; color: var(--accent); margin-bottom: 8px; cursor: pointer; }
+.task-check { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--separator); flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 14px; color: #fff; cursor: pointer; }
+.task-card.selon { border: 2px solid var(--accent); }
+.task-card.selon .task-check { background: var(--accent); border-color: var(--accent); }
+.task-selbar { position: sticky; bottom: 0; display: flex; gap: 8px; align-items: center; padding: 12px; background: var(--card-bg); border-top: 1.5px solid var(--separator); border-radius: 14px 14px 0 0; box-shadow: 0 -4px 12px rgba(0,0,0,0.06); margin-top: 10px; }
+.task-selbar .spacer { flex: 1; }
+.task-catfilter { display: flex; gap: 6px; margin-bottom: 14px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; padding: 2px 0; }
+.task-catfilter::-webkit-scrollbar { display: none; }
+.task-catpill { flex-shrink: 0; padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 600; color: var(--text-secondary); background: var(--bg); border: 1.5px solid var(--separator); cursor: pointer; white-space: nowrap; }
+.task-catpill.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.task-plan-row .pp-buy { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 6px; background: rgba(52,199,89,0.12); color: var(--green); margin-left: 4px; }
+.task-plan-row .pp-buy.off { background: rgba(142,142,147,0.12); color: var(--text-tertiary); }
 
 /* ========== 开封按钮 ========== */
 .open-btn {
@@ -745,11 +777,11 @@ body {
   <div id="zone-content"></div>
 </div>
 
-<!-- ========== 目标锁定页 ========== -->
+<!-- ========== 任务委托页 ========== -->
 <div class="navbar" id="nav-pool" style="display:none;">
-  <h1>🎯 目标锁定</h1>
+  <h1>📋 任务委托</h1>
   <div class="nav-actions">
-    <button class="nav-btn" onclick="openPoolForm()">＋</button>
+    <button class="nav-btn" onclick="taskOpenForm()">＋</button>
   </div>
 </div>
 
@@ -774,8 +806,8 @@ body {
     <span class="tab-label">总览</span>
   </div>
   <div class="tabbar-item" data-tab="pool" onclick="showPage('pool')">
-    <span class="tab-icon">🎯</span>
-    <span class="tab-label">目标锁定</span>
+    <span class="tab-icon">📋</span>
+    <span class="tab-label">任务委托</span>
   </div>
   <div class="tabbar-item" data-tab="settings" onclick="showPage('settings')">
     <span class="tab-icon">⚙</span>
@@ -1183,8 +1215,7 @@ function manualSync() {
 // ========== 数据层 ==========
 var DB = {
   zones: [],
-  pool: [],
-  poolHistory: [],
+  tasks: [],
   settings: {},
   version: 1
 };
@@ -1343,9 +1374,63 @@ function mergeDB(defaults, loaded) {
   var result = Object.assign({}, defaults, loaded);
   if (!result.settings) result.settings = defaults.settings;
   if (!result.zones) result.zones = [];
-  if (!result.pool) result.pool = [];
-  if (!result.poolHistory) result.poolHistory = [];
+  if (!result.tasks) result.tasks = [];
+  // 旧版「目标锁定」数据迁移为「任务委托」
+  if (result.pool && !result.tasks.length) {
+    migratePoolToTasks(result);
+  }
   return result;
+}
+
+// 旧 pool/poolHistory → 新 tasks（四态：待接/进行中/凯旋/搁置）
+function migratePoolToTasks(db) {
+  if (!db.pool) return;
+  var used = {};
+  (db.tasks || []).forEach(function (t) { used[t.id] = true; });
+  function nid() { var x = 1; while (used[x]) x++; used[x] = true; return x; }
+  function npid() { var x = 1; while (used['p' + x]) x++; used['p' + x] = true; return x; }
+  var arr = [];
+  (db.pool || []).forEach(function (p) { arr.push(legacyPoolToTask(p, false, nid, npid)); });
+  (db.poolHistory || []).forEach(function (p) { arr.push(legacyPoolToTask(p, true, nid, npid)); });
+  db.tasks = arr;
+  delete db.pool;
+  delete db.poolHistory;
+}
+
+function legacyPoolToTask(p, isHistory, nid, npid) {
+  var status = isHistory ? '搁置' : (p.status === 'pending' ? '待接' : (p.status === 'decided' ? '进行中' : '搁置'));
+  var plans = (p.variants || []).map(function (v) {
+    var price = Math.round((+v.price || 0) * 100) / 100;
+    return {
+      id: npid(),
+      name: v.brand || '未命名',
+      amount: price,
+      note: (v.reason || '') + '',
+      status: 'open',
+      pinned: false,
+      comboPrice: price,
+      qty: 1,
+      spec: Math.round((+v.specQty || 0) * 100) / 100,
+      unit: (v.specUnit || '') + '',
+      photos: (v.photos || []).slice()
+    };
+  });
+  var lockedPlanId = (status === '进行中' && plans.length) ? plans[0].id : null;
+  if (status === '进行中' && plans[0]) plans[0].status = 'done';
+  var createdAt = p.date ? String(p.date).slice(0, 10) : new Date().toISOString().slice(0, 10);
+  return {
+    id: nid(),
+    name: p.name || '未命名',
+    status: status,
+    createdAt: createdAt,
+    note: (p.notes || '') + '',
+    lockedPlanId: lockedPlanId,
+    plans: plans,
+    zoneId: p.zoneId || null,
+    categoryId: p.categoryId || null,
+    photos: (p.photos || []).slice(),
+    date: p.date || new Date().toISOString()
+  };
 }
 
 function genId() {
@@ -1465,7 +1550,7 @@ function showPage(page) {
 
   if (page === 'home') renderHome();
   else if (page === 'zone') renderZone();
-  else if (page === 'pool') renderPool();
+  else if (page === 'pool') renderTasks();
   else if (page === 'settings') renderSettings();
 
   window.scrollTo(0, 0);
@@ -1630,6 +1715,9 @@ function renderHome() {
     html += '<div class="badge-label">一切正常</div></div>';
   }
   html += '</div>';
+
+  // 去任务委托规划补货
+  html += '<div style="margin-bottom:14px"><button class="btn btn-outline btn-sm" style="width:100%" onclick="showPage(\'pool\')">📋 去「任务委托」规划补货</button></div>';
 
   // === 板块入口 ===
   html += '<div class="section-title">领地分布<div class="section-action" onclick="openZoneManager()">管理</div></div>';
@@ -2023,6 +2111,9 @@ function renderZone() {
   }
 
   // 物品网格
+  if (currentCategoryId !== 'all') {
+    html += '<div style="margin:10px 0 14px"><button class="btn btn-outline btn-sm" style="width:100%" onclick="taskOpenFormFromCategory(\'' + currentZoneId + '\',\'' + currentCategoryId + '\')">📋 委托补货（引用本分类产品）</button></div>';
+  }
   var items = getItemsByCategory(currentZoneId, currentCategoryId);
   if (items.length === 0) {
     html += '<div class="empty-state">';
@@ -2729,8 +2820,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791036978 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791036978';
+// deploy.py 部署时会把 1791216121 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791216121';
 
 function checkAppUpdate(manual) {
   try {
@@ -4322,469 +4413,740 @@ function deleteZone(zoneId) {
   toast('已删除');
 }
 
-// ========== 目标锁定 ==========
-function renderPool() {
-  var html = '';
-  var activePool = DB.pool.filter(function(p) { return p.status !== 'given-up'; });
-  var givenUp = DB.poolHistory || [];
+// ========== 任务委托（原「目标锁定」完全重写） ==========
+var taskState = { tab: '待接', searchOpen: false, search: '', sel: null, formPlans: [], batchIds: [], catFilter: null };
 
-  // 统计
-  html += '<div class="alert-strip">';
-  html += '<div class="alert-badge alert-yellow"><div class="badge-num">' + DB.pool.filter(function(p){return p.status==='pending';}).length + '</div><div class="badge-label">目标冻结</div></div>';
-  html += '<div class="alert-badge alert-blue"><div class="badge-num">' + DB.pool.filter(function(p){return p.status==='decided';}).length + '</div><div class="badge-label">目标锁定</div></div>';
-  html += '<div class="alert-badge alert-gray"><div class="badge-num">' + givenUp.length + '</div><div class="badge-label">目标解除</div></div>';
+var TASK_TABS = [
+  { key: '待接',   color: '#007AFF', label: '委托待接' },
+  { key: '进行中', color: '#5856D8', label: '任务进行' },
+  { key: '凯旋',   color: '#FFB300', label: '任务凯旋' },
+  { key: '搁置',   color: '#FF9500', label: '任务搁置' }
+];
+
+function taskHaptic() { try { if (navigator.vibrate) navigator.vibrate(12); } catch (e) {} }
+function escTask(s) { return escapeHtml(s); }
+function trimNum(n) { var x = +n || 0; return (Math.round(x * 100) / 100).toString(); }
+function fmtMoney(n) { var v = Math.round((+n || 0) * 100) / 100; return '¥' + v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+
+function taskById(id) { var s = String(id); for (var i = 0; i < DB.tasks.length; i++) { if (String(DB.tasks[i].id) === s) return DB.tasks[i]; } return null; }
+function taskNextId() { var m = 0; DB.tasks.forEach(function (t) { if (t.id > m) m = t.id; }); return m + 1; }
+function planNextId() { var m = 0; DB.tasks.forEach(function (t) { (t.plans || []).forEach(function (p) { if (p.id > m) m = p.id; }); }); return m + 1; }
+function findPlan(t, pid) { if (!t.plans) return null; var s = String(pid); for (var i = 0; i < t.plans.length; i++) { if (String(t.plans[i].id) === s) return t.plans[i]; } return null; }
+function cheapestPlan(t) { var best = null; (t.plans || []).forEach(function (p) { var a = +p.amount || 0; if (a > 0 && (!best || a < best.amount)) best = p; }); return best; }
+
+function planDerived(p) {
+  var amount = +p.amount || 0;
+  var qty = (+p.qty > 0) ? +p.qty : 1;
+  var spec = +p.spec || 0;
+  var comboPrice = (+p.comboPrice > 0) ? +p.comboPrice : (qty > 0 ? amount / qty : amount);
+  var totalSpec = spec * qty;
+  var unitPrice = totalSpec > 0 ? amount / totalSpec : 0;
+  return { amount: amount, qty: qty, spec: spec, comboPrice: comboPrice, totalSpec: totalSpec, unitPrice: unitPrice };
+}
+function planMin(t) { var m = Infinity; (t.plans || []).forEach(function (p) { var a = +p.amount || 0; if (a > 0 && a < m) m = a; }); return m === Infinity ? 0 : m; }
+function planMax(t) { var m = 0; (t.plans || []).forEach(function (p) { var a = +p.amount || 0; if (a > m) m = a; }); return m; }
+function planWeightStr(p) { var d = planDerived(p); return d.totalSpec > 0 ? ('📦 ' + trimNum(d.totalSpec) + (p.unit ? ' ' + p.unit : '')) : ''; }
+function taskWeightStr(t) {
+  if (t.status === '进行中' || t.status === '凯旋') {
+    var arr = []; (t.plans || []).forEach(function (p) { if (p.buy !== false) { var d = planDerived(p); if (d.totalSpec > 0) arr.push(d.totalSpec); } });
+    if (arr.length === 0) return '';
+    var mn = Math.min.apply(null, arr), mx = Math.max.apply(null, arr);
+    if (mn === mx) return '📦 ' + trimNum(mn) + ' ' + ((t.plans[0] && t.plans[0].unit) || '');
+    return '📦 ' + trimNum(mn) + '~' + trimNum(mx) + ' ' + ((t.plans[0] && t.plans[0].unit) || '');
+  }
+  var arr2 = []; (t.plans || []).forEach(function (p) { var d = planDerived(p); if (d.totalSpec > 0) arr2.push(d.totalSpec); });
+  if (arr2.length === 0) return '';
+  var mn2 = Math.min.apply(null, arr2), mx2 = Math.max.apply(null, arr2);
+  if (mn2 === mx2) return '📦 ' + trimNum(mn2) + ' ' + ((t.plans[0] && t.plans[0].unit) || '');
+  return '📦 ' + trimNum(mn2) + '~' + trimNum(mx2) + ' ' + ((t.plans[0] && t.plans[0].unit) || '');
+}
+function taskAbandonAmt(t) {
+  if (t.status === '搁置') return planMin(t);
+  if (t.status === '凯旋') { var s = 0; (t.plans || []).forEach(function (p) { if (p.buy !== false) s += (+p.amount || 0); }); return s; }
+  return 0;
+}
+function sortPlans(t) { return (t.plans || []).slice().sort(function (a, b) { if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1; return (a.id || 0) - (b.id || 0); }); }
+function taskMatch(t, q) { q = (q || '').toLowerCase(); if (!q) return true; if ((t.name || '').toLowerCase().indexOf(q) >= 0) return true; return (t.plans || []).some(function (p) { return (p.name || '').toLowerCase().indexOf(q) >= 0; }); }
+function taskPriceLabel(t) { var mn = planMin(t), mx = planMax(t); if (mn === mx) return '💰 价格 ' + fmtMoney(mn); return '💰 价格区间 ' + fmtMoney(mn) + ' ~ ' + fmtMoney(mx); }
+
+// ---------- 渲染入口 ----------
+function renderTasks() {
+  var s = taskState;
+  var html = '';
+
+  // 标签页
+  html += '<div class="task-tabs">';
+  TASK_TABS.forEach(function (tb) {
+    var on = s.tab === tb.key;
+    html += '<div class="task-tab' + (on ? ' on' : '') + '" style="' + (on ? 'background:' + tb.color + ';border-color:' + tb.color : '') + '" onclick="taskSwitchTab(\'' + tb.key + '\')">' + tb.label + '</div>';
+  });
   html += '</div>';
 
-  html += '<div class="section-title">想入手的东西<div class="section-action" onclick="openPoolForm()">＋ 添加</div></div>';
+  // 分类筛选胶囊条（复用领地 + 两级分类，避免列表混乱）
+  var combos = {};
+  var hasUncategorized = false;
+  DB.tasks.forEach(function (t) {
+    if (t.zoneId && t.categoryId) {
+      var k = t.zoneId + '|' + t.categoryId;
+      if (!combos[k]) {
+        var z = getZone(t.zoneId); var cp = getCategoryPath(t.zoneId, t.categoryId);
+        combos[k] = { key: k, icon: z ? z.icon : '', name: z ? z.name : '', path: cp };
+      }
+    } else { hasUncategorized = true; }
+  });
+  html += '<div class="task-catfilter">';
+  html += '<div class="task-catpill' + (!s.catFilter ? ' on' : '') + '" onclick="taskSetCat(null)">全部</div>';
+  Object.keys(combos).forEach(function (k) {
+    var c = combos[k];
+    var on = s.catFilter === k;
+    html += '<div class="task-catpill' + (on ? ' on' : '') + '" onclick="taskSetCat(\'' + k + '\')">' + (c.icon ? c.icon + ' ' : '') + escTask(c.name) + (c.path ? ' · ' + escTask(c.path) : '') + '</div>';
+  });
+  if (hasUncategorized) html += '<div class="task-catpill' + (s.catFilter === 'uc' ? ' on' : '') + '" onclick="taskSetCat(\'uc\')">未归类</div>';
+  html += '</div>';
 
-  if (activePool.length === 0) {
-    html += '<div class="empty-state"><div class="empty-icon">🎯</div><div class="empty-text">目标锁定是空的<br>想买什么先放这里考虑一下</div></div>';
-  } else {
-    activePool.forEach(function(p) {
-      html += renderPoolItem(p);
-    });
+  // 战报条（按规范：仅待接/搁置，进行中/凯旋不显示，避免干扰主线）
+  if (s.tab === '待接') {
+    var need = 0, cnt = 0;
+    DB.tasks.forEach(function (t) { if (t.status === '待接') { need += planMin(t); cnt++; } });
+    html += '<div class="task-banner orange">解锁本区域全部目标，需消耗金币总额：' + fmtMoney(need) + '（' + cnt + ' 项）</div>';
+  } else if (s.tab === '搁置') {
+    var saved = 0, sc = 0;
+    DB.tasks.forEach(function (t) { if (t.status === '搁置') { saved += planMin(t); sc++; } });
+    html += '<div class="task-banner green">成功抵御欲望侵蚀，回收 ' + fmtMoney(saved) + ' 金币！（' + sc + ' 项）</div>';
   }
 
-  if (givenUp.length > 0) {
-    html += '<div class="section-title">目标解除记录</div>';
-    givenUp.slice(-10).forEach(function(p) {
-      html += '<div class="pool-item" style="opacity:0.6">';
-      html += '<div class="pool-header"><div><div class="pool-name">' + escapeHtml(p.name) + '</div>';
-      html += '<div class="pool-meta">¥' + parseFloat((p.price||0)).toFixed(2) + ' · ' + formatDate(p.date) + '解除</div></div>';
-      html += '<span class="pool-status status-given-up">已解除</span></div>';
-      html += '</div>';
-    });
+  // 工具栏
+  html += '<div class="task-toolbar">';
+  html += '<button class="task-tool-btn" onclick="taskToggleSearch()">🔍 搜索</button>';
+  html += '<button class="task-tool-btn' + (s.sel ? ' on' : '') + '" onclick="taskToggleSel()">' + (s.sel ? '✓ 退出多选' : '☑️ 多选') + '</button>';
+  if (s.tab === '待接') html += '<button class="task-tool-btn primary" style="margin-left:auto" onclick="taskOpenForm()">＋ 新增委托</button>';
+  else if (s.tab === '凯旋' || s.tab === '搁置') html += '<button class="task-tool-btn" style="margin-left:auto" onclick="taskClearModal()">🔄 重置</button>';
+  else html += '<span class="spacer"></span>';
+  html += '</div>';
+
+  // 搜索框
+  if (s.searchOpen) {
+    html += '<div class="task-search-row"><input type="text" class="form-input" id="task-search-input" placeholder="搜委托名或方案名…" value="' + escTask(s.search) + '" oninput="taskOnSearch(this.value)"></div>';
+  }
+
+  // 列表
+  var list = DB.tasks.filter(function (t) { return t.status === s.tab; });
+  if (s.catFilter === 'uc') list = list.filter(function (t) { return !(t.zoneId && t.categoryId); });
+  else if (s.catFilter) list = list.filter(function (t) { return (t.zoneId + '|' + t.categoryId) === s.catFilter; });
+  if (s.search) list = list.filter(function (t) { return taskMatch(t, s.search); });
+  if (list.length === 0) {
+    html += '<div class="empty-state"><div class="empty-icon">📋</div><div class="empty-text">这里还没有委托<br>点击右上角「＋ 新增委托」开始登记</div></div>';
+  } else {
+    list.forEach(function (t) { html += taskCard(t); });
+  }
+
+  // 多选操作条
+  if (s.sel) {
+    html += '<div class="task-selbar">';
+    var allSel = list.length > 0 && list.every(function (t) { return s.sel.has(t.id); });
+    html += '<button class="task-tool-btn" onclick="taskSelAll()">' + (allSel ? '取消全选' : '全选') + '</button>';
+    html += '<span class="spacer"></span>';
+    html += '<span style="font-size:13px;color:var(--text-secondary)">已选 ' + s.sel.size + '</span>';
+    if (s.tab === '待接') {
+      html += '<button class="btn btn-primary btn-sm" onclick="taskBatchStrike()">⚔️ 出击</button>';
+      html += '<button class="btn btn-outline btn-sm" onclick="taskBatchAbandon()">🚫 放弃</button>';
+    } else if (s.tab === '进行中') {
+      html += '<button class="btn btn-success btn-sm" onclick="taskBatchWin()">🏆 凯旋</button>';
+      html += '<button class="btn btn-outline btn-sm" onclick="taskBatchAbandon()">🚫 放弃</button>';
+    } else {
+      html += '<button class="btn btn-primary btn-sm" onclick="taskBatchRestart()">🔁 重启</button>';
+    }
+    html += '<button class="btn btn-danger btn-sm" onclick="taskBatchDestroy()">🗑️ 删除</button>';
+    html += '</div>';
   }
 
   document.getElementById('pool-content').innerHTML = html;
 }
 
-function renderPoolItem(p) {
-  var html = '<div class="pool-item">';
+// ---------- 卡片 ----------
+function taskCard(t) {
+  var s = taskState;
+  var selMode = !!s.sel;
+  var selected = selMode && s.sel.has(t.id);
+  var html = '<div class="pool-item task-card' + (selected ? ' selon' : '') + '" data-task-id="' + t.id + '" onclick="taskCardTap(\'' + t.id + '\')">';
+
+  // 头部：标题 + 状态标签
   html += '<div class="pool-header">';
-  html += '<div><div class="pool-name">' + escapeHtml(p.name) + '</div>';
+  if (selMode) {
+    html += '<div class="task-check" onclick="event.stopPropagation();taskSelToggle(\'' + t.id + '\')">' + (selected ? '✓' : '') + '</div>';
+  }
+  var title = escTask(t.name);
+  if (t.status === '进行中') { var buyCnt = (t.plans || []).filter(function (p) { return p.buy !== false; }).length; if (buyCnt > 0) title += '（采购 ' + buyCnt + ' 项）'; }
+  html += '<div style="flex:1;min-width:0"><div class="pool-name">' + title + '</div>';
   var meta = '';
-  if (p.zoneId) {
-    var zone = getZone(p.zoneId);
-    if (zone) meta += zone.icon + ' ' + zone.name;
-  }
-  if (p.categoryId) {
-    var catPath = getCategoryPath(p.zoneId, p.categoryId);
-    if (catPath) meta += ' · ' + catPath;
-  }
-  if (p.date) meta += ' · ' + formatDate(p.date);
-  html += '<div class="pool-meta">' + meta + '</div></div>';
-  html += '<div class="pool-price">¥' + parseFloat((p.price||0)).toFixed(2) + '</div>';
+  if (t.zoneId) { var zone = getZone(t.zoneId); if (zone) meta += zone.icon + ' ' + zone.name; }
+  if (t.categoryId) { var cp = getCategoryPath(t.zoneId, t.categoryId); if (cp) meta += ' · ' + cp; }
+  if (t.createdAt) meta += ' · ' + t.createdAt;
+  if (meta) html += '<div class="pool-meta">' + meta + '</div>';
+  html += '</div>';
+  var stCls = t.status === '待接' ? 'status-pending' : (t.status === '进行中' ? 'status-decided' : (t.status === '凯旋' ? 'status-win' : 'status-given-up'));
+  var stTxt = t.status === '待接' ? '待接' : (t.status === '进行中' ? '进行中' : (t.status === '凯旋' ? '凯旋' : '搁置'));
+  html += '<span class="pool-status ' + stCls + '">' + stTxt + '</span>';
   html += '</div>';
 
-  html += '<div style="margin-top:4px"><span class="pool-status status-' + (p.status==='pending'?'pending':'decided') + '">' + (p.status==='pending'?'目标冻结':'目标锁定') + '</span></div>';
-
-  // 品牌变体显示（每行：照片+品牌+价格+规格+单价+材质+理由）
-  if (p.variants && p.variants.length > 0) {
-    // 先算单价用于排序和高亮
-    var comparable = p.variants.filter(function(v) { return v.price > 0 && v.specQty > 0 && v.specUnit; });
-    var bestByUnit = {};
-    if (comparable.length >= 2) {
-      var groups = {};
-      comparable.forEach(function(v) {
-        var u = v.specUnit;
-        if (!groups[u]) groups[u] = [];
-        groups[u].push(v);
-      });
-      Object.keys(groups).forEach(function(u) {
-        var arr = groups[u];
-        if (arr.length >= 2) {
-          arr.forEach(function(v) { v._up = v.price / v.specQty; });
-          arr.sort(function(a,b){ return a._up - b._up; });
-          bestByUnit[u] = arr[0].id;
-        }
-      });
-    }
-    html += '<div style="margin-top:10px">';
-    p.variants.forEach(function(v) {
-      var isBest = false;
-      if (v.specUnit && bestByUnit[v.specUnit] === v.id) isBest = true;
-      var unitPrice = (v.price > 0 && v.specQty > 0) ? (v.price / v.specQty) : null;
-      html += '<div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:8px;padding:6px;background:var(--bg);border-radius:8px' + (isBest ? ';border:1.5px solid var(--success)' : '') + '">';
-      // 照片
-      if (v.photos && v.photos.length > 0) {
-        html += '<img src="' + v.photos[0] + '" style="width:54px;height:54px;border-radius:8px;object-fit:cover;flex-shrink:0">';
-      } else {
-        html += '<div style="width:54px;height:54px;border-radius:8px;background:var(--separator);flex-shrink:0;display:flex;align-items:center;justify-content:center;color:var(--text-tertiary);font-size:20px">📷</div>';
-      }
-      html += '<div style="flex:1;min-width:0">';
-      html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;flex-wrap:wrap">';
-      html += '<span style="font-weight:600;font-size:14px">' + escapeHtml(v.brand||'?') + '</span>';
-      if (v.price) html += '<span style="font-size:13px;color:var(--accent)">¥' + parseFloat(v.price).toFixed(2) + '</span>';
-      if (v.specQty && v.specUnit) html += '<span style="font-size:12px;color:var(--text-secondary)">' + v.specQty + escapeHtml(v.specUnit) + '</span>';
-      if (isBest) html += '<span style="font-size:11px;color:#fff;background:var(--success);padding:1px 6px;border-radius:10px">最划算</span>';
-      html += '</div>';
-      if (unitPrice !== null) {
-        html += '<div style="font-size:12px;color:var(--text-secondary)">单价 ¥' + unitPrice.toFixed(4) + '/' + escapeHtml(v.specUnit) + '</div>';
-      }
-      if (v.material) {
-        html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:2px">材质：' + escapeHtml(v.material) + '</div>';
-      }
-      if (v.reason) {
-        html += '<div style="font-size:12px;color:var(--text-secondary);line-height:1.5;white-space:pre-wrap;margin-top:2px">' + escapeHtml(v.reason) + '</div>';
-      }
-      html += '</div>';
-      html += '</div>';
-    });
-    html += '</div>';
-
-    // 对比建议结论
-    if (comparable.length >= 2 && Object.keys(bestByUnit).length > 0) {
-      html += '<div style="margin-top:4px;padding:8px 10px;background:rgba(76,175,80,0.1);border-radius:8px;font-size:13px;color:var(--success);line-height:1.5">';
-      Object.keys(bestByUnit).forEach(function(u) {
-        var bestV = p.variants.find(function(v){ return v.id === bestByUnit[u]; });
-        if (bestV) {
-          html += '💡 每' + escapeHtml(u) + '最划算：<b>' + escapeHtml(bestV.brand||'?') + '</b>（¥' + (bestV.price/bestV.specQty).toFixed(4) + '/' + escapeHtml(u) + '）<br>';
-        }
-      });
-      html += '</div>';
-    }
+  // 价格 / 重量行
+  if (t.status === '进行中' || t.status === '凯旋') {
+    var lpw = taskWeightStr(t);
+    var lpAmt = t.lockedPlanId ? findPlan(t, t.lockedPlanId) : null;
+    html += '<div style="font-size:13px;color:var(--text-secondary);margin-top:2px">💰 赏金 ' + (lpAmt ? fmtMoney(lpAmt.amount) : '') + (lpw ? ' · ' + lpw : '') + '</div>';
+  } else if (t.status === '搁置') {
+    html += '<div style="font-size:13px;color:var(--text-secondary);margin-top:2px">💰 放下省下 ' + fmtMoney(planMin(t)) + '</div>';
+  } else {
+    var w = taskWeightStr(t);
+    html += '<div style="font-size:13px;color:var(--text-secondary);margin-top:2px">' + taskPriceLabel(t) + (w ? ' · ' + w : '') + '</div>';
   }
 
-  if (p.notes) {
-    html += '<div style="font-size:13px;color:var(--text-secondary);margin-top:6px">' + escapeHtml(p.notes) + '</div>';
-  }
+  // 备注
+  if (t.note) html += '<div class="pool-meta" style="margin-top:6px;color:var(--text-secondary)">' + escTask(t.note) + '</div>';
 
-  // 库存对比提醒
-  if (p.zoneId && p.categoryId) {
-    var zone = getZone(p.zoneId);
-    if (zone) {
-      var existing = zone.items.filter(function(it) { return it.categoryId === p.categoryId; });
-      if (existing.length > 0) {
-        if (zone.type === 'durable') {
-          html += '<div class="pool-warn">⚠️ 你已经有 ' + existing.length + ' 件同类物品了，确定要买吗？</div>';
-        } else {
-          var totalStock = existing.reduce(function(s,it){return s+(it.stock||0);},0);
-          html += '<div class="pool-warn">⚠️ 同类已有 ' + totalStock + '件库存</div>';
-        }
-      } else {
-        html += '<div class="pool-ok">✓ 同类暂无库存，可以买</div>';
-      }
-    }
-  }
+  // 同类库存提醒（保留特色）
+  html += taskStockWarn(t);
 
-  if (p.photos && p.photos.length > 0) {
+  // 任务级照片（旧数据迁移带过来的）
+  if (t.photos && t.photos.length) {
     html += '<div style="display:flex;gap:6px;margin-top:8px;overflow-x:auto;scrollbar-width:none">';
-    p.photos.forEach(function(ph) {
-      html += '<img src="' + ph + '" style="width:60px;height:60px;border-radius:8px;object-fit:cover;flex-shrink:0">';
-    });
+    t.photos.forEach(function (ph) { html += '<img src="' + ph + '" style="width:54px;height:54px;border-radius:8px;object-fit:cover;flex-shrink:0">'; });
     html += '</div>';
+  }
+
+  // 翻面提示
+  if (!selMode && t.plans && t.plans.length > 0) {
+    html += '<div style="margin-top:8px;font-size:12px;color:var(--accent)">👆 点卡片翻面看 ' + t.plans.length + ' 个备选方案</div>';
   }
 
   // 操作按钮
-  html += '<div class="pool-actions">';
-  if (p.status === 'pending') {
-    html += '<button class="btn btn-primary btn-sm" style="flex:1" onclick="poolDecide(\'' + p.id + '\')">🎯 锁定目标</button>';
-  }
-  html += '<button class="btn btn-success btn-sm" style="flex:1" onclick="poolToItem(\'' + p.id + '\')">📦 已入手</button>';
-  html += '<button class="btn btn-outline btn-sm" onclick="poolGiveUp(\'' + p.id + '\')">解除</button>';
-  html += '<button class="btn btn-outline btn-sm" onclick="poolDelete(\'' + p.id + '\')">删</button>';
-  html += '</div>';
+  html += '<div class="pool-actions">' + taskActionButtons(t) + '</div>';
+
+  // 背面：备选方案
+  html += '<div class="task-back"><div class="task-back-inner">';
+  html += '<div style="font-size:13px;font-weight:700;margin-bottom:8px">📋 备选方案</div>';
+  sortPlans(t).forEach(function (p) {
+    var mark = '';
+    if (t.status === '凯旋') mark = (p.buy !== false) ? '✅ 已执行' : '—';
+    else if (t.status === '进行中') mark = (p.buy !== false) ? '⚔️ 采购中' : '—';
+    else mark = '🟢 待选';
+    var d = planDerived(p);
+    var line = fmtMoney(p.amount);
+    var ws = planWeightStr(p); if (ws) line += ' · ' + ws;
+    if (d.unitPrice > 0) line += ' · ≈' + fmtMoney(d.unitPrice) + '/' + (p.unit || '');
+    if (p.note) line += ' · ' + escTask(p.note);
+    html += '<div class="task-plan-row">';
+    if (p.photos && p.photos.length) html += '<img src="' + p.photos[0] + '" style="width:46px;height:46px;border-radius:8px;object-fit:cover;flex-shrink:0">';
+    else html += '<div style="width:46px;height:46px;border-radius:8px;background:var(--separator);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:18px">📷</div>';
+    html += '<div style="flex:1;min-width:0"><div class="pp-name">' + escTask(p.name || '未命名') + ' <span style="font-size:11px;font-weight:600;color:var(--text-secondary)">' + mark + '</span>' + ((p.buy !== false) ? '<span class="pp-buy">本次购买✓</span>' : '<span class="pp-buy off">不采购</span>') + (p.sourceVariantId ? ' <span style="font-size:11px;color:var(--accent)">↩库存</span>' : (p.sourceItemId ? ' <span style="font-size:11px;color:var(--accent)">↩新品</span>' : '')) + '</div>';
+    html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:2px">' + line + '</div></div>';
+    html += '</div>';
+  });
+  html += '</div></div>';
 
   html += '</div>';
   return html;
 }
 
-var poolPhotos = []; // 保留兼容，新版每个品牌独立照片
-function openPoolForm() {
-  window._poolVariants = [{ id: genId(), brand: '', price: 0, photos: [], reason: '', specQty: '', specUnit: '', material: '' }];
-  var html = '<div class="modal-handle"></div>';
-  html += '<div class="modal-title">添加到目标锁定</div>';
+function taskStockWarn(t) {
+  if (!t.zoneId || !t.categoryId) return '';
+  var zone = getZone(t.zoneId); if (!zone) return '';
+  var existing = zone.items.filter(function (it) { return it.categoryId === t.categoryId; });
+  if (existing.length > 0) {
+    if (zone.type === 'durable') return '<div class="pool-warn">⚠️ 你已经有 ' + existing.length + ' 件同类物品了，确定要买吗？</div>';
+    var totalStock = existing.reduce(function (s, it) { return s + (it.stock || 0); }, 0);
+    return '<div class="pool-warn">⚠️ 同类已有 ' + totalStock + ' 件库存</div>';
+  }
+  return '<div class="pool-ok">✓ 同类暂无库存，可以买</div>';
+}
 
-  html += '<div class="form-group"><label class="form-label">名称</label>';
-  html += '<input type="text" class="form-input" id="pool-name" placeholder="想买的东西（如：面霜）"></div>';
+function taskActionButtons(t) {
+  var h = '';
+  if (t.status === '待接') {
+    h += '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation();taskEdit(\'' + t.id + '\')">✎ 编辑</button>';
+    h += '<button class="btn btn-primary btn-sm" style="flex:1" onclick="event.stopPropagation();taskStrike(\'' + t.id + '\')">⚔️ 出击</button>';
+    h += '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation();taskAbandon(\'' + t.id + '\')">放弃</button>';
+    h += '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation();taskDestroy(\'' + t.id + '\')">🗑️</button>';
+  } else if (t.status === '进行中') {
+    h += '<button class="btn btn-success btn-sm" style="flex:1" onclick="event.stopPropagation();taskWin(\'' + t.id + '\')">🏆 凯旋</button>';
+    h += '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation();taskAbandon(\'' + t.id + '\')">放弃</button>';
+    h += '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation();taskDestroy(\'' + t.id + '\')">🗑️</button>';
+  } else {
+    h += '<button class="btn btn-primary btn-sm" style="flex:1" onclick="event.stopPropagation();taskRestart(\'' + t.id + '\')">🔁 重启</button>';
+    h += '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation();taskDestroy(\'' + t.id + '\')">🗑️ 删除</button>';
+  }
+  return h;
+}
 
-  html += '<div class="form-group"><label class="form-label">想买的品牌（可多个，自动对比单价）</label>';
-  html += '<div id="pool-variant-list">';
-  html += renderPoolVariantRows();
-  html += '</div>';
-  html += '<button class="btn btn-outline btn-sm" style="margin-top:4px;width:100%" onclick="addPoolVariantRow()">＋ 添加品牌</button>';
-  html += '</div>';
+function taskCardTap(id) {
+  var n = Number(id);
+  var s = taskState;
+  if (s.sel) { taskSelToggle(n); return; }
+  var card = document.querySelector('.task-card[data-task-id="' + n + '"]');
+  if (card) card.classList.toggle('flipped');
+  taskHaptic();
+}
 
-  // 实时对比预览区
-  html += '<div class="form-group" id="pool-compare-preview" style="display:none"><label class="form-label">📊 实时对比</label>';
-  html += '<div id="pool-compare-content" style="font-size:13px;color:var(--text-secondary);background:var(--bg);border-radius:var(--radius-sm);padding:10px"></div>';
-  html += '</div>';
+// ---------- 标签 / 搜索 / 多选 ----------
+function taskSwitchTab(key) { taskState.tab = key; taskState.sel = null; taskState.searchOpen = false; taskState.search = ''; taskState.catFilter = null; renderTasks(); taskHaptic(); }
+function taskSetCat(k) { taskState.catFilter = k; renderTasks(); taskHaptic(); }
+function taskToggleSearch() { taskState.searchOpen = !taskState.searchOpen; if (!taskState.searchOpen) taskState.search = ''; renderTasks(); }
+function taskOnSearch(v) {
+  taskState.search = v;
+  renderTasks();
+  var inp = document.getElementById('task-search-input');
+  if (inp) { inp.focus(); var len = inp.value.length; try { inp.setSelectionRange(len, len); } catch (e) {} }
+}
+function taskToggleSel() { taskState.sel = taskState.sel ? null : new Set(); renderTasks(); }
+function taskSelToggle(id) {
+  var n = Number(id);
+  if (!taskState.sel) return;
+  if (taskState.sel.has(n)) taskState.sel.delete(n); else taskState.sel.add(n);
+  var card = document.querySelector('.task-card[data-task-id="' + n + '"]');
+  if (card) card.classList.toggle('selon', taskState.sel.has(n));
+}
+function taskSelAll() {
+  var s = taskState; if (!s.sel) return;
+  var list = DB.tasks.filter(function (t) { return t.status === s.tab; });
+  if (s.search) list = list.filter(function (t) { return taskMatch(t, s.search); });
+  var allSel = list.length > 0 && list.every(function (t) { return s.sel.has(t.id); });
+  list.forEach(function (t) { if (allSel) s.sel.delete(t.id); else s.sel.add(t.id); });
+  renderTasks();
+}
 
-  html += '<div class="form-group"><label class="form-label">归类到领地</label>';
-  html += '<select class="form-select" id="pool-zone" onchange="updatePoolCategories()"><option value="">不归类</option>';
-  DB.zones.forEach(function(z) {
-    html += '<option value="' + z.id + '">' + z.icon + ' ' + escapeHtml(z.name) + '</option>';
+// ---------- 单条操作 ----------
+function taskStrike(id) {
+  var t = taskById(id); if (!t) return;
+  if (!t.plans || t.plans.length === 0) { toast('先添加备选方案'); return; }
+  var buys = (t.plans || []).filter(function (p) { return p.buy !== false; });
+  if (buys.length === 0) { toast('请先在方案上勾选「本次购买」'); return; }
+  if (buys.length === 1) {
+    t.status = '进行中';
+    buys.forEach(function (p) { p.status = 'purchasing'; });
+    saveDB(); renderTasks(); toast('⚔️ 已出击'); return;
+  }
+  var html = '<div class="modal-handle"></div><div class="modal-title">确认出击采购</div>';
+  html += '<div style="font-size:13px;color:var(--text-secondary);margin-bottom:8px">' + escTask(t.name) + ' · 本次将采购以下 ' + buys.length + ' 项：</div>';
+  var totalAmt = 0;
+  buys.forEach(function (p) {
+    var d = planDerived(p); totalAmt += (+p.amount || 0);
+    html += '<div style="display:flex;gap:8px;align-items:center;padding:10px;background:var(--bg);border-radius:8px;margin-bottom:8px"><div style="flex:1"><div style="font-weight:600">' + escTask(p.name || '未命名') + '</div><div style="font-size:12px;color:var(--text-secondary)">' + fmtMoney(p.amount) + (d.unitPrice > 0 ? '（≈' + fmtMoney(d.unitPrice) + '/' + (p.unit || '') + '）' : '') + '</div></div></div>';
   });
-  html += '</select></div>';
-
-  html += '<div class="form-group" id="pool-cat-group" style="display:none"><label class="form-label">分类</label>';
-  html += '<select class="form-select" id="pool-category"></select></div>';
-
-  html += '<button class="btn btn-primary btn-full" onclick="savePoolItem()">加入目标锁定</button>';
-
+  html += '<div style="font-size:13px;font-weight:700;margin:8px 0">合计 ' + fmtMoney(totalAmt) + '</div>';
+  html += '<button class="btn btn-primary btn-full" onclick="confirmStrike(\'' + id + '\')">确认出击</button>';
   document.getElementById('modal-content').innerHTML = html;
   document.getElementById('modal-overlay').classList.add('show');
-  updatePoolComparePreview();
+}
+function confirmStrike(id) {
+  var t = taskById(id); if (!t) return;
+  var buys = (t.plans || []).filter(function (p) { return p.buy !== false; });
+  t.status = '进行中';
+  buys.forEach(function (p) { p.status = 'purchasing'; });
+  closeModal(); saveDB(); renderTasks(); toast('⚔️ 已出击');
 }
 
-function renderPoolVariantRows() {
-  var html = '';
-  (window._poolVariants || []).forEach(function(v, i) {
-    html += '<div class="pool-variant-row" style="border:1px solid var(--separator);border-radius:var(--radius-sm);padding:10px;margin-bottom:8px;background:var(--bg)">';
-    // 顶部：照片 + 品牌名 + 价格 + 删除
-    html += '<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">';
-    html += '<div class="pool-photo-cell" data-pool-variant-idx="' + i + '" onclick="uploadPoolVariantPhoto(' + i + ')" style="flex-shrink:0;width:54px;height:54px;border:2px dashed var(--separator);border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;font-size:22px;color:var(--text-tertiary);cursor:pointer;overflow:hidden;background:var(--card-bg)">';
-    if (v.photos && v.photos.length > 0) {
-      html += '<img src="' + v.photos[0] + '" style="width:100%;height:100%;object-fit:cover">';
+function findItemByIdGlobal(itemId) {
+  for (var zi = 0; zi < DB.zones.length; zi++) {
+    var z = DB.zones[zi];
+    for (var ii = 0; ii < (z.items || []).length; ii++) {
+      if (z.items[ii].id === itemId) return z.items[ii];
+    }
+  }
+  return null;
+}
+
+// 凯旋：按勾选的「本次购买」方案逐条回写库存
+function doWin(t) {
+  var buys = (t.plans || []).filter(function (p) { return p.buy !== false; });
+  if (buys.length === 0) return false;
+  var anyOk = false;
+  buys.forEach(function (plan) {
+    var d = planDerived(plan);
+    var qty = d.qty > 0 ? d.qty : 1;
+    var totalPrice = Math.round((+plan.amount || 0) * 100) / 100;
+    if (plan.sourceVariantId && plan.sourceItemId) {
+      // ① 已有品牌：直接给原物品变体加库存
+      var item = findItemByIdGlobal(plan.sourceItemId);
+      if (item) {
+        var v = null;
+        (item.variants || []).forEach(function (vv) { if (vv.id === plan.sourceVariantId) v = vv; });
+        if (v) {
+          v.stock = (v.stock || 0) + qty;
+          if (d.totalSpec > 0) { v.specQty = d.totalSpec; v.specUnit = plan.unit || v.specUnit; }
+          if (plan.amount > 0) { v.price = plan.amount; v.totalPrice = totalPrice; }
+          if (plan.photos && plan.photos.length) v.photos = plan.photos.slice();
+          if (!item.variants) item.variants = [];
+          item.currentPrice = item.variants.reduce(function (s, x) { return s + (x.totalPrice || ((x.price || 0) * (x.stock || 0))); }, 0);
+          if (!item.priceHistory) item.priceHistory = [];
+          item.priceHistory.push({ date: new Date().toISOString(), channel: '', quantity: qty, totalPrice: totalPrice, unitPrice: d.unitPrice || 0, notes: '任务委托·凯旋补货', brand: v.brand || '', attachments: (plan.photos || []).slice() });
+          anyOk = true;
+        }
+      }
+    } else if (plan.sourceItemId) {
+      // ② 引用产品 + 新品牌：在该物品下自动新建变体并加库存（无需手动再添加）
+      var item2 = findItemByIdGlobal(plan.sourceItemId);
+      if (item2) {
+        if (!item2.variants) item2.variants = [];
+        var nv = {
+          id: genId(), brand: plan.name || '新品牌', stock: qty, price: plan.amount || 0,
+          totalPrice: totalPrice, specQty: d.totalSpec || 0, specUnit: plan.unit || '',
+          photos: (plan.photos || []).slice(), notes: (plan.note || '')
+        };
+        item2.variants.push(nv);
+        item2.currentPrice = item2.variants.reduce(function (s, x) { return s + (x.totalPrice || ((x.price || 0) * (x.stock || 0))); }, 0);
+        if (!item2.priceHistory) item2.priceHistory = [];
+        item2.priceHistory.push({ date: new Date().toISOString(), channel: '', quantity: qty, totalPrice: totalPrice, unitPrice: d.unitPrice || 0, notes: '任务委托·凯旋补货', brand: nv.brand, attachments: (plan.photos || []).slice() });
+        anyOk = true;
+      }
     } else {
-      html += '📷';
+      // ③ 纯新：在绑定领地/分类下新建物品
+      if (!t.zoneId) return;
+      var zone = getZone(t.zoneId); if (!zone) return;
+      var unit = plan.unit || (zone.type === 'durable' ? '件' : '个');
+      var note3 = (t.note || '');
+      if (d.totalSpec > 0) note3 += (note3 ? '\n' : '') + '规格总量：' + trimNum(d.totalSpec) + ' ' + unit;
+      var newItem = {
+        id: genId(), name: plan.name || t.name, categoryId: t.categoryId || null,
+        stock: qty, unit: unit, currentPrice: plan.amount || 0,
+        channel: '', location: '', notes: note3,
+        photos: (plan.photos ? plan.photos.slice() : []),
+        usageRecords: [], priceHistory: [], createdAt: new Date().toISOString()
+      };
+      if (zone.type === 'consumable') { newItem.shelfLife = null; newItem.productionDate = null; newItem.stockThreshold = 1; }
+      zone.items.push(newItem);
+      plan.syncedItemId = newItem.id;
+      anyOk = true;
     }
-    html += '</div>';
-    html += '<input type="text" class="form-input" style="flex:2" placeholder="品牌名" value="' + escapeHtml(v.brand||'') + '" onchange="updatePoolVariant(' + i + ',\'brand\',this.value);updatePoolComparePreview()">';
-    html += '<input type="number" class="form-input" style="flex:1" placeholder="价格" value="' + (v.price||0) + '" onchange="updatePoolVariant(' + i + ',\'price\',parseFloat(this.value)||0);updatePoolComparePreview()">';
-    if (window._poolVariants.length > 1) {
-      html += '<button class="btn btn-danger btn-sm" style="flex-shrink:0;padding:6px 8px;font-size:12px" onclick="removePoolVariant(' + i + ')"' + (i >= window._poolVariants.length ? '' : '') + '>✕</button>';
+  });
+  t.status = '凯旋';
+  t.lockedPlanId = null;
+  (t.plans || []).forEach(function (p) { if (p.buy !== false) p.status = 'done'; });
+  return anyOk;
+}
+function taskWin(id) {
+  var t = taskById(id); if (!t) return;
+  var buys = (t.plans || []).filter(function (p) { return p.buy !== false; });
+  if (buys.length === 0) { toast('请先勾选「本次购买」方案'); return; }
+  var hasNew = buys.some(function (p) { return !p.sourceItemId; });
+  if (hasNew && !t.zoneId) { toast('纯新方案需先编辑选择归类领地'); return; }
+  if (doWin(t)) {
+    saveDB(); renderTasks();
+    toast('🏆 凯旋！库存已按勾选同步');
+  } else {
+    toast('凯旋失败，检查方案来源与领地');
+  }
+}
+function taskAbandon(id) {
+  var t = taskById(id); if (!t) return;
+  if (!(t.status === '待接' || t.status === '进行中')) { toast('该状态不能放弃'); return; }
+  if (!confirm('放弃这个委托？会转入「搁置」保留记录。')) return;
+  t.status = '搁置'; t.lockedPlanId = null; saveDB(); renderTasks(); toast('已转搁置');
+}
+function taskRestart(id) {
+  var t = taskById(id); if (!t) return;
+  t.status = '待接'; t.lockedPlanId = null;
+  (t.plans || []).forEach(function (p) { p.status = 'open'; p.syncedItemId = null; });
+  saveDB(); renderTasks(); toast('🔁 已重启');
+}
+function taskDestroy(id) {
+  if (!confirm('彻底删除？不留记录。')) return;
+  DB.tasks = DB.tasks.filter(function (t) { return t.id !== Number(id); });
+  if (taskState.sel) taskState.sel.delete(Number(id));
+  saveDB(); renderTasks(); toast('已删除');
+}
+
+// ---------- 批量操作 ----------
+function getSelTasks() { var s = taskState; if (!s.sel) return []; var arr = []; s.sel.forEach(function (id) { var t = taskById(id); if (t) arr.push(t); }); return arr; }
+function taskBatchStrike() {
+  var ts = getSelTasks().filter(function (t) { return t.status === '待接'; });
+  if (!ts.length) { toast('没有可出击的'); return; }
+  ts.forEach(function (t) {
+    var buys = (t.plans || []).filter(function (p) { return p.buy !== false; });
+    if (buys.length === 0) return;
+    buys.forEach(function (p) { p.status = 'purchasing'; });
+    t.status = '进行中';
+  });
+  afterBatch('⚔️ 批量出击完成');
+}
+function taskBatchWin() {
+  var ts = getSelTasks().filter(function (t) { return t.status === '进行中'; });
+  var ok = 0, skip = 0;
+  ts.forEach(function (t) { if (!t.zoneId) { skip++; return; } if (doWin(t)) ok++; else skip++; });
+  afterBatch('🏆 凯旋 ' + ok + ' 项' + (skip ? ('，' + skip + ' 项缺领地未同步') : ''));
+}
+function taskBatchAbandon() {
+  var ts = getSelTasks().filter(function (t) { return t.status === '待接' || t.status === '进行中'; });
+  if (!ts.length) { toast('没有可放弃的'); return; }
+  if (!confirm('将选中的 ' + ts.length + ' 项转入搁置？')) return;
+  ts.forEach(function (t) { t.status = '搁置'; t.lockedPlanId = null; });
+  afterBatch('已转搁置 ' + ts.length + ' 项');
+}
+function taskBatchRestart() {
+  var ts = getSelTasks().filter(function (t) { return t.status === '凯旋' || t.status === '搁置'; });
+  if (!ts.length) { toast('没有可重启的'); return; }
+  ts.forEach(function (t) { t.status = '待接'; t.lockedPlanId = null; (t.plans || []).forEach(function (p) { p.status = 'open'; p.syncedItemId = null; }); });
+  afterBatch('🔁 重启 ' + ts.length + ' 项');
+}
+function taskBatchDestroy() {
+  var ts = getSelTasks();
+  if (!ts.length) { toast('未选择'); return; }
+  if (!confirm('彻底删除选中的 ' + ts.length + ' 项？不可恢复。')) return;
+  var ids = {}; ts.forEach(function (t) { ids[t.id] = true; });
+  DB.tasks = DB.tasks.filter(function (t) { return !ids[t.id]; });
+  if (taskState.sel) taskState.sel.clear();
+  afterBatch('已删除 ' + ts.length + ' 项');
+}
+function afterBatch(msg) { saveDB(); renderTasks(); toast(msg); taskHaptic(); }
+
+// ---------- 一键清零 ----------
+function taskClearModal() {
+  var clr = DB.tasks.filter(function (t) { return t.status === '凯旋' || t.status === '搁置'; });
+  if (clr.length === 0) { toast('没有可清理的委托'); return; }
+  var html = '<div class="modal-handle"></div><div class="modal-title">一键清零</div>';
+  html += '<div style="font-size:13px;color:var(--text-secondary);margin:8px 0">勾选「保留蓝图」的会移回「委托待接」可复购；未勾选的彻底删除。</div>';
+  clr.forEach(function (t) {
+    html += '<label style="display:flex;gap:8px;align-items:center;padding:10px;background:var(--bg);border-radius:8px;margin-bottom:8px;cursor:pointer">';
+    html += '<input type="checkbox" class="clr-keep" value="' + t.id + '">';
+    html += '<div><div style="font-weight:600">' + escTask(t.name) + '</div><div style="font-size:12px;color:var(--text-secondary)">' + (t.status === '凯旋' ? '🏆 凯旋' : '🟠 搁置') + ' · ' + fmtMoney(planMin(t)) + '</div></div>';
+    html += '</label>';
+  });
+  html += '<button class="btn btn-primary btn-full" onclick="doTaskClear()">执行清零</button>';
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('show');
+}
+function doTaskClear() {
+  var keep = {};
+  document.querySelectorAll('.clr-keep:checked').forEach(function (c) { keep[c.value] = true; });
+  var del = {};
+  DB.tasks.forEach(function (t) { if ((t.status === '凯旋' || t.status === '搁置') && !keep[t.id]) del[t.id] = true; });
+  DB.tasks.forEach(function (t) {
+    if ((t.status === '凯旋' || t.status === '搁置') && keep[t.id]) {
+      t.status = '待接'; t.lockedPlanId = null;
+      (t.plans || []).forEach(function (p) { p.status = 'open'; p.syncedItemId = null; });
     }
+  });
+  DB.tasks = DB.tasks.filter(function (t) { return !del[t.id]; });
+  closeModal(); saveDB(); renderTasks(); toast('清零完成');
+}
+
+// ---------- 新增 / 编辑表单 ----------
+function taskOpenForm(id) {
+  var editing = id ? taskById(id) : null;
+  taskState.formPlans = editing
+    ? (editing.plans || []).map(function (p) { return Object.assign({}, p); })
+    : [{ id: planNextId(), name: '', amount: 0, note: '', status: 'open', pinned: false, comboPrice: 0, qty: 0, spec: 0, unit: '', photos: [], buy: true, _calcOpen: false }];
+  var html = '<div class="modal-handle"></div>';
+  html += '<div class="modal-title">' + (editing ? '编辑委托' : '新增委托') + '</div>';
+  html += '<div class="form-group"><label class="form-label">名称</label><input type="text" class="form-input" id="task-name" maxlength="40" placeholder="如：面霜 / 洗牙 / 医美" value="' + escTask(editing ? editing.name : '') + '"></div>';
+  html += '<div class="form-group"><label class="form-label">创建日期</label><input type="date" class="form-input" id="task-date" value="' + (editing && editing.createdAt ? editing.createdAt : new Date().toISOString().slice(0, 10)) + '"></div>';
+  html += '<div class="form-group"><label class="form-label">整体备注（淘宝链接等）</label><textarea class="form-textarea" id="task-note" placeholder="情报链接、整体备注">' + (editing ? escTask(editing.note || '') : '') + '</textarea></div>';
+  // 从已有产品引用：避免重复手填品牌/规格
+  html += '<div class="form-group"><label class="form-label">📦 从已有产品引用（自动带入品牌/规格，省去手填）</label>';
+  html += '<div style="display:flex;gap:6px;margin-bottom:8px">';
+  html += '<select class="form-select" id="ref-zone" onchange="taskRefZone()"><option value="">选领地</option>';
+  DB.zones.forEach(function (z) { html += '<option value="' + z.id + '">' + z.icon + ' ' + escTask(z.name) + '</option>'; });
+  html += '</select>';
+  html += '<select class="form-select" id="ref-cat" onchange="taskRefCat()"><option value="">选分类</option></select>';
+  html += '<select class="form-select" id="ref-item"><option value="">选产品</option></select>';
+  html += '</div>';
+  html += '<button class="btn btn-outline btn-sm" style="width:100%;margin-bottom:2px" onclick="taskRefAdd()">＋ 引用该产品下的品牌</button>';
+  html += '</div>';
+  html += '<div class="form-group"><label class="form-label" id="task-range"></label><div id="task-plan-list">' + taskPlanRows() + '</div><button class="btn btn-outline btn-sm" style="width:100%;margin-top:4px" onclick="taskAddPlan()">＋ 添加备选方案</button></div>';
+  html += '<div class="form-group"><label class="form-label">绑定领地（凯旋后数量同步到此领地库存）</label><select class="form-select" id="task-zone" onchange="taskUpdateCategories()"><option value="">不绑定</option>';
+  DB.zones.forEach(function (z) { html += '<option value="' + z.id + '" ' + (editing && editing.zoneId === z.id ? 'selected' : '') + '>' + z.icon + ' ' + escTask(z.name) + '</option>'; });
+  html += '</select></div>';
+  html += '<div class="form-group" id="task-cat-group" style="display:' + (editing && editing.zoneId ? 'block' : 'none') + '"><label class="form-label">分类</label><select class="form-select" id="task-category"></select></div>';
+  html += '<button class="btn btn-primary btn-full" onclick="taskFormSave(\'' + (id || '') + '\')">' + (editing ? '保存修改' : '加入委托') + '</button>';
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('show');
+  if (editing && editing.zoneId) taskUpdateCategories();
+  taskUpdateRange();
+}
+function taskPlanRows() {
+  var html = '';
+  taskState.formPlans.forEach(function (p, i) {
+    html += '<div style="border:1px solid var(--separator);border-radius:var(--radius-sm);padding:10px;margin-bottom:8px;background:var(--bg)">';
+    html += '<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">';
+    html += '<div class="task-photo-cell" data-idx="' + i + '" onclick="taskUploadPlanPhoto(' + i + ')" style="flex-shrink:0;width:48px;height:48px;border:2px dashed var(--separator);border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;font-size:20px;color:var(--text-tertiary);cursor:pointer;overflow:hidden;background:var(--card-bg)">' + (p.photos && p.photos.length ? '<img src="' + p.photos[0] + '" style="width:100%;height:100%;object-fit:cover">' : '📷') + '</div>';
+    html += '<input type="text" class="form-input" style="flex:2" placeholder="方案名（如 A品牌替换装）" value="' + escTask(p.name || '') + '" onchange="taskPlanSet(' + i + ',\'name\',this.value)">';
+    html += '<input type="number" class="form-input" style="flex:1" placeholder="总价¥" value="' + (p.amount || 0) + '" id="task-plan-amount-' + i + '" onchange="taskFormPlanCalc(' + i + ',\'amount\',parseFloat(this.value)||0)">';
+    if (taskState.formPlans.length > 1) html += '<button class="btn btn-danger btn-sm" style="flex-shrink:0;padding:6px 8px" onclick="taskRemovePlan(' + i + ')">✕</button>';
     html += '</div>';
-    // 规格：数量+单位（用于算单价）
+    html += '<div class="form-group" style="margin-bottom:8px"><input type="text" class="form-input" placeholder="备注（链接、规格说明）" value="' + escTask(p.note || '') + '" onchange="taskPlanSet(' + i + ',\'note\',this.value)"></div>';
+    if (p.sourceVariantId) html += '<div style="font-size:12px;color:var(--accent);margin-bottom:6px">↩ 已关联库存变体（凯旋自动加库存）</div>';
+    else if (p.sourceItemId) html += '<div style="font-size:12px;color:var(--accent);margin-bottom:6px">↩ 已关联产品（凯旋自动建新变体）</div>';
+    html += '<label style="display:flex;gap:6px;align-items:center;font-size:13px;color:var(--text-secondary);margin-bottom:8px;cursor:pointer"><input type="checkbox" ' + (p.buy !== false ? 'checked' : '') + ' onchange="taskPlanSet(' + i + ',\'buy\',this.checked)"> 本次购买（凯旋时按勾选回写库存）</label>';
+    html += '<div class="task-calc-label" onclick="taskToggleCalc(' + i + ')">' + taskCalcLabel(p) + '</div>';
+    html += '<div id="task-calc-' + i + '" style="display:' + (p._calcOpen ? 'block' : 'none') + '">';
     html += '<div class="form-row" style="margin-bottom:8px">';
-    html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="number" class="form-input" style="font-size:14px" placeholder="规格数量（如100）" value="' + (v.specQty||'') + '" onchange="updatePoolVariant(' + i + ',\'specQty\',parseFloat(this.value)||0);updatePoolComparePreview()"></div>';
-    html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="text" class="form-input" style="font-size:14px" placeholder="单位（抽/ml/片）" value="' + escapeHtml(v.specUnit||'') + '" onchange="updatePoolVariant(' + i + ',\'specUnit\',this.value);updatePoolComparePreview()"></div>';
+    html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="number" class="form-input" placeholder="套餐价/份" value="' + (p.comboPrice || '') + '" onchange="taskFormPlanCalc(' + i + ',\'comboPrice\',parseFloat(this.value)||0)"></div>';
+    html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="number" class="form-input" placeholder="数量(份)" value="' + (p.qty || '') + '" onchange="taskFormPlanCalc(' + i + ',\'qty\',parseFloat(this.value)||0)"></div>';
     html += '</div>';
-    // 材质/关键参数
-    html += '<div class="form-group" style="margin-bottom:8px"><input type="text" class="form-input" style="font-size:14px" placeholder="材质/关键参数（如纯棉、水刺无纺布）" value="' + escapeHtml(v.material||'') + '" onchange="updatePoolVariant(' + i + ',\'material\',this.value)"></div>';
-    // 购买理由
-    html += '<div><label class="form-label" style="font-size:12px;margin-bottom:4px">购买理由 / 比较要点</label>';
-    html += '<textarea class="form-textarea" style="min-height:44px" placeholder="为什么想买？和其他品牌比哪里好？" onchange="updatePoolVariant(' + i + ',\'reason\',this.value)">' + escapeHtml(v.reason||'') + '</textarea>';
+    html += '<div class="form-row" style="margin-bottom:8px">';
+    html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="number" class="form-input" placeholder="每份规格" value="' + (p.spec || '') + '" onchange="taskFormPlanCalc(' + i + ',\'spec\',parseFloat(this.value)||0)"></div>';
+    html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="text" class="form-input" placeholder="单位(kg/ml)" value="' + escTask(p.unit || '') + '" onchange="taskFormPlanCalc(' + i + ',\'unit\',this.value)"></div>';
+    html += '</div>';
+    html += '<div id="task-plan-calc-' + i + '" style="font-size:12px;color:var(--text-secondary)">' + taskCalcOutHtml(p) + '</div>';
     html += '</div>';
     html += '</div>';
   });
   return html;
 }
-function updatePoolVariant(idx, field, val) {
-  if (window._poolVariants && window._poolVariants[idx]) window._poolVariants[idx][field] = val;
+function taskPlanSet(i, field, val) { if (taskState.formPlans[i]) taskState.formPlans[i][field] = val; }
+function taskAddPlan() { taskState.formPlans.push({ id: planNextId(), name: '', amount: 0, note: '', status: 'open', pinned: false, comboPrice: 0, qty: 0, spec: 0, unit: '', photos: [], buy: true, _calcOpen: false }); document.getElementById('task-plan-list').innerHTML = taskPlanRows(); taskUpdateRange(); }
+function taskRemovePlan(i) { taskState.formPlans.splice(i, 1); document.getElementById('task-plan-list').innerHTML = taskPlanRows(); taskUpdateRange(); }
+function taskToggleCalc(i) { if (taskState.formPlans[i]) { taskState.formPlans[i]._calcOpen = !taskState.formPlans[i]._calcOpen; var el = document.getElementById('task-calc-' + i); if (el) el.style.display = taskState.formPlans[i]._calcOpen ? 'block' : 'none'; } }
+function taskCalcLabel(p) { var d = planDerived(p); if (d.unitPrice > 0) return '🧮 ≈' + fmtMoney(d.unitPrice) + '/' + (p.unit || '') + ' · 点开调整'; return '🧮 规格对比（点开填）'; }
+function taskCalcOutHtml(p) { var d = planDerived(p); if (!(d.spec > 0)) return ''; return '📦 总重 ' + trimNum(d.totalSpec) + ' ' + (p.unit || '') + ' · ⚖️ 折算 ≈' + fmtMoney(d.unitPrice) + '/' + (p.unit || ''); }
+function taskFormPlanCalc(i, field, val) {
+  var p = taskState.formPlans[i]; if (!p) return;
+  p[field] = val;
+  var rawCombo = +p.comboPrice || 0, rawQty = +p.qty > 0 ? +p.qty : 0, rawAmt = +p.amount || 0;
+  if (field === 'comboPrice') { if (rawQty > 0) p.amount = Math.round(rawCombo * rawQty * 100) / 100; }
+  else if (field === 'qty') { if (rawCombo > 0) p.amount = Math.round(rawCombo * rawQty * 100) / 100; else if (rawAmt > 0 && rawQty > 0) p.comboPrice = Math.round(rawAmt / rawQty * 100) / 100; }
+  else if (field === 'amount') { if (rawQty > 0) p.comboPrice = Math.round(rawAmt / rawQty * 100) / 100; }
+  var amt = document.getElementById('task-plan-amount-' + i); if (amt) amt.value = p.amount;
+  var co = document.getElementById('task-plan-calc-' + i); if (co) co.innerHTML = taskCalcOutHtml(p);
+  var lbl = document.querySelector('[onclick="taskToggleCalc(' + i + ')"]'); if (lbl) lbl.innerHTML = taskCalcLabel(p);
+  taskUpdateRange();
 }
-function addPoolVariantRow() {
-  window._poolVariants.push({ id: genId(), brand: '', price: 0, photos: [], reason: '', specQty: '', specUnit: '', material: '' });
-  document.getElementById('pool-variant-list').innerHTML = renderPoolVariantRows();
-  updatePoolComparePreview();
+function taskUpdateRange() {
+  var el = document.getElementById('task-range'); if (!el) return;
+  var mn = Infinity, mx = 0;
+  taskState.formPlans.forEach(function (p) { var a = +p.amount || 0; if (a > 0) { if (a < mn) mn = a; if (a > mx) mx = a; } });
+  if (mn === Infinity) el.textContent = '💰 价格 —';
+  else if (mn === mx) el.textContent = '💰 价格 ' + fmtMoney(mn);
+  else el.textContent = '💰 价格区间 ' + fmtMoney(mn) + ' ~ ' + fmtMoney(mx);
 }
-function removePoolVariant(idx) {
-  window._poolVariants.splice(idx, 1);
-  document.getElementById('pool-variant-list').innerHTML = renderPoolVariantRows();
-  updatePoolComparePreview();
-}
-
-function uploadPoolVariantPhoto(idx) {
-  var input = document.getElementById('photo-input');
-  input.onchange = function(e) {
-    var files = e.target.files;
-    if (files && files[0]) {
-      compressImage(files[0], function(dataUrl) {
-        if (!window._poolVariants[idx].photos) window._poolVariants[idx].photos = [];
-        window._poolVariants[idx].photos = [dataUrl]; // 每个品牌只放一张主图
-        document.getElementById('pool-variant-list').innerHTML = renderPoolVariantRows();
-      });
-    }
-    input.value = '';
-  };
-  input.click();
-}
-
-// 实时对比预览：算单价，找最划算
-function updatePoolComparePreview() {
-  var vs = (window._poolVariants || []).filter(function(v) { return v.price > 0 && v.specQty > 0 && v.specUnit; });
-  var box = document.getElementById('pool-compare-preview');
-  var content = document.getElementById('pool-compare-content');
-  if (!box || !content) return;
-  if (vs.length < 2) { box.style.display = 'none'; return; }
-  box.style.display = 'block';
-  // 按单位分组对比（同单位才能比）
-  var groups = {};
-  vs.forEach(function(v) {
-    var u = v.specUnit || '?';
-    if (!groups[u]) groups[u] = [];
-    groups[u].push(v);
-  });
-  var html = '';
-  Object.keys(groups).forEach(function(u) {
-    var arr = groups[u];
-    if (arr.length < 2) return;
-    arr.forEach(function(v) {
-      v._unitPrice = v.price / v.specQty;
-    });
-    arr.sort(function(a, b) { return a._unitPrice - b._unitPrice; });
-    var best = arr[0];
-    html += '<div style="margin-bottom:6px"><b>每' + escapeHtml(u) + '：</b><br>';
-    arr.forEach(function(v) {
-      var mark = (v === best) ? ' <span style="color:var(--success);font-weight:600">✓ 最划算</span>' : '';
-      html += escapeHtml(v.brand||'?') + ' ¥' + v._unitPrice.toFixed(4) + '/' + escapeHtml(u) + mark + '<br>';
-    });
-    html += '</div>';
-  });
-  if (!html) {
-    html = '<div style="color:var(--text-tertiary)">填了规格数量+单位+价格后，这里会自动算单价并推荐最划算的</div>';
-  }
-  content.innerHTML = html;
-}
-
-function savePoolItem() {
-  var name = document.getElementById('pool-name').value.trim();
-  if (!name) { toast('请输入名称'); return; }
-  var zoneId = document.getElementById('pool-zone').value;
-  var poolVariants = window._poolVariants || [];
-  // 合并所有品牌照片作为顶层 photo 列表
-  var allPhotos = [];
-  poolVariants.forEach(function(v) { if (v.photos && v.photos.length) allPhotos = allPhotos.concat(v.photos); });
-  var item = {
-    id: genId(),
-    name: name,
-    price: poolVariants.length > 0 ? poolVariants[0].price : 0,
-    qty: poolVariants.length,
-    variants: poolVariants.map(function(v) {
-      return {
-        id: v.id,
-        brand: v.brand || '未命名',
-        price: v.price || 0,
-        photos: (v.photos || []).slice(),
-        reason: v.reason || '',
-        specQty: v.specQty || 0,
-        specUnit: v.specUnit || '',
-        material: v.material || ''
-      };
-    }),
-    zoneId: zoneId,
-    categoryId: zoneId ? document.getElementById('pool-category').value : null,
-    notes: '',
-    photos: allPhotos,
-    status: 'pending',
-    date: new Date().toISOString()
-  };
-  DB.pool.push(item);
-  saveDB();
-  closeModal();
-  renderPool();
-  toast('已加入目标锁定');
-}
-
-function uploadPoolPhoto() {
-  var input = document.getElementById('photo-input');
-  input.onchange = function(e) {
-    var files = e.target.files;
-    for (var i = 0; i < files.length && poolPhotos.length < 9; i++) {
-      compressImage(files[i], function(dataUrl) {
-        poolPhotos.push(dataUrl);
-        renderPoolPhotos();
-      });
-    }
-    input.value = '';
-  };
-  input.click();
-}
-
-function renderPoolPhotos() {
-  var container = document.getElementById('pool-photos');
-  var html = '';
-  poolPhotos.forEach(function(p, i) {
-    html += '<div class="photo-slot has-photo"><img src="' + p + '"><button class="remove-photo" onclick="removePoolPhoto(' + i + ')">✕</button></div>';
-  });
-  if (poolPhotos.length < 9) {
-    html += '<div class="photo-slot" onclick="uploadPoolPhoto()">📷</div>';
-  }
-  container.innerHTML = html;
-}
-
-function removePoolPhoto(idx) {
-  poolPhotos.splice(idx, 1);
-  renderPoolPhotos();
-}
-
-function updatePoolCategories() {
-  var zoneId = document.getElementById('pool-zone').value;
-  var group = document.getElementById('pool-cat-group');
-  var select = document.getElementById('pool-category');
+function taskUpdateCategories() {
+  var zoneId = document.getElementById('task-zone').value;
+  var group = document.getElementById('task-cat-group');
+  var sel = document.getElementById('task-category');
   if (!zoneId) { group.style.display = 'none'; return; }
   group.style.display = 'block';
-  var zone = getZone(zoneId);
-  select.innerHTML = '';
-  zone.categories.forEach(function(c) {
-    // 子分类显示为 "大类 · 子类"，大类显示为自身名称
-    var label = c.parentId ? getCategoryPath(zoneId, c.id) : c.name;
-    select.innerHTML += '<option value="' + c.id + '">' + escapeHtml(label) + '</option>';
+  var zone = getZone(zoneId); if (!zone) return;
+  sel.innerHTML = '';
+  zone.categories.forEach(function (c) { var label = c.parentId ? getCategoryPath(zoneId, c.id) : c.name; sel.innerHTML += '<option value="' + c.id + '">' + escTask(label) + '</option>'; });
+}
+function taskUploadPlanPhoto(i) {
+  var input = document.getElementById('photo-input');
+  input.onchange = function (e) {
+    var f = e.target.files;
+    if (f && f[0]) {
+      compressImage(f[0], function (d) {
+        if (!taskState.formPlans[i].photos) taskState.formPlans[i].photos = [];
+        taskState.formPlans[i].photos = [d];
+        var cell = document.querySelector('.task-photo-cell[data-idx="' + i + '"]');
+        if (cell) cell.innerHTML = '<img src="' + d + '" style="width:100%;height:100%;object-fit:cover">';
+      });
+    }
+    input.value = '';
+  };
+  input.click();
+}
+function taskRefZone() {
+  var zoneId = document.getElementById('ref-zone').value;
+  var catSel = document.getElementById('ref-cat'); if (!catSel) return;
+  catSel.innerHTML = '<option value="">选分类</option>';
+  var itemSel = document.getElementById('ref-item'); if (itemSel) itemSel.innerHTML = '<option value="">选产品</option>';
+  var zone = getZone(zoneId); if (!zone) return;
+  zone.categories.forEach(function (c) {
+    catSel.innerHTML += '<option value="' + c.id + '">' + escTask(c.name) + '</option>';
+    if (c.children) c.children.forEach(function (sub) { catSel.innerHTML += '<option value="' + sub.id + '">' + escTask(c.name + ' · ' + sub.name) + '</option>'; });
   });
 }
-
-function poolDecide(itemId) {
-  var item = DB.pool.find(function(p) { return p.id === itemId; });
-  if (item) { item.status = 'decided'; saveDB(); renderPool(); toast('已锁定目标'); }
+function taskRefCat() {
+  var zoneId = document.getElementById('ref-zone').value;
+  var catId = document.getElementById('ref-cat').value;
+  var itemSel = document.getElementById('ref-item'); if (!itemSel) return;
+  itemSel.innerHTML = '<option value="">选产品</option>';
+  var zone = getZone(zoneId); if (!zone) return;
+  zone.items.filter(function (it) { return !catId || it.categoryId === catId; }).forEach(function (it) {
+    itemSel.innerHTML += '<option value="' + it.id + '">' + escTask(it.name) + '</option>';
+  });
 }
-
-function poolGiveUp(itemId) {
-  if (!confirm('确定解除这个目标？会保留记录用于反思。')) return;
-  var idx = DB.pool.findIndex(function(p) { return p.id === itemId; });
-  if (idx >= 0) {
-    var item = DB.pool[idx];
-    item.status = 'given-up';
-    item.giveUpDate = new Date().toISOString();
-    if (!DB.poolHistory) DB.poolHistory = [];
-    DB.poolHistory.push(item);
-    DB.pool.splice(idx, 1);
-    saveDB();
-    renderPool();
-    toast('目标已解除（保留记录）');
+function taskRefAdd() {
+  var zoneId = document.getElementById('ref-zone') ? document.getElementById('ref-zone').value : '';
+  var itemId = document.getElementById('ref-item') ? document.getElementById('ref-item').value : '';
+  if (!itemId) { toast('请先选择要引用的产品'); return; }
+  var zone = getZone(zoneId); if (!zone) { toast('请选择领地'); return; }
+  var item = getItem(zoneId, itemId); if (!item) { toast('未找到产品'); return; }
+  var zSel = document.getElementById('task-zone'); if (zSel) { zSel.value = zoneId; taskUpdateCategories(); }
+  var cSel = document.getElementById('task-category'); if (cSel && item.categoryId) cSel.value = item.categoryId;
+  var nEl = document.getElementById('task-name'); if (nEl && !nEl.value.trim()) nEl.value = item.name;
+  if (item.variants && item.variants.length) {
+    item.variants.forEach(function (v) {
+      taskState.formPlans.push({
+        id: planNextId(), name: v.brand || '未命名', amount: Math.round((+v.price || 0) * 100) / 100, note: '', status: 'open', pinned: false,
+        comboPrice: 0, qty: 0, spec: Math.round((+v.specQty || 0) * 100) / 100, unit: (v.specUnit || ''), photos: (v.photos || []).slice(), buy: true, sourceItemId: item.id, sourceVariantId: v.id, _calcOpen: false
+      });
+    });
+  } else {
+    taskState.formPlans.push({
+      id: planNextId(), name: item.name || '未命名', amount: Math.round((+item.currentPrice || 0) * 100) / 100, note: '', status: 'open', pinned: false,
+      comboPrice: 0, qty: 0, spec: 0, unit: '', photos: (item.photos || []).slice(), buy: true, sourceItemId: item.id, sourceVariantId: null, _calcOpen: false
+    });
   }
+  document.getElementById('task-plan-list').innerHTML = taskPlanRows();
+  taskUpdateRange();
+  toast('已引用，请补填套餐数/每份价/每份重');
 }
-
-function poolDelete(itemId) {
-  if (!confirm('彻底删除？不留记录。')) return;
-  DB.pool = DB.pool.filter(function(p) { return p.id !== itemId; });
-  saveDB();
-  renderPool();
-  toast('已删除');
+function taskOpenFormFromCategory(zoneId, categoryId) {
+  taskOpenForm(null);
+  var zSel = document.getElementById('task-zone'); if (zSel) { zSel.value = zoneId; taskUpdateCategories(); }
+  var cSel = document.getElementById('task-category'); if (cSel && categoryId) cSel.value = categoryId;
+  var rz = document.getElementById('ref-zone'); if (rz) { rz.value = zoneId; taskRefZone(); }
+  var rc = document.getElementById('ref-cat'); if (rc && categoryId) { rc.value = categoryId; taskRefCat(); }
 }
-
-function poolToItem(itemId) {
-  var item = DB.pool.find(function(p) { return p.id === itemId; });
-  if (!item) return;
-  if (!item.zoneId) {
-    toast('请先编辑该物品，选择归类领地');
-    return;
+function taskFormSave(id) {
+  var name = document.getElementById('task-name').value.trim();
+  if (!name) { toast('请输入名称'); return; }
+  var plans = taskState.formPlans.filter(function (p) { return (p.name || '').trim() !== ''; }).map(function (p) {
+    return {
+      id: p.id,
+      name: (p.name || '').trim(),
+      amount: Math.round((+p.amount || 0) * 100) / 100,
+      note: (p.note || '').trim(),
+      status: p.status || 'open',
+      pinned: !!p.pinned,
+      buy: (p.buy !== false),
+      sourceItemId: p.sourceItemId || null,
+      sourceVariantId: p.sourceVariantId || null,
+      comboPrice: Math.round((+p.comboPrice || 0) * 100) / 100,
+      qty: (+p.qty > 0) ? +p.qty : 0,
+      spec: Math.round((+p.spec || 0) * 100) / 100,
+      unit: (p.unit || '').trim(),
+      photos: (p.photos || []).slice()
+    };
+  });
+  if (plans.length === 0) { toast('至少添加一个备选方案'); return; }
+  var zoneId = document.getElementById('task-zone').value || null;
+  var catId = zoneId ? document.getElementById('task-category').value : null;
+  if (id) {
+    var t = taskById(id);
+    if (t) {
+      t.name = name;
+      t.createdAt = document.getElementById('task-date').value;
+      t.note = document.getElementById('task-note').value.trim();
+      t.plans = plans;
+      t.zoneId = zoneId;
+      t.categoryId = catId;
+    }
+  } else {
+    DB.tasks.push({
+      id: taskNextId(), name: name, status: '待接',
+      createdAt: document.getElementById('task-date').value,
+      note: document.getElementById('task-note').value.trim(),
+      lockedPlanId: null, plans: plans,
+      zoneId: zoneId, categoryId: catId, photos: [],
+      date: new Date().toISOString()
+    });
   }
-  var zone = getZone(item.zoneId);
-  var newItem = {
-    id: genId(),
-    name: item.name,
-    categoryId: item.categoryId,
-    stock: item.qty || 1,
-    unit: '个',
-    currentPrice: item.price || 0,
-    channel: '',
-    location: '',
-    notes: item.notes || '',
-    photos: item.photos || [],
-    usageRecords: [],
-    priceHistory: item.price ? [{
-      date: new Date().toISOString(),
-      channel: '',
-      quantity: item.qty || 1,
-      totalPrice: (item.price||0) * (item.qty||1),
-      unitPrice: item.price || 0,
-      notes: '从目标锁定转入'
-    }] : [],
-    createdAt: new Date().toISOString()
-  };
-  if (zone.type === 'consumable') {
-    newItem.shelfLife = null;
-    newItem.productionDate = null;
-    newItem.stockThreshold = 1;
-  }
-  zone.items.push(newItem);
-  DB.pool = DB.pool.filter(function(p) { return p.id !== itemId; });
-  saveDB();
-  renderPool();
-  toast('已转入库存');
+  closeModal(); saveDB(); renderTasks(); toast(id ? '已保存' : '已加入委托');
 }
+function taskEdit(id) { taskOpenForm(id); }
+
+
 function renderSettings() {
   var html = '';
 
@@ -4830,8 +5192,9 @@ function renderSettings() {
   DB.zones.forEach(function(z) { totalItems += z.items.length; });
   html += '<div class="setting-row"><div class="setting-label">领地数</div><div class="setting-value">' + DB.zones.length + '</div></div>';
   html += '<div class="setting-row"><div class="setting-label">物品总数</div><div class="setting-value">' + totalItems + '</div></div>';
-  html += '<div class="setting-row"><div class="setting-label">目标锁定</div><div class="setting-value">' + DB.pool.length + '件</div></div>';
-  html += '<div class="setting-row"><div class="setting-label">放弃记录</div><div class="setting-value">' + (DB.poolHistory||[]).length + '件</div></div>';
+  html += '<div class="setting-row"><div class="setting-label">委托待接</div><div class="setting-value">' + DB.tasks.filter(function(t){return t.status==='待接';}).length + '件</div></div>';
+  html += '<div class="setting-row"><div class="setting-label">进行中</div><div class="setting-value">' + DB.tasks.filter(function(t){return t.status==='进行中';}).length + '件</div></div>';
+  html += '<div class="setting-row"><div class="setting-label">凯旋/搁置</div><div class="setting-value">' + DB.tasks.filter(function(t){return t.status==='凯旋'||t.status==='搁置';}).length + '件</div></div>';
   html += '</div>';
 
   // 版本与更新
@@ -4871,7 +5234,7 @@ function importJSON(file) {
       if (!data.zones) { toast('文件格式不对'); return; }
       // 先解析好数据，再确认导入（避免confirm在异步回调中的问题）
       var newDB = mergeDB({
-        zones: [], pool: [], poolHistory: [],
+        zones: [], tasks: [],
         settings: {},
         version: 1
       }, data);
