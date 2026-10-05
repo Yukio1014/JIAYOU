@@ -1873,20 +1873,19 @@ function getItemStatus(item) {
       if (totalStock <= threshold) status.lowStockSoft = true;
     }
   } else {
-    // 库存为 0
+    // 库存为 0：手头没有任何后备库存，无论是否使用中都应提示补货
     var hasOpenedInUse = variants.some(function(v) { return v.opened && !v.usedUp; });
     if (hasOpenedInUse) {
-      // 有使用中的变体：按消耗速率预估
+      // 有使用中的变体：按消耗速率预估剩余天数
       var openedEstDays = estimateOpenedDaysLeft(item, variants);
       status.estDaysLeft = openedEstDays;
-      if (openedEstDays !== null && openedEstDays <= 0) {
-        // 已超过预估使用周期，真正告急
-        status.lowStock = true;
-      } else if (openedEstDays !== null && openedEstDays <= 30) {
-        // 接近预估用完，温和提示
+      if (openedEstDays !== null && openedEstDays > 0) {
+        // 正在使用的那份还没用完，但用完就没库存了 → 温和提示补货（蓝）
         status.lowStockSoft = true;
+      } else {
+        // 已超过预估用完时间，或无法预估 → 真正告急（黄）
+        status.lowStock = true;
       }
-      // openedEstDays === null 或 > 30：不告急
     } else {
       // 没有使用中的变体，库存为 0，真正告急
       status.lowStock = true;
@@ -2286,6 +2285,50 @@ function renderItemCard(item, zone) {
   return html;
 }
 
+// ========== 使用记录编辑 ==========
+function openUsageEdit(itemId, idx) {
+  var item = findItemByIdGlobal(itemId);
+  if (!item || !item.usageRecords || !item.usageRecords[idx]) { toast('记录不存在'); return; }
+  var r = item.usageRecords[idx];
+  var fmt = function(s) { return s ? String(s).slice(0, 10) : ''; };
+  var html = '<div class="modal-handle"></div><div class="modal-title">✏️ 编辑使用记录</div>';
+  html += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px">' + escapeHtml(item.name) + ' · 可修正数量与日期（历史记录若按套餐误记，请按实际' + (item.unit || '个') + '数修正）</div>';
+  html += '<div class="form-group"><label class="form-label">消耗数量（' + (item.unit || '个') + '）</label><input type="number" class="form-input" id="ur-qty" step="0.01" min="0" value="' + (r.qty || 1) + '"></div>';
+  html += '<div class="form-group"><label class="form-label">开始日期</label><input type="date" class="form-input" id="ur-start" value="' + fmt(r.startDate) + '"></div>';
+  html += '<div class="form-group"><label class="form-label">结束日期（留空 = 使用中）</label><input type="date" class="form-input" id="ur-end" value="' + fmt(r.endDate) + '"></div>';
+  html += '<div style="display:flex;gap:10px;margin-top:14px">';
+  html += '<button class="btn btn-danger" style="flex:1" onclick="deleteUsageRecord(\'' + itemId + '\',' + idx + ')">🗑️ 删除</button>';
+  html += '<button class="btn btn-primary" style="flex:2" onclick="saveUsageEdit(\'' + itemId + '\',' + idx + ')">保存</button>';
+  html += '</div>';
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('show');
+}
+function saveUsageEdit(itemId, idx) {
+  var item = findItemByIdGlobal(itemId);
+  if (!item || !item.usageRecords || !item.usageRecords[idx]) { closeModal(); return; }
+  var r = item.usageRecords[idx];
+  var q = parseFloat(document.getElementById('ur-qty').value);
+  r.qty = (isNaN(q) || q <= 0) ? 1 : Math.round(q * 100) / 100;
+  var s = document.getElementById('ur-start').value;
+  var e = document.getElementById('ur-end').value;
+  if (s) r.startDate = s;
+  if (e) { r.endDate = e; }
+  else { delete r.endDate; }
+  saveDB();
+  closeModal();
+  if (currentDetailItem && currentDetailItem.id === item.id) renderCardBack(currentDetailItem, currentDetailZone);
+  toast('✅ 记录已更新');
+}
+function deleteUsageRecord(itemId, idx) {
+  var item = findItemByIdGlobal(itemId);
+  if (!item || !item.usageRecords || !item.usageRecords[idx]) { closeModal(); return; }
+  item.usageRecords.splice(idx, 1);
+  saveDB();
+  closeModal();
+  if (currentDetailItem && currentDetailItem.id === item.id) renderCardBack(currentDetailItem, currentDetailZone);
+  toast('🗑️ 记录已删除');
+}
+
 // ========== 卡片详情（翻面）==========
 var currentDetailItem = null;
 var currentDetailZone = null;
@@ -2527,14 +2570,20 @@ function renderCardBack(item, zone) {
         html += '<div class="back-row"><span class="back-label">年消耗量</span><span class="back-value">' + (rate*12).toFixed(1) + (item.unit||'') + '/年</span></div>';
       }
       html += '<div class="usage-log" style="margin-top:8px">';
-      item.usageRecords.slice().reverse().slice(0, 5).forEach(function(r) {
+      var shownRecs = item.usageRecords.map(function(r, oi) { return { r: r, oi: oi }; }).reverse().slice(0, 5);
+      shownRecs.forEach(function(w) {
+        var r = w.r;
         var startStr = r.startDate ? formatDate(r.startDate) : (r.date ? formatDate(r.date) : '');
+        var recTxt;
         if (r.endDate) {
           var days = daysBetween(new Date(r.startDate), new Date(r.endDate));
-          html += '<div class="open-record">📅 ' + startStr + ' → ' + formatDate(r.endDate) + ' · ' + days + '天 · ' + (r.qty||1) + (item.unit||'') + '</div>';
+          recTxt = '📅 ' + startStr + ' → ' + formatDate(r.endDate) + ' · ' + days + '天 · ' + (r.qty||1) + (item.unit||'');
         } else if (startStr) {
-          html += '<div class="open-record">📅 ' + startStr + ' · 使用中 · ' + (r.qty||1) + (item.unit||'') + '</div>';
+          recTxt = '📅 ' + startStr + ' · 使用中 · ' + (r.qty||1) + (item.unit||'');
+        } else {
+          recTxt = '📅 记录 · ' + (r.qty||1) + (item.unit||'');
         }
+        html += '<div class="open-record" style="cursor:pointer" onclick="openUsageEdit(\'' + item.id + '\',' + w.oi + ')">' + recTxt + '<span style="float:right;font-size:11px;color:var(--text-tertiary)">✏️</span></div>';
       });
       html += '</div>';
       html += '</div>';
@@ -2897,8 +2946,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791219331 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791219331';
+// deploy.py 部署时会把 1791220417 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791220417';
 
 function checkAppUpdate(manual) {
   try {
@@ -3591,16 +3640,16 @@ function renderConsumableVariantRows() {
     var cStock = v.stock || 0;
     var cTotal = v.totalPrice || (cPackPrice * cPack);
     html += '<div style="display:flex;gap:4px;align-items:center">';
-    html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="套餐数" value="' + (cPack||'') + '" oninput="onConsumablePriceInput(' + i + ',\'pack\',this.value)" step="1">';
+    html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="套餐数" value="' + (cPack||'') + '" oninput="onConsumablePriceInput(' + i + ',\'pack\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'pack\',this.value)" step="1">';
     html += '<span style="font-size:12px;color:var(--text-tertiary)">×</span>';
-    html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="套餐价" value="' + (cPackPrice||'') + '" oninput="onConsumablePriceInput(' + i + ',\'packprice\',this.value)" step="0.01">';
+    html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="套餐价" value="' + (cPackPrice||'') + '" oninput="onConsumablePriceInput(' + i + ',\'packprice\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'packprice\',this.value)" step="0.01">';
     html += '<span style="font-size:12px;color:var(--text-tertiary)">=</span>';
-    html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="总价" value="' + (cTotal||'') + '" oninput="onConsumablePriceInput(' + i + ',\'total\',this.value)" step="0.01">';
+    html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="总价" value="' + (cTotal||'') + '" oninput="onConsumablePriceInput(' + i + ',\'total\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'total\',this.value)" step="0.01">';
     html += '</div>';
     // 每套含数 + 每套重量（用于折算单价比价）
     html += '<div style="display:flex;gap:4px;align-items:center;margin-top:2px">';
-    html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="每套含(个/包/颗)" value="' + (cPackQty>1?cPackQty:'') + '" oninput="onConsumablePriceInput(' + i + ',\'packqty\',this.value)" step="1" title="每套餐内含多少个小单位，如纸巾一套30包">';
-    html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="每套重量KG" value="' + (cWeight||'') + '" oninput="onConsumablePriceInput(' + i + ',\'weight\',this.value)" step="0.01" title="猫粮等按重量比价时填">';
+    html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="每套含(个/包/颗)" value="' + (cPackQty>1?cPackQty:'') + '" oninput="onConsumablePriceInput(' + i + ',\'packqty\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'packqty\',this.value)" step="1" title="每套餐内含多少个小单位，如纸巾一套30包">';
+    html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="每套重量KG" value="' + (cWeight||'') + '" oninput="onConsumablePriceInput(' + i + ',\'weight\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'weight\',this.value)" step="0.01" title="猫粮等按重量比价时填">';
     html += '</div>';
     // 库存提示（衍生，非编辑）
     html += '<div id="packstock-' + i + '" style="font-size:11px;color:var(--text-secondary);margin-top:2px">📦 库存 = ' + cStock + ' ' + (v.packUnit||'个') + (cPackQty>1 ? '（约 ' + (Math.floor(cStock/cPackQty)) + ' 套）':'') + '</div>';
@@ -3660,13 +3709,38 @@ function onConsumablePriceInput(idx, which, val) {
   var stock = Math.max(0, Math.round(packCount * packQty));
   v.stock = stock;
   v.price = stock > 0 ? Math.round((v.totalPrice / stock) * 100) / 100 : (packPrice || 0);
-  if (packEl) packEl.value = packCount || '';
-  if (priceEl) priceEl.value = packPrice || '';
-  if (totalEl) totalEl.value = v.totalPrice || '';
-  if (qtyEl) qtyEl.value = (packQty > 1 ? packQty : '');
-  if (weightEl) weightEl.value = weight || '';
+  // 只回写"非当前正在编辑"的框，避免打断小数点输入（如 44. 输入到一半）
+  var curEl = which === 'pack' ? packEl : which === 'packprice' ? priceEl : which === 'total' ? totalEl : which === 'packqty' ? qtyEl : weightEl;
+  if (packEl && packEl !== curEl) packEl.value = packCount || '';
+  if (priceEl && priceEl !== curEl) priceEl.value = packPrice || '';
+  if (totalEl && totalEl !== curEl) totalEl.value = v.totalPrice || '';
+  if (qtyEl && qtyEl !== curEl) qtyEl.value = (packQty > 1 ? packQty : '');
+  if (weightEl && weightEl !== curEl) weightEl.value = weight || '';
   var hint = document.getElementById('packstock-' + idx);
   if (hint) hint.innerHTML = '📦 库存 = ' + stock + ' ' + (v.packUnit||'个') + (packQty > 1 ? '（约 ' + (Math.floor(stock / packQty)) + ' 套）' : '');
+}
+// 失焦时把当前框格式化为两位小数，并触发一次联动重算
+function onConsumablePriceBlur(idx, which, val) {
+  var v = window._editVariants && window._editVariants[idx];
+  if (!v) return;
+  var raw = (val === undefined || val === null) ? '' : String(val).trim();
+  var num = raw === '' ? 0 : (parseFloat(raw) || 0);
+  if (which === 'pack') v.packCount = num;
+  else if (which === 'packprice') v.packPrice = num;
+  else if (which === 'total') v.totalPrice = num;
+  else if (which === 'packqty') v.packQty = num > 0 ? num : 1;
+  else if (which === 'weight') v.packWeight = num;
+  var row = document.querySelectorAll('.consumable-variant-row')[idx];
+  if (!row) return;
+  var inputs = row.querySelectorAll('input[type=number]');
+  var el = which === 'pack' ? inputs[0] : which === 'packprice' ? inputs[1] : which === 'total' ? inputs[2] : which === 'packqty' ? inputs[3] : inputs[4];
+  if (el) {
+    if (raw === '') el.value = '';
+    else if (which === 'pack') el.value = String(num);
+    else if (which === 'packqty') el.value = num > 1 ? String(num) : '';
+    else el.value = num.toFixed(2);
+  }
+  onConsumablePriceInput(idx, which, String(num));
 }
 function addConsumableVariantRow() {
   window._editVariants = window._editVariants || [];
