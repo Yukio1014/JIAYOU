@@ -2428,6 +2428,7 @@ function renderCardBack(item, zone) {
     html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="openRestockForm(\'' + item.id + '\')">📦 补货</button>';
     html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="openStockAuditForm(\'' + item.id + '\')">📦 盘点</button>';
     html += '</div>';
+    html += '<div style="margin:8px 0 2px"><button class="btn btn-outline btn-sm" style="width:100%;font-size:12px" onclick="taskFromItem(\'' + zone.id + '\',\'' + item.id + '\')">📋 加入待接委托（免手输，去填价格）</button></div>';
   }
 
   // === 基本信息 ===
@@ -2946,8 +2947,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791220417 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791220417';
+// deploy.py 部署时会把 1791220914 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791220914';
 
 function checkAppUpdate(manual) {
   try {
@@ -5369,6 +5370,76 @@ function taskRefAdd() {
   taskUpdateRange();
   toast('已引用，请补填套餐数/每份价/每份重');
 }
+// 一键把已有物品「复制成待接委托」：免手输，进去再补套餐数/价格，凯旋后自动回写库存
+function taskFromItem(zoneId, itemId, skipJump) {
+  var zone = getZone(zoneId);
+  if (!zone) { toast('领地不存在'); return; }
+  var item = null;
+  for (var i = 0; i < (zone.items || []).length; i++) {
+    if (zone.items[i].id === itemId) { item = zone.items[i]; break; }
+  }
+  if (!item) { toast('物品不存在'); return; }
+  // 已有未完成的同物品委托 → 不重复建，直接跳转
+  var exist = null;
+  DB.tasks.forEach(function (t) {
+    if (t.sourceItemId === item.id && (t.status === '待接' || t.status === '进行中')) exist = t;
+  });
+  if (exist) {
+    closeModal();
+    if (!skipJump) {
+      try { closeCardDetail(); } catch (e) {}
+      showPage('pool');
+    }
+    toast('已有「' + item.name + '」的' + exist.status + '委托');
+    return exist;
+  }
+  var variants = (item.variants && item.variants.length) ? item.variants
+    : [{ id: null, brand: item.name, packPrice: item.currentPrice || 0, packQty: 1, packUnit: item.unit || '个', photos: [] }];
+  var pid = planNextId();
+  var plans = variants.map(function (v) {
+    return {
+      id: pid++,
+      name: v.brand || item.name,
+      amount: 0,
+      comboPrice: Math.round(((+v.packPrice || +v.price || 0)) * 100) / 100,
+      qty: 0,
+      spec: v.packQty || 1,
+      unit: v.packUnit || item.unit || '个',
+      note: '',
+      status: 'open',
+      pinned: false,
+      buy: true,
+      photos: (v.photos || []).slice(),
+      sourceItemId: item.id,
+      sourceVariantId: v.id || null,
+      _calcOpen: false
+    };
+  });
+  var newId = 1;
+  DB.tasks.forEach(function (t) { if (t.id >= newId) newId = t.id + 1; });
+  var task = {
+    id: newId,
+    name: item.name,
+    zoneId: zoneId,
+    categoryId: item.categoryId || null,
+    status: '待接',
+    note: '由「' + zone.name + '」库存一键生成 · 凯旋后自动回写库存',
+    plans: plans,
+    pinned: false,
+    sourceItemId: item.id,
+    fromItem: true,
+    createdAt: new Date().toISOString()
+  };
+  DB.tasks.push(task);
+  saveDB();
+  closeModal();
+  if (!skipJump) {
+    try { closeCardDetail(); } catch (e) {}
+    showPage('pool');
+  }
+  toast('📋 已加入待接：' + item.name + '（' + plans.length + ' 个品牌待填价格）');
+  return task;
+}
 function taskOpenFormFromCategory(zoneId, categoryId) {
   taskOpenForm(null);
   var zSel = document.getElementById('task-zone'); if (zSel) { zSel.value = zoneId; taskUpdateCategories(); }
@@ -5718,6 +5789,7 @@ function showAlertDetail(type) {
         html += '<div style="font-size:13px;color:var(--text-secondary);font-weight:600;margin-top:2px">📦 库存 ' + (totalS||0) + (it.unit||'') + ' · 未开封</div>';
       }
       html += '</div>';
+      html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0;align-self:center;font-size:12px;padding:6px 10px" onclick="event.stopPropagation();taskFromItem(\'' + zone.id + '\',\'' + it.id + '\')">📋 委托</button>';
       html += '</div>';
     });
   }
