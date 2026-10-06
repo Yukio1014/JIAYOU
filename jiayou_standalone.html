@@ -1425,7 +1425,22 @@ function mergeDB(defaults, loaded) {
   }
   // 补给品套餐模型迁移（只增字段，零破坏：stock/totalPrice/price 原值不动）
   migrateConsumablePackages(result);
+  // 历史脏数据：表单内连续添加方案曾共用同一个 id，导致点任一方案只切换第一个 → 全局去重
+  migrateTaskPlanIds(result);
   return result;
+}
+
+// 方案 id 全局去重：任务内重复或缺失的 id 分配新 id（从全局最大 +1 递增），其余字段一律不动
+function migrateTaskPlanIds(db) {
+  var max = 0;
+  (db.tasks || []).forEach(function (t) { (t.plans || []).forEach(function (p) { if (p.id > max) max = p.id; }); });
+  (db.tasks || []).forEach(function (t) {
+    var seen = {};
+    (t.plans || []).forEach(function (p) {
+      if (p.id == null || seen[p.id]) { p.id = ++max; }
+      seen[p.id] = true;
+    });
+  });
 }
 
 // 旧 pool/poolHistory → 新 tasks（四态：待接/进行中/凯旋/搁置）
@@ -3203,8 +3218,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791274797 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791274797';
+// deploy.py 部署时会把 1791275675 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791275675';
 
 function checkAppUpdate(manual) {
   try {
@@ -5360,7 +5375,7 @@ function fmtMoney(n) { var v = Math.round((+n || 0) * 100) / 100; return '¥' + 
 
 function taskById(id) { var s = String(id); for (var i = 0; i < DB.tasks.length; i++) { if (String(DB.tasks[i].id) === s) return DB.tasks[i]; } return null; }
 function taskNextId() { var m = 0; DB.tasks.forEach(function (t) { if (t.id > m) m = t.id; }); return m + 1; }
-function planNextId() { var m = 0; DB.tasks.forEach(function (t) { (t.plans || []).forEach(function (p) { if (p.id > m) m = p.id; }); }); return m + 1; }
+function planNextId() { var m = 0; DB.tasks.forEach(function (t) { (t.plans || []).forEach(function (p) { if (p.id > m) m = p.id; }); }); if (taskState && taskState.formPlans) taskState.formPlans.forEach(function (p) { if (p.id > m) m = p.id; }); return m + 1; }
 function findPlan(t, pid) { if (!t.plans) return null; var s = String(pid); for (var i = 0; i < t.plans.length; i++) { if (String(t.plans[i].id) === s) return t.plans[i]; } return null; }
 function cheapestPlan(t) { var best = null; (t.plans || []).forEach(function (p) { var a = +p.amount || 0; if (a > 0 && (!best || a < best.amount)) best = p; }); return best; }
 
