@@ -627,14 +627,18 @@ body {
 .task-check { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--separator); flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 14px; color: #fff; cursor: pointer; }
 .task-card.selon { border: 2px solid var(--accent); }
 .task-card.selon .task-check { background: var(--accent); border-color: var(--accent); }
-.task-selbar { position: sticky; bottom: 0; display: flex; gap: 8px; align-items: center; padding: 12px; background: var(--card-bg); border-top: 1.5px solid var(--separator); border-radius: 14px 14px 0 0; box-shadow: 0 -4px 12px rgba(0,0,0,0.06); margin-top: 10px; }
+.task-selbar { position: sticky; bottom: 0; display: flex; gap: 10px; align-items: stretch; padding: 12px 14px calc(12px + env(safe-area-inset-bottom, 0px)); background: var(--card-bg); border-top: 1.5px solid var(--separator); border-radius: 14px 14px 0 0; box-shadow: 0 -4px 16px rgba(0,0,0,0.08); margin-top: 10px; }
 .task-selbar .spacer { flex: 1; }
-.task-catfilter { display: flex; gap: 6px; margin-bottom: 14px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; padding: 2px 0; }
-.task-catfilter::-webkit-scrollbar { display: none; }
-.task-catpill { flex-shrink: 0; padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 600; color: var(--text-secondary); background: var(--bg); border: 1.5px solid var(--separator); cursor: pointer; white-space: nowrap; }
-.task-catpill.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.task-selbar .btn { flex: 1; min-width: 0; white-space: nowrap; padding: 11px 8px; font-size: 14px; font-weight: 700; border-radius: 12px; justify-content: center; }
+.task-selbar .task-tool-btn { flex-shrink: 0; padding: 11px 14px; font-size: 14px; }
 .task-plan-row .pp-buy { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 6px; background: rgba(52,199,89,0.12); color: var(--green); margin-left: 4px; }
 .task-plan-row .pp-buy.off { background: rgba(142,142,147,0.12); color: var(--text-tertiary); }
+.task-plan-row .pp-buy.tap { cursor: pointer; border: 1px dashed currentColor; }
+/* 出击选择弹窗的方案勾选条 */
+.strike-plan { display: flex; gap: 10px; align-items: flex-start; padding: 10px; background: var(--bg); border-radius: 10px; margin-bottom: 8px; cursor: pointer; border: 1.5px solid transparent; }
+.strike-plan.on { border-color: var(--accent); background: rgba(52,199,89,0.07); }
+.strike-plan input { margin-top: 2px; width: 18px; height: 18px; flex-shrink: 0; accent-color: var(--accent); }
+.strike-plan .sp-note { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
 
 /* ========== 开封按钮 ========== */
 .open-btn {
@@ -3199,8 +3203,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791272992 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791272992';
+// deploy.py 部署时会把 1791274797 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791274797';
 
 function checkAppUpdate(manual) {
   try {
@@ -5340,7 +5344,7 @@ function deleteZone(zoneId) {
 }
 
 // ========== 任务委托（原「目标锁定」完全重写） ==========
-var taskState = { tab: '待接', searchOpen: false, search: '', sel: null, formPlans: [], batchIds: [], catFilter: null };
+var taskState = { tab: '待接', searchOpen: false, search: '', sel: null, formPlans: [], batchIds: [] };
 
 var TASK_TABS = [
   { key: '待接',   color: '#007AFF', label: '委托待接' },
@@ -5446,28 +5450,6 @@ function renderTasks() {
   });
   html += '</div>';
 
-  // 分类筛选胶囊条（复用领地 + 两级分类，避免列表混乱）
-  var combos = {};
-  var hasUncategorized = false;
-  DB.tasks.forEach(function (t) {
-    if (t.zoneId && t.categoryId) {
-      var k = t.zoneId + '|' + t.categoryId;
-      if (!combos[k]) {
-        var z = getZone(t.zoneId); var cp = getCategoryPath(t.zoneId, t.categoryId);
-        combos[k] = { key: k, icon: z ? z.icon : '', name: z ? z.name : '', path: cp };
-      }
-    } else { hasUncategorized = true; }
-  });
-  html += '<div class="task-catfilter">';
-  html += '<div class="task-catpill' + (!s.catFilter ? ' on' : '') + '" onclick="taskSetCat(null)">全部</div>';
-  Object.keys(combos).forEach(function (k) {
-    var c = combos[k];
-    var on = s.catFilter === k;
-    html += '<div class="task-catpill' + (on ? ' on' : '') + '" onclick="taskSetCat(\'' + k + '\')">' + (c.icon ? c.icon + ' ' : '') + escTask(c.name) + (c.path ? ' · ' + escTask(c.path) : '') + '</div>';
-  });
-  if (hasUncategorized) html += '<div class="task-catpill' + (s.catFilter === 'uc' ? ' on' : '') + '" onclick="taskSetCat(\'uc\')">未归类</div>';
-  html += '</div>';
-
   // 战报条（按规范：仅待接/搁置，进行中/凯旋不显示，避免干扰主线）
   if (s.tab === '待接') {
     var need = 0, cnt = 0;
@@ -5495,8 +5477,6 @@ function renderTasks() {
 
   // 列表
   var list = DB.tasks.filter(function (t) { return t.status === s.tab; });
-  if (s.catFilter === 'uc') list = list.filter(function (t) { return !(t.zoneId && t.categoryId); });
-  else if (s.catFilter) list = list.filter(function (t) { return (t.zoneId + '|' + t.categoryId) === s.catFilter; });
   if (s.search) list = list.filter(function (t) { return taskMatch(t, s.search); });
   if (list.length === 0) {
     html += '<div class="empty-state"><div class="empty-icon">📋</div><div class="empty-text">这里还没有委托<br>点击右上角「＋ 新增委托」开始登记</div></div>';
@@ -5509,8 +5489,6 @@ function renderTasks() {
     html += '<div class="task-selbar">';
     var allSel = list.length > 0 && list.every(function (t) { return s.sel.has(t.id); });
     html += '<button class="task-tool-btn" onclick="taskSelAll()">' + (allSel ? '取消全选' : '全选') + '</button>';
-    html += '<span class="spacer"></span>';
-    html += '<span style="font-size:13px;color:var(--text-secondary)">已选 ' + s.sel.size + '</span>';
     if (s.tab === '待接') {
       html += '<button class="btn btn-primary btn-sm" onclick="taskBatchStrike()">⚔️ 出击</button>';
       html += '<button class="btn btn-outline btn-sm" onclick="taskBatchAbandon()">🚫 放弃</button>';
@@ -5563,6 +5541,12 @@ function taskCard(t) {
   } else {
     var w = taskWeightStr(t);
     html += '<div style="font-size:13px;color:var(--text-secondary);margin-top:2px">' + taskPriceLabel(t) + (w ? ' · ' + w : '') + '</div>';
+    var pn = (t.plans || []).length;
+    if (pn > 1) {
+      var buyN = 0, selAmt = 0;
+      (t.plans || []).forEach(function (p) { if (p.buy !== false) { buyN++; selAmt += (+p.amount || 0); } });
+      html += '<div style="font-size:12px;font-weight:700;margin-top:4px;color:' + (buyN ? 'var(--accent)' : 'var(--red)') + '">☑️ 已选 ' + buyN + '/' + pn + ' 项采购 · 合计 ' + fmtMoney(selAmt) + (buyN ? '' : '（出击前请勾选要买的）') + '</div>';
+    }
   }
 
   // 备注
@@ -5604,7 +5588,7 @@ function taskCard(t) {
     html += '<div class="task-plan-row">';
     if (p.photos && p.photos.length) html += '<img src="' + p.photos[0] + '" style="width:46px;height:46px;border-radius:8px;object-fit:cover;flex-shrink:0">';
     else html += '<div style="width:46px;height:46px;border-radius:8px;background:var(--separator);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:18px">📷</div>';
-    html += '<div style="flex:1;min-width:0"><div class="pp-name">' + escTask(p.name || '未命名') + ' <span style="font-size:11px;font-weight:600;color:var(--text-secondary)">' + mark + '</span>' + ((p.buy !== false) ? '<span class="pp-buy">本次购买✓</span>' : '<span class="pp-buy off">不采购</span>') + (p.sourceVariantId ? ' <span style="font-size:11px;color:var(--accent)">↩库存</span>' : (p.sourceItemId ? ' <span style="font-size:11px;color:var(--accent)">↩新品</span>' : '')) + '</div>';
+    html += '<div style="flex:1;min-width:0"><div class="pp-name">' + escTask(p.name || '未命名') + ' <span style="font-size:11px;font-weight:600;color:var(--text-secondary)">' + mark + '</span>' + planBuyChip(t, p) + (p.sourceVariantId ? ' <span style="font-size:11px;color:var(--accent)">↩库存</span>' : (p.sourceItemId ? ' <span style="font-size:11px;color:var(--accent)">↩新品</span>' : '')) + '</div>';
     html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:2px">' + line + '</div></div>';
     html += '</div>';
   });
@@ -5612,6 +5596,28 @@ function taskCard(t) {
 
   html += '</div>';
   return html;
+}
+
+// 备选方案的「本次购买」标记：待接状态下可点击直接切换是否采购
+function planBuyChip(t, p) {
+  var on = p.buy !== false;
+  if (t.status === '待接') {
+    return '<span class="pp-buy tap' + (on ? '' : ' off') + '" onclick="event.stopPropagation();taskPlanBuyToggle(\'' + t.id + '\',\'' + p.id + '\')">' + (on ? '本次购买✓' : '不采购') + '</span>';
+  }
+  return '<span class="pp-buy' + (on ? '' : ' off') + '">' + (on ? '本次购买✓' : '不采购') + '</span>';
+}
+function taskPlanBuyToggle(tid, pid) {
+  var t = taskById(tid); if (!t) return;
+  if (t.status !== '待接') { toast('已出击的委托改不了啦'); return; }
+  var p = findPlan(t, pid); if (!p) return;
+  var on = (p.buy === false);
+  p.buy = on;
+  saveDB();
+  toast(on ? '☑️ 本次购买：' + (p.name || '方案') : '⬜ 不采购：' + (p.name || '方案'));
+  renderTasks();
+  var card = document.querySelector('.task-card[data-task-id="' + Number(tid) + '"]');
+  if (card) card.classList.add('flipped');
+  taskHaptic();
 }
 
 function taskStockWarn(t) {
@@ -5671,8 +5677,7 @@ function taskCardTap(id) {
 }
 
 // ---------- 标签 / 搜索 / 多选 ----------
-function taskSwitchTab(key) { taskState.tab = key; taskState.sel = null; taskState.searchOpen = false; taskState.search = ''; taskState.catFilter = null; renderTasks(); taskHaptic(); }
-function taskSetCat(k) { taskState.catFilter = k; renderTasks(); taskHaptic(); }
+function taskSwitchTab(key) { taskState.tab = key; taskState.sel = null; taskState.searchOpen = false; taskState.search = ''; renderTasks(); taskHaptic(); }
 function taskToggleSearch() { taskState.searchOpen = !taskState.searchOpen; if (!taskState.searchOpen) taskState.search = ''; renderTasks(); }
 function taskOnSearch(v) {
   taskState.search = v;
@@ -5698,34 +5703,92 @@ function taskSelAll() {
 }
 
 // ---------- 单条操作 ----------
+// ---------- 出击：弹窗内逐委托勾选本次要买的方案 ----------
+var _strikeSel = null;
 function taskStrike(id) {
   var t = taskById(id); if (!t) return;
   if (!t.plans || t.plans.length === 0) { toast('先添加备选方案'); return; }
-  var buys = (t.plans || []).filter(function (p) { return p.buy !== false; });
-  if (buys.length === 0) { toast('请先在方案上勾选「本次购买」'); return; }
-  if (buys.length === 1) {
+  if (t.plans.length === 1) {
+    t.plans[0].buy = true; t.plans[0].status = 'purchasing'; t.status = '进行中';
+    saveDB(); renderTasks(); toast('⚔️ 已出击 · ' + (t.plans[0].name || '方案')); taskHaptic(); return;
+  }
+  openStrikeModal([t]);
+}
+function openStrikeModal(tasks) {
+  _strikeSel = { tasks: tasks.map(function (t) { return t.id; }), buy: {} };
+  tasks.forEach(function (t) {
+    (t.plans || []).forEach(function (p) { _strikeSel.buy[t.id + '|' + p.id] = (p.buy !== false); });
+  });
+  renderStrikeModal();
+  document.getElementById('modal-overlay').classList.add('show');
+  taskHaptic();
+}
+function strikeTogglePlan(tid, pid, on) {
+  if (!_strikeSel) return;
+  _strikeSel.buy[tid + '|' + pid] = !!on;
+  renderStrikeModal(); taskHaptic();
+}
+function strikeChecked() {
+  var n = 0, amt = 0;
+  if (!_strikeSel) return { n: 0, amt: 0 };
+  _strikeSel.tasks.forEach(function (tid) {
+    var t = taskById(tid); if (!t) return;
+    (t.plans || []).forEach(function (p) {
+      if (_strikeSel.buy[tid + '|' + p.id]) { n++; amt += (+p.amount || 0); }
+    });
+  });
+  return { n: n, amt: amt };
+}
+function renderStrikeModal() {
+  if (!_strikeSel) return;
+  var tasks = _strikeSel.tasks.map(taskById).filter(Boolean);
+  var head = tasks.length > 1 ? (tasks.length + ' 个委托') : escTask(tasks[0].name);
+  var html = '<div class="modal-handle"></div><div class="modal-title">⚔️ 出击 · 选择本次采购</div>';
+  html += '<div style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">' + head + ' · 在每个委托下勾选要买的方案，凯旋时只回写勾选项</div>';
+  tasks.forEach(function (t) {
+    html += '<div style="margin-bottom:14px"><div style="font-size:13px;font-weight:700;margin-bottom:6px">' + escTask(t.name) + ' <span style="font-weight:400;font-size:12px;color:var(--text-secondary)">（' + (t.plans || []).length + ' 个备选）</span></div>';
+    sortPlans(t).forEach(function (p) {
+      var key = t.id + '|' + p.id;
+      var on = !!_strikeSel.buy[key];
+      var d = planDerived(p);
+      var line = fmtMoney(p.amount);
+      var ws = planWeightStr(p); if (ws) line += ' · ' + ws;
+      var tcL = planTotalContent(p);
+      if (tcL && tcL.total > 0) line += ' · ≈' + fmtMoney((+p.amount || 0) / tcL.total) + '/' + tcL.u;
+      else if (d.unitPrice > 0) line += ' · ≈' + fmtMoney(d.unitPrice) + '/' + (p.unit || '');
+      if (p.note) line += ' · ' + escTask(p.note);
+      html += '<label class="strike-plan' + (on ? ' on' : '') + '"><input type="checkbox" ' + (on ? 'checked' : '') + ' onchange="strikeTogglePlan(\'' + t.id + '\',\'' + p.id + '\',this.checked)">';
+      html += '<div style="flex:1;min-width:0"><div style="font-weight:600;font-size:14px">' + escTask(p.name || '未命名') + (p.sourceVariantId ? ' <span style="font-size:11px;color:var(--accent)">↩库存</span>' : (p.sourceItemId ? ' <span style="font-size:11px;color:var(--accent)">↩新品</span>' : '')) + '</div><div style="font-size:12px;color:var(--text-secondary);margin-top:2px">' + line + '</div></div></label>';
+    });
+    html += '</div>';
+  });
+  var cc = strikeChecked();
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0 10px"><span style="font-size:13px;color:var(--text-secondary)">已勾选 <b style="color:var(--text)">' + cc.n + '</b> 项</span><span style="font-size:16px;font-weight:800">合计 ' + fmtMoney(cc.amt) + '</span></div>';
+  html += '<button class="btn btn-primary btn-full" onclick="confirmStrike()" ' + (cc.n ? '' : 'disabled style="opacity:.45"') + '>⚔️ 确认出击</button>';
+  if (!cc.n) html += '<div style="font-size:12px;color:var(--red);text-align:center;margin-top:8px">至少为一个委托勾选要买的方案</div>';
+  document.getElementById('modal-content').innerHTML = html;
+}
+function confirmStrike() {
+  if (!_strikeSel) return;
+  var tasks = _strikeSel.tasks.map(taskById).filter(Boolean);
+  var struck = 0, skipped = 0;
+  tasks.forEach(function (t) {
+    var buys = [];
+    (t.plans || []).forEach(function (p) {
+      var on = !!_strikeSel.buy[t.id + '|' + p.id];
+      p.buy = on;
+      if (on) buys.push(p);
+    });
+    if (!buys.length) { skipped++; return; }
     t.status = '进行中';
     buys.forEach(function (p) { p.status = 'purchasing'; });
-    saveDB(); renderTasks(); toast('⚔️ 已出击'); return;
-  }
-  var html = '<div class="modal-handle"></div><div class="modal-title">确认出击采购</div>';
-  html += '<div style="font-size:13px;color:var(--text-secondary);margin-bottom:8px">' + escTask(t.name) + ' · 本次将采购以下 ' + buys.length + ' 项：</div>';
-  var totalAmt = 0;
-  buys.forEach(function (p) {
-    var d = planDerived(p); totalAmt += (+p.amount || 0);
-    html += '<div style="display:flex;gap:8px;align-items:center;padding:10px;background:var(--bg);border-radius:8px;margin-bottom:8px"><div style="flex:1"><div style="font-weight:600">' + escTask(p.name || '未命名') + '</div><div style="font-size:12px;color:var(--text-secondary)">' + fmtMoney(p.amount) + (d.unitPrice > 0 ? '（≈' + fmtMoney(d.unitPrice) + '/' + (p.unit || '') + '）' : '') + '</div></div></div>';
+    struck++;
   });
-  html += '<div style="font-size:13px;font-weight:700;margin:8px 0">合计 ' + fmtMoney(totalAmt) + '</div>';
-  html += '<button class="btn btn-primary btn-full" onclick="confirmStrike(\'' + id + '\')">确认出击</button>';
-  document.getElementById('modal-content').innerHTML = html;
-  document.getElementById('modal-overlay').classList.add('show');
-}
-function confirmStrike(id) {
-  var t = taskById(id); if (!t) return;
-  var buys = (t.plans || []).filter(function (p) { return p.buy !== false; });
-  t.status = '进行中';
-  buys.forEach(function (p) { p.status = 'purchasing'; });
-  closeModal(); saveDB(); renderTasks(); toast('⚔️ 已出击');
+  _strikeSel = null;
+  if (!struck) { toast('至少为一个委托勾选要买的方案'); return; }
+  closeModal(); saveDB(); renderTasks();
+  toast('⚔️ 出击 ' + struck + ' 项' + (skipped ? '，' + skipped + ' 项未勾选保持待接' : ''));
+  taskHaptic();
 }
 
 function findItemByIdGlobal(itemId) {
@@ -5872,15 +5935,17 @@ function taskDestroy(id) {
 // ---------- 批量操作 ----------
 function getSelTasks() { var s = taskState; if (!s.sel) return []; var arr = []; s.sel.forEach(function (id) { var t = taskById(id); if (t) arr.push(t); }); return arr; }
 function taskBatchStrike() {
-  var ts = getSelTasks().filter(function (t) { return t.status === '待接'; });
-  if (!ts.length) { toast('没有可出击的'); return; }
-  ts.forEach(function (t) {
-    var buys = (t.plans || []).filter(function (p) { return p.buy !== false; });
-    if (buys.length === 0) return;
-    buys.forEach(function (p) { p.status = 'purchasing'; });
-    t.status = '进行中';
-  });
-  afterBatch('⚔️ 批量出击完成');
+  var ts = getSelTasks().filter(function (t) { return t.status === '待接' && (t.plans || []).length > 0; });
+  if (!ts.length) { toast('选中的委托都没有备选方案'); return; }
+  var hasMulti = ts.some(function (t) { return (t.plans || []).length > 1; });
+  if (!hasMulti) {
+    // 每个委托都只有一个方案，无需选择，直接出击
+    ts.forEach(function (t) { t.plans[0].buy = true; t.plans[0].status = 'purchasing'; t.status = '进行中'; });
+    afterBatch('⚔️ 批量出击 ' + ts.length + ' 项');
+    return;
+  }
+  // 有多备选的委托：弹窗逐个勾选本次要买的方案
+  openStrikeModal(ts);
 }
 function taskBatchWin() {
   var ts = getSelTasks().filter(function (t) { return t.status === '进行中'; });
