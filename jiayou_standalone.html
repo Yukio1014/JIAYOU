@@ -296,8 +296,26 @@ body {
   color: var(--text-tertiary); text-align: center;
 }
 
-/* 首页年报入口 */
-.report-entry {
+/* 表单变体卡：左标签右输入的行式字段（「总套餐数：[1]」模式） */
+.vfield { display:flex; align-items:center; gap:6px; margin-bottom:8px; }
+.vfield-dot { color:var(--text-tertiary); font-weight:700; flex-shrink:0; width:10px; text-align:center; }
+.vfield-label { font-size:12px; color:var(--text-secondary); flex-shrink:0; min-width:78px; text-align:right; }
+.vfield .form-input { flex:1; min-width:0; font-size:13px; padding:7px 9px; }
+.vfield-unit { font-size:12px; color:var(--text-tertiary); flex-shrink:0; }
+.vcalc {
+  background:var(--bg); border-radius:8px; padding:8px 10px;
+  font-size:12px; line-height:1.55; color:var(--text-secondary); margin-top:2px;
+}
+.vside-btn {
+  width:56px; padding:5px 0; border-radius:8px; border:1px solid var(--separator);
+  background:var(--bg); font-size:14px; line-height:1.1; cursor:pointer; text-align:center;
+}
+.vside-btn small { display:block; font-size:9px; color:var(--text-secondary); margin-top:1px; }
+.vside-btn.on { background:var(--red); border-color:var(--red); }
+.vside-btn.on small { color:#fff; }
+.vside-btn.on.spec { background:var(--accent); border-color:var(--accent); }
+
+/* 首页年报入口 */.report-entry {
   display: flex; align-items: center; gap: 12px;
   padding: 14px 16px; margin-bottom: 12px;
   background: var(--card); border-radius: var(--radius);
@@ -2967,7 +2985,7 @@ function adviceMainText(item) {
 function buildAnnualReport() {
   var out = {
     empty: true, emptyReason: '', asOf: new Date(),
-    groups: [], counts: { rate: 0, buy: 0, stop: 0, noData: 0 },
+    groups: [], counts: { rate: 0, buy: 0, stop: 0, noData: 0, history: 0 },
     totalSpend: 0, totalItems: 0
   };
 
@@ -3101,7 +3119,43 @@ function buildAnnualReport() {
     });
   }
 
-  out.empty = (gBuy.length + gRate.length + gStop.length + gNoData.length) === 0;
+  // 5. 历史档案：已删除的物品从年度档案里捞回来
+  // 档案生成时速率四要素已一并固化（rateText/leftText/adviceText），删除不影响这份数据
+  var liveIds = {};
+  all.forEach(function (r) { liveIds[r.item.id] = 1; });
+  var histMap = {};
+  Object.keys(DB.yearStats || {}).forEach(function (y) {
+    ((DB.yearStats[y] && DB.yearStats[y].items) || []).forEach(function (e) {
+      if (!e.itemId || liveIds[e.itemId]) return;   // 还在的（含归档）不算历史
+      var h = histMap[e.itemId];
+      if (!h) {
+        h = histMap[e.itemId] = {
+          itemId: e.itemId, zoneId: e.zoneId || '', zoneName: e.zoneName || '', zoneIcon: e.zoneIcon || '📦',
+          name: e.name, deleted: true, archived: false,
+          model: '', unit: e.unit || '', rate: 0,
+          rateText: e.rateText || '', restText: '', leftText: e.leftText || '',
+          advice: e.adviceText || '', adviceDetail: null,
+          usedThisYear: 0, spendThisYear: 0,
+          lowStock: false, noRestock: true,
+          hasData: !!(e.rateText || (e.qty > 0)),
+          years: []
+        };
+      }
+      h.years.push({ year: y, qty: e.qty, unit: e.unit, capQty: e.capQty, capUnit: e.capUnit, spend: e.spend });
+    });
+  });
+  var gHist = Object.keys(histMap).map(function (k) { return histMap[k]; });
+  gHist.sort(function (a, b) { return b.years.length - a.years.length; });
+  out.counts.history = gHist.length;
+  if (gHist.length) {
+    out.groups.push({
+      key: 'history', title: '历史档案', icon: '🗄️',
+      hint: '这些物品已删除，数据来自年度档案快照，不会再变化。',
+      rows: gHist
+    });
+  }
+
+  out.empty = (gBuy.length + gRate.length + gStop.length + gNoData.length + gHist.length) === 0;
   if (out.empty) out.emptyReason = '还没有可统计的消耗品。';
   return out;
 }
@@ -3485,7 +3539,7 @@ function renderCardBack(item, zone) {
         html += '<div class="vc-meta">';
         html += '<div class="vc-meta-item"><div class="vc-meta-label">折算单价</div><div class="vc-meta-value">' + variantPriceCompareText(v) + '</div></div>';
         html += '<div class="vc-meta-item"><div class="vc-meta-label">当前库存</div><div class="vc-meta-value">' + variantPackText(v, item) + '</div></div>';
-        html += '<div class="vc-meta-item wide"><div class="vc-meta-label">库存构成</div><div class="vc-meta-value">' + escapeHtml(packHintOf(v)) + '</div></div>';
+        html += '<div class="vc-meta-item wide"><div class="vc-meta-label">库存构成</div><div class="vc-meta-value">' + escapeHtml(packHintOf(v, true)) + '</div></div>';
         var hasWeight = v.packWeight && v.packWeight > 0;
         if (hasWeight) {
           var wu = weightUnitOf(v);
@@ -4101,8 +4155,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791304967 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791304967';
+// deploy.py 部署时会把 1791306902 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791306902';
 
 function checkAppUpdate(manual) {
   try {
@@ -5062,6 +5116,7 @@ var itemPhotos = [];
 function openItemForm(itemId) {
   editingItemId = itemId || null;
   itemPhotos = [];
+  window._specsOpen = {};   // 规格明细折叠态：每次打开表单重置（有明细的品牌默认展开）
   var zone = getZone(currentZoneId);
   var item = itemId ? getItem(currentZoneId, itemId) : null;
 
@@ -5076,8 +5131,28 @@ function openItemForm(itemId) {
   }
   html += '</div>';
 
-  html += '<div class="form-group"><label class="form-label">名称</label>';
-  html += '<input type="text" class="form-input" id="item-name" value="' + (item?escapeHtml(item.name):'') + '" placeholder="如：洗发水"></div>';
+  // 名称 + 消耗模型（补给品：模型下拉放名称左边，一行完成「定模型 + 写名称」）
+  if (zone.type === 'consumable') {
+    var cmNow = consumeModelOf(item);
+    var cmOrder = ['count', 'spec', 'instant', 'combo'];
+    html += '<div class="form-row" style="gap:8px">';
+    html += '<div class="form-group" style="flex:0 0 44%;min-width:0;margin-bottom:0">';
+    html += '<label class="form-label">消耗模型</label>';
+    html += '<select class="form-select" id="item-consumemode" onchange="onConsumeModeSelect(this.value)">';
+    cmOrder.forEach(function (k) {
+      var m = CONSUME_MODELS[k];
+      html += '<option value="' + k + '"' + (cmNow === k ? ' selected' : '') + '>' + m.icon + ' ' + m.name + '</option>';
+    });
+    html += '</select></div>';
+    html += '<div class="form-group" style="flex:1;min-width:0;margin-bottom:0">';
+    html += '<label class="form-label">名称</label>';
+    html += '<input type="text" class="form-input" id="item-name" value="' + (item?escapeHtml(item.name):'') + '" placeholder="如：洗发水">';
+    html += '</div></div>';
+    html += '<div id="cm-hint" style="font-size:12px;color:var(--text-secondary);margin:-2px 0 14px;line-height:1.5">' + CONSUME_MODELS[cmNow].desc + '</div>';
+  } else {
+    html += '<div class="form-group"><label class="form-label">名称</label>';
+    html += '<input type="text" class="form-input" id="item-name" value="' + (item?escapeHtml(item.name):'') + '" placeholder="如：洗发水"></div>';
+  }
 
   // 两级分类：大类必选，子分类选填
   var mainCats = zone.categories.filter(function(c) { return !c.parentId; });
@@ -5123,8 +5198,7 @@ function openItemForm(itemId) {
     html += '</div>';
   }
 
-  html += '<div class="form-group"><label class="form-label">存放位置（选填）</label>';
-  html += '<input type="text" class="form-input" id="item-location" value="' + (item?escapeHtml(item.location||''):'') + '" placeholder="如：衣柜A层"></div>';
+  // 存放位置不再单独设字段：写在备注里即可（placeholder 有提示）
 
   if (zone.type === 'consumable') {
     // 品牌变体区域（带照片上传）
@@ -5144,7 +5218,7 @@ function openItemForm(itemId) {
         noRestock: !!v.noRestock,
         specsFolded: !!v.specsFolded,
         specPerPack: !v.specsFolded,   // 存量数据明细=全部总量(不勾)；只有未折算过的新明细默认按「每套构成」
-        specs: (v.specs || []).map(function (s) { return { name: s.name || '', qty: +s.qty || 0, content: +s.content || 0, unit: s.unit || '' }; }),
+        specs: (v.specs || []).map(function (s) { return { name: s.name || '', packCount: (s.packCount !== undefined && s.packCount !== null) ? s.packCount : '', packQty: (s.packQty !== undefined && s.packQty !== null && s.packQty !== '') ? s.packQty : '', qty: +s.qty || 0, content: +s.content || 0, unit: s.unit || '' }; }),
         photos: (v.photos||[]).slice()
       };
     });
@@ -5154,33 +5228,15 @@ function openItemForm(itemId) {
     html += '<button class="btn btn-outline btn-sm" style="margin-top:6px;width:100%" onclick="addConsumableVariantRow()">＋ 添加品牌</button>';
     html += '</div>';
 
-    // 消耗模型（四个模型，你手动定义，系统不自动猜）
-    var cmNow = consumeModelOf(item);
-    var cmOrder = ['count', 'spec', 'instant', 'combo'];
-    html += '<div class="form-group">';
-    html += '<label class="form-label">消耗模型（你手动定义）</label>';
-    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
-    cmOrder.forEach(function (k) {
-      var m = CONSUME_MODELS[k];
-      var on = (cmNow === k);
-      html += '<button type="button" class="btn ' + (on ? 'btn-primary' : 'btn-outline') + '" style="flex-direction:column;align-items:flex-start;line-height:1.35;padding:8px 10px;text-align:left" data-cmode="' + k + '" onclick="setConsumeMode(\'' + k + '\')">';
-      html += '<span style="font-size:13px;font-weight:700">' + m.icon + ' ' + m.name + '</span>';
-      html += '<span style="font-size:10px;font-weight:400;opacity:.85;white-space:normal">' + m.desc + '</span>';
-      html += '</button>';
-    });
-    html += '</div>';
-    html += '<div id="cm-hint" style="font-size:12px;color:var(--text-secondary);margin-top:6px">' + CONSUME_MODELS[cmNow].desc + '</div>';
-    html += '<input type="hidden" id="item-consumemode" value="' + cmNow + '">';
-    html += '</div>';
-
+    // 消耗模型已上移到「名称」左侧的下拉框；这里只保留阈值
     html += '<div class="form-group"><label class="form-label">库存告急阈值</label><input type="number" class="form-input" id="item-threshold" value="' + (item?(item.stockThreshold||1):1) + '" step="0.5"></div>';
     html += '</div>';
   }
 
-  // 整物品备注仅补给品（耐用品用每件独立备注）
+  // 整物品备注仅补给品（耐用品用每件独立备注）；存放位置也写在这里
   if (zone.type === 'consumable') {
     html += '<div class="form-group"><label class="form-label">备注（选填）</label>';
-    html += '<textarea class="form-textarea" id="item-notes" placeholder="...">' + (item?escapeHtml(item.notes||''):'') + '</textarea></div>';
+    html += '<textarea class="form-textarea" id="item-notes" placeholder="存放位置（如：冰箱冷藏层）、购买渠道、使用感受…">' + (item?escapeHtml(item.notes||''):'') + '</textarea></div>';
   }
 
   html += '<button class="btn btn-primary btn-full" onclick="saveItem()">' + (item?'保存修改':'添加') + '</button>';
@@ -5195,16 +5251,9 @@ function openItemForm(itemId) {
   updateItemSubcategoryOptions(zone.id, selMainId);
 }
 
-// 切换消耗模式（套餐/小单位）
-function setConsumeMode(m) {
+// 切换消耗模型（下拉）：只更新说明文字；值存在 select#item-consumemode 里，saveItem 直接读
+function onConsumeModeSelect(m) {
   if (!CONSUME_MODELS[m]) m = 'spec';
-  var el = document.getElementById('item-consumemode');
-  if (el) el.value = m;
-  document.querySelectorAll('[data-cmode]').forEach(function(b) {
-    var on = b.getAttribute('data-cmode') === m;
-    b.className = 'btn ' + (on ? 'btn-primary' : 'btn-outline');
-    b.setAttribute('style', 'flex-direction:column;align-items:flex-start;line-height:1.35;padding:8px 10px;text-align:left');
-  });
   var hint = document.getElementById('cm-hint');
   if (hint) hint.textContent = CONSUME_MODELS[m].desc;
 }
@@ -5270,10 +5319,12 @@ function renderConsumableVariantRows() {
   var variants = window._editVariants || [];
   var photos = window._editVariantPhotos || [];
   variants.forEach(function(v, i) {
+    var specsOpen = (window._specsOpen && window._specsOpen[i] !== undefined) ? window._specsOpen[i] : ((v.specs || []).length > 0);
     html += '<div class="consumable-variant-row" style="border:1px solid var(--separator);border-radius:12px;padding:12px;margin-bottom:12px">';
     html += '<div style="display:flex;gap:10px;align-items:flex-start">';
-    // 照片上传区
-    html += '<div class="consumable-photo-slot" onclick="uploadConsumableVariantPhoto(' + i + ')" style="width:56px;height:56px;border-radius:8px;background:var(--bg);display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden;cursor:pointer;position:relative">';
+    // ===== 左列：照片（相机入口）+ 🧩规格 + ❌不再买 =====
+    html += '<div style="flex-shrink:0;display:flex;flex-direction:column;gap:6px;align-items:center">';
+    html += '<div class="consumable-photo-slot" onclick="uploadConsumableVariantPhoto(' + i + ')" style="width:56px;height:56px;border-radius:8px;background:var(--bg);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;position:relative">';
     if (photos[i] && photos[i].length > 0) {
       html += '<img src="' + photos[i][0] + '" style="width:100%;height:100%;object-fit:cover;border-radius:8px">';
       html += '<div style="position:absolute;bottom:0;right:0;background:rgba(0,0,0,0.6);color:#fff;font-size:10px;padding:1px 4px;border-radius:4px 0 8px 0">' + (photos[i].length > 1 ? '+' + photos[i].length : '') + '</div>';
@@ -5281,10 +5332,20 @@ function renderConsumableVariantRows() {
       html += '<span style="font-size:20px;color:var(--text-tertiary)">📷</span>';
     }
     html += '</div>';
-    // 品牌名 + 套餐数 × 套餐价 = 总价（套餐模型）
-    html += '<div style="flex:1;display:flex;flex-direction:column;gap:8px">';
-    html += '<input type="text" class="form-input" style="font-size:14px" placeholder="品牌名" value="' + escapeHtml(v.brand) + '" onchange="updateConsumableVariantField(' + i + ',\'brand\',this.value)">';
-    // ===== 七项主结构：主名称 / 总套餐数 / 套餐单价 / 套餐总价 / 套餐内包数 / 单包规格 / 规格单位 =====
+    // 🧩：展开/收起「规格明细」（组合消耗型按子规格记录用；普通品牌不用管）
+    html += '<button type="button" class="vside-btn' + (specsOpen ? ' on spec' : '') + '" onclick="toggleVariantSpecsOpen(' + i + ')">🧩<small>规格' + ((v.specs || []).length ? ' ' + v.specs.length : '') + '</small></button>';
+    // ❌：这个品牌用完就不再买了（= noRestock，不再计入补货提醒）
+    html += '<button type="button" class="vside-btn' + (v.noRestock ? ' on' : '') + '" onclick="toggleVariantNoRestock(' + i + ')">❌<small>不再买</small></button>';
+    html += '</div>';
+    // ===== 右列：七行标签化填写 =====
+    html += '<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:0">';
+    // 行1：品牌名称（+ 删除品牌的小按钮，避免与「❌不再买」混淆）
+    html += '<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">';
+    html += '<input type="text" class="form-input" style="flex:1;min-width:0;font-size:14px;font-weight:600" placeholder="品牌名称" value="' + escapeHtml(v.brand) + '" onchange="updateConsumableVariantField(' + i + ',\'brand\',this.value)">';
+    if (variants.length > 1) {
+      html += '<button type="button" class="btn btn-outline btn-sm" style="flex-shrink:0;padding:5px 8px;font-size:13px" title="删除这个品牌" onclick="removeConsumableVariantRow(' + i + ')">🗑</button>';
+    }
+    html += '</div>';
     // 字段映射：packCount=总套餐数、packQty=套餐内包数、packWeight=单包规格、packWeightUnit=规格单位
     var cPack = v.packCount || 0;
     var cPackPrice = v.packPrice || 0;
@@ -5292,51 +5353,57 @@ function renderConsumableVariantRows() {
     var cWeight = v.packWeight || '';
     var cWeightUnit = v.packWeightUnit || '';
     var cTotal = v.totalPrice || (cPackPrice * cPack);
-    // 行1：总套餐数 × 套餐单价 = 套餐总价
-    html += '<div style="display:flex;gap:6px;align-items:center">';
-    html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="总套餐数" value="' + (cPack||'') + '" oninput="onConsumablePriceInput(' + i + ',\'pack\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'pack\',this.value)" step="1" title="买了几套">';
-    html += '<span style="font-size:12px;color:var(--text-tertiary)">×</span>';
-    html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="套餐单价" value="' + (cPackPrice||'') + '" oninput="onConsumablePriceInput(' + i + ',\'packprice\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'packprice\',this.value)" step="0.01">';
-    html += '<span style="font-size:12px;color:var(--text-tertiary)">=</span>';
-    html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="套餐总价" value="' + (cTotal||'') + '" oninput="onConsumablePriceInput(' + i + ',\'total\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'total\',this.value)" step="0.01">';
+    // 行2：总套餐数
+    html += '<div class="vfield"><span class="vfield-label">总套餐数：</span>';
+    html += '<input type="number" class="form-input" placeholder="买了几套，如 2" value="' + (cPack||'') + '" oninput="onConsumablePriceInput(' + i + ',\'pack\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'pack\',this.value)" step="1">';
     html += '</div>';
-    // 行2：套餐内包数 / 单包规格 / 规格单位
-    html += '<div style="display:flex;gap:6px;align-items:center">';
-    html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="套餐内包数" value="' + (cPackQty||'') + '" oninput="onConsumablePriceInput(' + i + ',\'packqty\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'packqty\',this.value)" step="1" title="一套里有几包（如猫粮 1盒6包填6；面霜 1盒1瓶填1，留空=1）">';
-    html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="单包规格" value="' + (cWeight||'') + '" oninput="onConsumablePriceInput(' + i + ',\'weight\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'weight\',this.value)" step="0.01" title="一包含多少（猫粮 1.5KG填1.5；面霜 15ml填15）">';
-    html += '<input type="text" class="form-input" style="font-size:12px;width:70px;flex-shrink:0" list="spec-unit-list" placeholder="规格单位" value="' + escapeHtml(cWeightUnit || '') + '" onchange="onConsumableWeightUnitInput(' + i + ',this.value)" title="kg / L / ml / g / 片 / 个 / 包 …">';
+    // 行3+4：套餐单价 / 套餐总价（自动联动：单价 × 总套餐数 = 总价）
+    html += '<div style="display:flex;gap:10px">';
+    html += '<div class="vfield" style="flex:1;min-width:0"><span class="vfield-label">套餐单价：</span>';
+    html += '<input type="number" class="form-input" placeholder="一套多少钱" value="' + (cPackPrice||'') + '" oninput="onConsumablePriceInput(' + i + ',\'packprice\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'packprice\',this.value)" step="0.01">';
     html += '</div>';
-    // 库存提示（衍生，非编辑）：带完整算式
-    html += '<div id="packstock-' + i + '" style="font-size:12px;color:var(--text-secondary);line-height:1.5">' + packHintOf(v) + '</div>';
-    // 混合规格（本品牌可选）：组合消耗型④用「包数 × 每包含量」，如 日用 3包×5片 = 15片
-    html += '<div style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">';
-    html += '<span style="font-size:12px;color:var(--text-secondary)">🧩 规格明细（选填）</span>';
-    html += '<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:' + (v.specPerPack ? 'var(--accent)' : 'var(--text-tertiary)') + ';cursor:pointer"><input type="checkbox" ' + (v.specPerPack ? 'checked' : '') + ' onchange="onSpecPerPackToggle(' + i + ',this.checked)"> 明细是一套的量（×套餐数）</label>';
+    html += '<div class="vfield" style="flex:1;min-width:0"><span class="vfield-label">套餐总价：</span>';
+    html += '<input type="number" class="form-input" placeholder="自动算，可改" value="' + (cTotal||'') + '" oninput="onConsumablePriceInput(' + i + ',\'total\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'total\',this.value)" step="0.01">';
+    html += '</div></div>';
+    // 行5：套餐内包数
+    html += '<div class="vfield"><span class="vfield-dot">·</span><span class="vfield-label">套餐内包数：</span>';
+    html += '<input type="number" class="form-input" placeholder="一套里有几包，如 6" value="' + (cPackQty||'') + '" oninput="onConsumablePriceInput(' + i + ',\'packqty\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'packqty\',this.value)" step="1">';
     html += '</div>';
-    html += '<div style="display:flex;gap:4px;margin:4px 0 2px;font-size:10px;color:var(--text-tertiary)">';
-    html += '<span style="flex:1.4;min-width:0">名称</span><span style="flex:.85;min-width:0">包数</span><span style="flex:.85;min-width:0">每包含量</span><span style="width:52px;flex-shrink:0">单位</span><span style="width:30px;flex-shrink:0"></span>';
+    // 行6+7：单包规格 / 规格单位
+    html += '<div style="display:flex;gap:10px">';
+    html += '<div class="vfield" style="flex:1;min-width:0"><span class="vfield-dot">·</span><span class="vfield-label" style="min-width:66px">单包规格：</span>';
+    html += '<input type="number" class="form-input" placeholder="一包有多少，如 1.5" value="' + (cWeight||'') + '" oninput="onConsumablePriceInput(' + i + ',\'weight\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'weight\',this.value)" step="0.01">';
     html += '</div>';
-    (v.specs || []).forEach(function (s, k) {
-      html += '<div style="display:flex;gap:4px;margin-bottom:4px">';
-      html += '<input type="text" class="form-input" style="font-size:12px;flex:1.4;min-width:0;padding:5px 6px" placeholder="日用" value="' + escapeHtml(s.name || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'name\',this.value)">';
-      html += '<input type="number" class="form-input" style="font-size:12px;flex:.85;min-width:0;padding:5px 6px" placeholder="3" value="' + (specPackCountRaw(s) || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'packCount\',this.value)">';
-      html += '<input type="number" class="form-input" style="font-size:12px;flex:.85;min-width:0;padding:5px 6px" placeholder="5" value="' + (specPackQtyRaw(s) || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'packQty\',this.value)">';
-      html += '<input type="text" class="form-input" style="font-size:12px;width:52px;flex-shrink:0;padding:5px 4px" placeholder="片" value="' + escapeHtml(s.unit || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'unit\',this.value)" list="spec-unit-list">';
-      html += '<button class="btn btn-danger btn-sm" style="flex-shrink:0;padding:5px 7px" onclick="removeVariantSpec(' + i + ',' + k + ')">✕</button>';
+    html += '<div class="vfield" style="flex:0 0 108px"><span class="vfield-label" style="min-width:52px">单位：</span>';
+    html += '<input type="text" class="form-input" style="flex:1;min-width:0" list="spec-unit-list" placeholder="kg/ml/片" value="' + escapeHtml(cWeightUnit || '') + '" onchange="onConsumableWeightUnitInput(' + i + ',this.value)">';
+    html += '</div></div>';
+    // ===== 计算结果（七行填完自动算） =====
+    html += '<div id="packstock-' + i + '" class="vcalc">' + packHintOf(v) + '</div>';
+    // ===== 规格明细（🧩 展开/收起；组合消耗型④按子规格记录用） =====
+    if (specsOpen) {
+      html += '<div style="margin-top:10px;padding-top:8px;border-top:0.5px dashed var(--separator)">';
+      html += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">🧩 规格明细（选填，如 日用/夜用 分开记）</div>';
+      html += '<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:' + (v.specPerPack ? 'var(--accent)' : 'var(--text-tertiary)') + ';cursor:pointer;margin-bottom:6px"><input type="checkbox" ' + (v.specPerPack ? 'checked' : '') + ' onchange="onSpecPerPackToggle(' + i + ',this.checked)"> 明细是一套的量（×套餐数）</label>';
+      html += '<div style="display:flex;gap:4px;margin:4px 0 2px;font-size:10px;color:var(--text-tertiary)">';
+      html += '<span style="flex:1.4;min-width:0">名称</span><span style="flex:.85;min-width:0">包数</span><span style="flex:.85;min-width:0">每包含量</span><span style="width:52px;flex-shrink:0">单位</span><span style="width:30px;flex-shrink:0"></span>';
       html += '</div>';
-      // 该规格的算式预览（如 日用 3包×5片 = 15片）
-      html += '<div style="font-size:11px;color:var(--text-tertiary);margin:-2px 0 4px 2px">' + escapeHtml(specLineText(s)) + '</div>';
-    });
-    html += '<button class="btn btn-outline btn-sm" style="width:100%;padding:5px;margin-bottom:4px" onclick="addVariantSpec(' + i + ')">＋ 添加规格</button>';
-    var spTxt = variantSpecText(v);
-    if (spTxt) html += '<div style="font-size:12px;color:var(--accent);font-weight:600;margin-bottom:4px">' + escapeHtml(spTxt) + '</div>';
-    // 不再买：该品牌不回购，不计入补货提醒（卡片与历史数据保留）
-    html += '<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:' + (v.noRestock ? 'var(--red)' : 'var(--text-secondary)') + ';margin-top:6px;cursor:pointer"><input type="checkbox" ' + (v.noRestock ? 'checked' : '') + ' onchange="updateConsumableVariantField(' + i + ',\'noRestock\',this.checked)"> 🚫 不再买（这个品牌不回购，不再计入补货提醒）</label>';
-    html += '</div>';
-    // 删除按钮
-    if (variants.length > 1) {
-      html += '<button class="btn btn-danger btn-sm" style="flex-shrink:0;padding:6px 8px;font-size:12px" onclick="removeConsumableVariantRow(' + i + ')">✕</button>';
+      (v.specs || []).forEach(function (s, k) {
+        html += '<div style="display:flex;gap:4px;margin-bottom:4px">';
+        html += '<input type="text" class="form-input" style="font-size:12px;flex:1.4;min-width:0;padding:5px 6px" placeholder="日用" value="' + escapeHtml(s.name || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'name\',this.value)">';
+        html += '<input type="number" class="form-input" style="font-size:12px;flex:.85;min-width:0;padding:5px 6px" placeholder="3" value="' + (specPackCountRaw(s) || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'packCount\',this.value)">';
+        html += '<input type="number" class="form-input" style="font-size:12px;flex:.85;min-width:0;padding:5px 6px" placeholder="5" value="' + (specPackQtyRaw(s) || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'packQty\',this.value)">';
+        html += '<input type="text" class="form-input" style="font-size:12px;width:52px;flex-shrink:0;padding:5px 4px" placeholder="片" value="' + escapeHtml(s.unit || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'unit\',this.value)" list="spec-unit-list">';
+        html += '<button class="btn btn-danger btn-sm" style="flex-shrink:0;padding:5px 7px" onclick="removeVariantSpec(' + i + ',' + k + ')">✕</button>';
+        html += '</div>';
+        // 该规格的算式预览（如 日用 3包×5片 = 15片）
+        html += '<div style="font-size:11px;color:var(--text-tertiary);margin:-2px 0 4px 2px">' + escapeHtml(specLineText(s)) + '</div>';
+      });
+      html += '<button class="btn btn-outline btn-sm" style="width:100%;padding:5px;margin-bottom:4px" onclick="addVariantSpec(' + i + ')">＋ 添加规格</button>';
+      html += '</div>';
     }
+    var spTxt = variantSpecText(v);
+    if (spTxt && !specsOpen) html += '<div style="font-size:12px;color:var(--accent);font-weight:600;margin-top:6px">' + escapeHtml(spTxt) + '</div>';
+    html += '</div>';
     html += '</div>';
     // 已有照片缩略图列表
     if (photos[i] && photos[i].length > 0) {
@@ -5353,11 +5420,26 @@ function renderConsumableVariantRows() {
   });
   return html;
 }
+// 🧩 展开/收起规格明细
+function toggleVariantSpecsOpen(i) {
+  window._specsOpen = window._specsOpen || {};
+  var cur = (window._specsOpen[i] !== undefined) ? window._specsOpen[i] : (((window._editVariants || [])[i] || {}).specs || []).length > 0;
+  window._specsOpen[i] = !cur;
+  renderVariantList();
+}
+// ❌ 切换「不再买」（用完不回购，不再计入补货提醒）
+function toggleVariantNoRestock(i) {
+  var v = (window._editVariants || [])[i]; if (!v) return;
+  v.noRestock = !v.noRestock;
+  renderVariantList();
+}
 // 变体级混合规格编辑：改完只重绘品牌列表（数量变化必须重绘，改值只刷提示）
 function addVariantSpec(i) {
   var v = (window._editVariants || [])[i]; if (!v) return;
   if (!v.specs) v.specs = [];
   v.specs.push({ name: '', qty: '', content: '', unit: (v.specs[0] ? v.specs[0].unit : (v.packWeightUnit || '')) }); // 全选填，不预填数字
+  window._specsOpen = window._specsOpen || {};
+  window._specsOpen[i] = true;   // 点了添加规格 → 自动展开明细区
   renderVariantList();
 }
 // 勾选/取消「明细是一套的量」→ 只影响保存时的折算与预览
@@ -5469,8 +5551,10 @@ function onConsumablePriceBlur(idx, which, val) {
 }
 // 库存提示：带计算过程（总套餐数 × 套餐内包数 × 单包规格 = 库存）
 // 规则：留空的一律按 1 参与计算（也可以填 0）；全部留空则只显示「未填写」
-function packHintOf(v) {
-  var MUL = ' <span style="color:var(--text-tertiary)">×</span> ';
+// plain=true 时输出纯文本（卡片背面直接塞进 escapeHtml 上下文，带 HTML 标签会显示成「代码」）
+function packHintOf(v, plain) {
+  var MUL = plain ? ' × ' : ' <span style="color:var(--text-tertiary)">×</span> ';
+  var DIM = plain ? function (x) { return x; } : function (x) { return '<i style="color:var(--text-tertiary)">' + x + '</i>'; };
   // 混合规格：直接列出每种规格的件数与含量，再汇总
   var sp = variantSpecsOf(v);
   if (sp.length) {
@@ -5501,9 +5585,9 @@ function packHintOf(v) {
   var cu = (v.packWeightUnit || '').trim();          // 规格单位（ml / kg / 片…）
   var pu = (v.packUnit || '').trim() || '包';        // 套餐内单位（包）
   var seg = [];
-  seg.push((pcRaw === '' ? '<i style="color:var(--text-tertiary)">1</i>' : trimNum(pc)) + '套');
-  seg.push((pqRaw === '' ? '<i style="color:var(--text-tertiary)">1</i>' : trimNum(pq)) + pu + '/套');
-  if (cu || wRaw !== '') seg.push((wRaw === '' ? '<i style="color:var(--text-tertiary)">1</i>' : trimNum(w)) + cu + '/' + pu);
+  seg.push((pcRaw === '' ? DIM('1') : trimNum(pc)) + '套');
+  seg.push((pqRaw === '' ? DIM('1') : trimNum(pq)) + pu + '/套');
+  if (cu || wRaw !== '') seg.push((wRaw === '' ? DIM('1') : trimNum(w)) + cu + '/' + pu);
   var txt = seg.join(MUL) + ' = ' + trimNum(content) + cu;
   return '📦 库存 = ' + txt + '（' + trimNum(pieces) + ' ' + pu + '）';
 }
@@ -5814,7 +5898,13 @@ function saveItem() {
   var data = {
     name: name,
     categoryId: finalCategoryId,
-    location: document.getElementById('item-location').value,
+    // 存放位置字段已并入备注；编辑旧物品时保留原 location 值，不丢数据
+    location: (function () {
+      var el = document.getElementById('item-location');
+      if (el) return el.value;
+      var oldIt = editingItemId ? getItem(currentZoneId, editingItemId) : null;
+      return oldIt ? (oldIt.location || '') : '';
+    })(),
     notes: (function() { var el = document.getElementById('item-notes'); return el ? el.value : ''; })(),
     photos: itemPhotos.slice()
   };
@@ -6098,7 +6188,12 @@ function buildYearStats(year) {
       }
       var brands = Object.keys(brandMap).map(function(k) { return brandMap[k]; });
       totalSpend += spend;
+      // 速率四要素也一并固化：物品删除后年报仍能展示它的「用得多快 / 建议买多少」
+      // （固化时物品还在，statsOf/buyAdviceOf 可正常计算；此后这份数据不再变化）
+      var stY = statsOf(it);
+      var advY = buyAdviceOf(it);
       items.push({
+        itemId: it.id,
         zoneId: z.id, zoneName: z.name, zoneIcon: z.icon || '📦',
         categoryPath: getCategoryPath(z.id, it.categoryId) || '未分类',
         name: it.name, unit: unitName,
@@ -6110,6 +6205,10 @@ function buildYearStats(year) {
         times: times,
         avgDays: dayCnt > 0 ? Math.round(daySum / dayCnt) : 0,
         estimated: estimated,
+        rateText: rateSentenceOf(it, stY),
+        restText: restSentenceOf(it, stY),
+        leftText: monthsLeftSentenceOf(stY),
+        adviceText: advY ? String(advY.main || '').replace(/<[^>]+>/g, '') : '',
         brands: brands
       });
     });
@@ -8109,11 +8208,13 @@ function reportToggle(key) {
 // 单条：左侧名称/领地，右侧速率结论，下方依据行
 function renderReportRow(e) {
   var html = '';
-  html += '<div class="report-row" onclick="openCardDetail(\'' + e.zoneId + '\',\'' + e.itemId + '\')">';
+  // 已删除的历史条目：没有卡片可跳，不绑 onclick
+  html += '<div class="report-row"' + (e.deleted ? '' : ' onclick="openCardDetail(\'' + e.zoneId + '\',\'' + e.itemId + '\')"') + '>';
   html += '<div class="report-row-head">';
   html += '<div class="report-row-name">' + escapeHtml(e.name);
+  if (e.deleted) html += '<span class="report-tag">已删除</span>';
   if (e.archived) html += '<span class="report-tag">已归档</span>';
-  if (e.noRestock) html += '<span class="report-tag">不再买</span>';
+  if (e.noRestock && !e.deleted) html += '<span class="report-tag">不再买</span>';
   if (e.lowStock) html += '<span class="report-tag report-tag-warn">告急</span>';
   html += '</div>';
   html += '<div class="report-row-zone">' + e.zoneIcon + ' ' + escapeHtml(e.zoneName) + '</div>';
@@ -8124,6 +8225,13 @@ function renderReportRow(e) {
   if (e.rateText) facts.push(e.rateText);
   if (e.restText && e.hasData) facts.push(e.restText);
   if (e.usedThisYear > 0 && e.model === 'instant') facts.push('今年累计用掉 ' + trimNum(e.usedThisYear) + (e.unit || '份'));
+  // 历史条目：列出档案里每一年的用量与花费
+  (e.years || []).forEach(function (y) {
+    var t = y.year + ' 年用了 ' + trimNum(y.qty) + (y.unit || '');
+    if (y.capQty > 0) t += '（≈' + trimNum(y.capQty) + (y.capUnit || '') + '）';
+    if (y.spend > 0) t += ' · ¥' + y.spend.toFixed(2);
+    facts.push(t);
+  });
   if (facts.length) {
     html += '<div class="report-facts">';
     facts.forEach(function (f) { html += '<span class="report-fact">' + escapeHtml(f) + '</span>'; });
@@ -8132,7 +8240,7 @@ function renderReportRow(e) {
   if (e.leftText) html += '<div class="report-left">' + escapeHtml(e.leftText) + '</div>';
   if (e.advice) html += '<div class="report-advice">' + escapeHtml(e.advice) + '</div>';
   if (e.adviceDetail) html += '<div class="report-detail">' + escapeHtml(e.adviceDetail) + '</div>';
-  if (!e.hasData) html += '<div class="report-detail">点开卡片记一次消耗，就能算出速率。</div>';
+  if (!e.hasData && !e.deleted) html += '<div class="report-detail">点开卡片记一次消耗，就能算出速率。</div>';
   html += '</div>';
   return html;
 }
@@ -8153,11 +8261,14 @@ function renderReport() {
   html += '<div class="report-hero">';
   html += '<div class="report-hero-title">📊 ' + r.asOf.getFullYear() + ' 年报</div>';
   html += '<div class="report-hero-sub">只看两件事：现在用得多快，这次该买多少。</div>';
-  html += '<div class="report-hero-grid">';
-  html += '<div class="report-stat"><div class="report-stat-num">' + r.counts.rate + '</div><div class="report-stat-label">有速率的物品</div></div>';
+  html += '<div class="report-hero-grid"' + (r.counts.history > 0 ? ' style="grid-template-columns:repeat(5,1fr)"' : '') + '>';
+  html += '<div class="report-stat"><div class="report-stat-num">' + r.counts.rate + '</div><div class="report-stat-label">有速率</div></div>';
   html += '<div class="report-stat"><div class="report-stat-num report-stat-warn">' + r.counts.buy + '</div><div class="report-stat-label">需要补货</div></div>';
   html += '<div class="report-stat"><div class="report-stat-num">' + r.counts.stop + '</div><div class="report-stat-label">不用再买</div></div>';
   html += '<div class="report-stat"><div class="report-stat-num">' + r.counts.noData + '</div><div class="report-stat-label">还差数据</div></div>';
+  if (r.counts.history > 0) {
+    html += '<div class="report-stat"><div class="report-stat-num">' + r.counts.history + '</div><div class="report-stat-label">历史档案</div></div>';
+  }
   html += '</div>';
   if (r.totalSpend > 0) {
     html += '<div class="report-hero-spend">今年已记录花费 <strong>¥' + r.totalSpend.toFixed(2) + '</strong></div>';
