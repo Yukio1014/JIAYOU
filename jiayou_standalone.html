@@ -1254,6 +1254,7 @@ function manualSync() {
 var DB = {
   zones: [],
   tasks: [],
+  yearStats: {},
   settings: {},
   version: 1
 };
@@ -1413,6 +1414,7 @@ function mergeDB(defaults, loaded) {
   if (!result.settings) result.settings = defaults.settings;
   if (!result.zones) result.zones = [];
   if (!result.tasks) result.tasks = [];
+  if (!result.yearStats) result.yearStats = {};
   // 旧版「目标锁定」数据迁移为「任务委托」
   if (result.pool && !result.tasks.length) {
     migratePoolToTasks(result);
@@ -2548,11 +2550,15 @@ function renderCardBack(item, zone) {
     if (item.stockThreshold) html += '<div class="back-row"><span class="back-label">告急阈值</span><span class="back-value">' + item.stockThreshold + (item.unit||'') + '</span></div>';
     html += '</div>';
 
-    // === 品牌变体 ===
+    // === 品牌变体（已用完/不再买的默认折叠，保持面板清爽）===
     if (item.variants && item.variants.length > 0) {
+      var doneVs = item.variants.filter(function(v) { return v.usedUp || v.noRestock; });
+      var liveVs = item.variants.filter(function(v) { return !(v.usedUp || v.noRestock); });
+      var showDone = !!(window._showDoneVariants && window._showDoneVariants[item.id]);
+      var listVs = showDone ? item.variants : liveVs;
       html += '<div class="back-section">';
-      html += '<div class="back-section-title">品牌变体 (' + item.variants.length + '个)</div>';
-      item.variants.forEach(function(v, vi) {
+      html += '<div class="back-section-title">品牌变体 (' + liveVs.length + '个在用' + (doneVs.length ? ' · 已藏' + doneVs.length + '个' : '') + ')</div>';
+      listVs.forEach(function(v, vi) {
         var isUsing = v.opened && !v.usedUp;
         var isDone = !!v.usedUp;
         var cardCls = 'variant-card' + (isUsing ? ' vc-using' : (isDone ? ' vc-done' : '')) + (v.noRestock ? ' vc-norestock' : '');
@@ -2625,6 +2631,12 @@ function renderCardBack(item, zone) {
         html += '</div>';
         html += '</div>';
       });
+      // 折叠行：已用完 / 不再买的品牌
+      if (doneVs.length > 0) {
+        html += '<div style="margin-top:10px;padding:10px 12px;border-radius:10px;background:rgba(142,142,147,0.10);font-size:12px;color:var(--text-secondary);text-align:center;cursor:pointer" onclick="toggleDoneVariants(\'' + item.id + '\')">';
+        html += showDone ? '🔼 收起已用完 / 不再买的 ' + doneVs.length + ' 个品牌' : '👁 已藏 ' + doneVs.length + ' 个用完 / 不再买的品牌 · 点开查看';
+        html += '</div>';
+      }
       html += '</div>';
     }
 
@@ -3075,8 +3087,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791261144 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791261144';
+// deploy.py 部署时会把 1791262508 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791262508';
 
 function checkAppUpdate(manual) {
   try {
@@ -4366,6 +4378,220 @@ function deleteItem(itemId) {
   renderZone();
   if (document.getElementById('home-content')) renderHome();
   toast('已永久删除');
+}
+
+// ========== 年度档案：把明细压缩成一句「这一年的使用效率」==========
+// 固化后，用完的品牌/物品就可以放心删掉，结论不会丢
+function buildYearStats(year) {
+  if (!DB.yearStats) DB.yearStats = {};
+  var items = [];
+  var totalSpend = 0;
+  DB.zones.forEach(function(z) {
+    (z.items || []).forEach(function(it) {
+      var yq = 0, times = 0, daySum = 0, dayCnt = 0, spend = 0;
+      var brandMap = {};
+      // 消耗量：使用记录落在这一年的
+      (it.usageRecords || []).forEach(function(r) {
+        var d = r.endDate || r.startDate || r.date;
+        if (!d) return;
+        if (new Date(d).getFullYear() !== year) return;
+        yq += (r.qty || 1);
+        times += 1;
+        if (r.startDate && r.endDate) {
+          var dd = daysBetween(new Date(r.startDate), new Date(r.endDate));
+          if (dd >= 0) { daySum += dd; dayCnt += 1; }
+        }
+        var bn = r.brand || '未命名';
+        if (!brandMap[bn]) brandMap[bn] = { name: bn, spend: 0, restock: null };
+      });
+      // 花费：价格历史落在这一年的（按品牌归集）
+      (it.priceHistory || []).forEach(function(p) {
+        if (!p.date || new Date(p.date).getFullYear() !== year) return;
+        spend += (p.totalPrice || 0);
+        var bn2 = p.brand || '未命名';
+        if (!brandMap[bn2]) brandMap[bn2] = { name: bn2, spend: 0, restock: null };
+        brandMap[bn2].spend += (p.totalPrice || 0);
+      });
+      // 品牌评分 / 是否回购（从变体取当前结论）
+      (it.variants || []).forEach(function(v) {
+        var bn3 = v.brand || '未命名';
+        if (!brandMap[bn3]) brandMap[bn3] = { name: bn3, spend: 0, restock: null };
+        var b = brandMap[bn3];
+        b.rating = (v.feeling && v.feeling.rating) || 0;
+        b.tags = (v.feeling && v.feeling.tags) ? v.feeling.tags.slice() : [];
+        if (v.noRestock) b.restock = false; else if (v.usedUp) b.restock = true;
+      });
+      // 没有价格历史（很多物品只在变体上记了单价）→ 按当前单价估算花费，标注「约」
+      var estimated = false;
+      if (spend <= 0 && yq > 0) {
+        var perUnit = 0;
+        if (it.variants && it.variants.length) {
+          perUnit = it.variants.reduce(function(s, v) { return s + (v.packPrice || v.price || 0); }, 0) / it.variants.length;
+        } else {
+          perUnit = it.price || 0;
+        }
+        spend = Math.round(perUnit * yq * 100) / 100;
+        estimated = true;
+      }
+      if (yq <= 0 && spend <= 0) return; // 这一年没有任何动静，不进档案
+      var isPack = it.consumeMode === 'pack';
+      var unitName = isPack ? '套' : (it.unit || '个');
+      var aq = avgPackQtyOf(it);
+      var capUnit = mainPackUnit(it);
+      var brands = Object.keys(brandMap).map(function(k) { return brandMap[k]; });
+      totalSpend += spend;
+      items.push({
+        zoneId: z.id, zoneName: z.name, zoneIcon: z.icon || '📦',
+        categoryPath: getCategoryPath(z.id, it.categoryId) || '未分类',
+        name: it.name, unit: unitName,
+        qty: Math.round(yq * 10) / 10,
+        capQty: (isPack && aq > 1) ? round1(yq * aq) : 0,
+        capUnit: capUnit,
+        spend: Math.round(spend * 100) / 100,
+        unitPrice: yq > 0 ? Math.round((spend / yq) * 100) / 100 : 0,
+        times: times,
+        avgDays: dayCnt > 0 ? Math.round(daySum / dayCnt) : 0,
+        estimated: estimated,
+        brands: brands
+      });
+    });
+  });
+  items.sort(function(a, b) { return b.spend - a.spend; });
+  DB.yearStats[String(year)] = {
+    generatedAt: new Date().toISOString(),
+    itemCount: items.length,
+    totalSpend: Math.round(totalSpend * 100) / 100,
+    items: items
+  };
+  saveDB();
+  return DB.yearStats[String(year)];
+}
+
+function yearStatsYears() {
+  var ys = Object.keys(DB.yearStats || {});
+  var cur = String(new Date().getFullYear());
+  if (ys.indexOf(cur) < 0) ys.push(cur);
+  ys.sort(function(a, b) { return Number(b) - Number(a); });
+  return ys;
+}
+
+function openYearReview(year) {
+  var years = yearStatsYears();
+  if (!year) year = years[0];
+  var st = DB.yearStats && DB.yearStats[String(year)];
+  var html = '<div class="modal-handle"></div>';
+  html += '<div class="modal-title">📅 年度回顾</div>';
+  // 年份切换
+  html += '<div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:14px;scrollbar-width:none">';
+  years.forEach(function(y) {
+    var on = String(y) === String(year);
+    html += '<div onclick="openYearReview(\'' + y + '\')" style="flex-shrink:0;padding:6px 14px;border-radius:999px;font-size:13px;font-weight:600;cursor:pointer;background:' + (on ? 'var(--accent)' : 'var(--bg)') + ';color:' + (on ? '#fff' : 'var(--text-secondary)') + '">' + y + '年</div>';
+  });
+  html += '</div>';
+
+  if (!st) {
+    html += '<div class="empty-state"><div class="empty-icon">📅</div><div class="empty-text">' + year + '年还没有年度档案</div></div>';
+    html += '<div style="font-size:12px;color:var(--text-secondary);text-align:center;line-height:1.6;margin-bottom:14px">把这一年的消耗量、花费、品牌评价固化下来。<br>固化后就可以放心清理用完的品牌，结论不会丢。</div>';
+    html += '<button class="btn btn-primary btn-full" onclick="generateYearStatsAndOpen(\'' + year + '\')">生成 ' + year + ' 年度档案</button>';
+    html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">取消</button>';
+    document.getElementById('modal-content').innerHTML = html;
+    document.getElementById('modal-overlay').classList.add('show');
+    return;
+  }
+
+  html += '<div style="padding:14px;border-radius:12px;background:rgba(0,122,255,0.08);margin-bottom:14px">';
+  html += '<div style="font-size:13px;color:var(--text-secondary)">' + year + '年 · ' + st.itemCount + ' 件物品有消耗记录</div>';
+  html += '<div style="font-size:24px;font-weight:700;color:var(--accent);margin-top:2px">¥' + st.totalSpend.toFixed(2) + '</div>';
+  html += '<div style="font-size:11px;color:var(--text-tertiary);margin-top:2px">生成于 ' + formatDateTime(new Date(st.generatedAt).getTime()) + '</div>';
+  html += '</div>';
+
+  st.items.forEach(function(e) {
+    html += '<div style="padding:12px;border:0.5px solid var(--separator);border-radius:10px;margin-bottom:10px">';
+    html += '<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline">';
+    html += '<div style="min-width:0"><strong>' + escapeHtml(e.name) + '</strong>';
+    html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px">' + e.zoneIcon + ' ' + escapeHtml(e.zoneName) + ' · ' + escapeHtml(e.categoryPath) + '</div></div>';
+    html += '<div style="text-align:right;flex-shrink:0"><div style="font-weight:700">' + (e.estimated ? '约 ' : '') + '¥' + e.spend.toFixed(2) + '</div>';
+    html += '<div style="font-size:11px;color:var(--text-secondary)">用了 ' + e.qty + e.unit + (e.capQty > 0 ? '（≈' + e.capQty + escapeHtml(e.capUnit) + '）' : '') + '</div></div>';
+    html += '</div>';
+    var meta = [];
+    if (e.unitPrice > 0) meta.push('均价 ¥' + e.unitPrice.toFixed(2) + '/' + e.unit);
+    if (e.times > 0) meta.push(e.times + ' 次');
+    if (e.avgDays > 0) meta.push('平均 ' + e.avgDays + ' 天用掉一' + e.unit);
+    if (meta.length) html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:6px">' + meta.join(' · ') + '</div>';
+    if (e.brands && e.brands.length) {
+      html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:6px;line-height:1.7">';
+      e.brands.forEach(function(b) {
+        var stars = b.rating ? new Array(b.rating + 1).join('⭐') : '';
+        var flag = b.restock === false ? '🚫不回购' : (b.restock === true ? '✅回购' : '');
+        html += '<div>· ' + escapeHtml(b.name) + (stars ? ' ' + stars : '') + (flag ? ' ' + flag : '') + (b.spend > 0 ? ' · ¥' + b.spend.toFixed(2) : '') + '</div>';
+      });
+      html += '</div>';
+    }
+    html += '</div>';
+  });
+
+  html += '<button class="btn btn-outline btn-full" style="margin-top:4px" onclick="generateYearStatsAndOpen(\'' + year + '\')">🔄 重新生成 ' + year + ' 年度档案</button>';
+  html += '<button class="btn btn-outline btn-full" style="margin-top:8px" onclick="cleanupFinishedVariants(\'' + year + '\')">🧹 清理用完的品牌（档案已留下）</button>';
+  html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">关闭</button>';
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('show');
+}
+
+function generateYearStatsAndOpen(year) {
+  var st = buildYearStats(Number(year));
+  toast(year + ' 年档案已生成 · ' + st.itemCount + ' 件物品 · ¥' + st.totalSpend.toFixed(2));
+  openYearReview(year);
+}
+
+// 清理：删掉已用完 / 不再买的品牌卡片（含照片与使用记录），年度档案已固化结论
+function cleanupFinishedVariants(year) {
+  year = year || String(new Date().getFullYear());
+  if (!(DB.yearStats && DB.yearStats[String(year)])) {
+    if (!confirm('还没有 ' + year + ' 年度档案。\n\n建议先生成档案，把这一年的消耗/花费固化下来，再清理。\n\n现在生成并继续？')) return;
+    buildYearStats(Number(year));
+  }
+  var vCnt = 0, itemCnt = 0, photoCnt = 0;
+  var plan = [];
+  DB.zones.forEach(function(z) {
+    (z.items || []).forEach(function(it) {
+      if (!it.variants || !it.variants.length) return;
+      var keep = it.variants.filter(function(v) { return !(v.usedUp || v.noRestock); });
+      var drop = it.variants.filter(function(v) { return v.usedUp || v.noRestock; });
+      if (drop.length === 0) return;
+      drop.forEach(function(v) { photoCnt += ((v.photos || []).length); });
+      vCnt += drop.length;
+      if (keep.length === 0) itemCnt += 1;
+      plan.push({ zone: z, item: it, keep: keep, dropAll: keep.length === 0 });
+    });
+  });
+  if (vCnt === 0) {
+    toast('没有用完 / 不再买的品牌可清理');
+    return;
+  }
+  var msg = '将清理 ' + vCnt + ' 个品牌卡片';
+  if (itemCnt > 0) msg += '（其中 ' + itemCnt + ' 个物品的品牌会全部清空，物品本身一并移除）';
+  msg += '，含约 ' + photoCnt + ' 张照片。\n\n' + year + ' 年度档案已保存消耗量/花费/品牌评价，删了也留着结论。\n\n确定清理？此操作不可撤销。';
+  if (!confirm(msg)) return;
+  plan.forEach(function(p) {
+    if (p.dropAll) {
+      p.zone.items = p.zone.items.filter(function(x) { return x.id !== p.item.id; });
+    } else {
+      p.item.variants = p.keep;
+      syncItemFromVariants(p.item);
+    }
+  });
+  saveDB();
+  closeModal();
+  renderZone();
+  if (document.getElementById('home-content')) renderHome();
+  toast('🧹 已清理 ' + vCnt + ' 个品牌 · 年度档案保留');
+}
+
+// 详情页：展开/收起「已用完 / 不再买」的品牌卡片的品牌卡片
+function toggleDoneVariants(itemId) {
+  if (!window._showDoneVariants) window._showDoneVariants = {};
+  window._showDoneVariants[itemId] = !window._showDoneVariants[itemId];
+  if (currentDetailItem && currentDetailItem.id === itemId) renderCardBack(currentDetailItem, currentDetailZone);
 }
 
 // 详情页「⋯」菜单：编辑 / 归档 / 删除（不占顶部空间）
@@ -5876,6 +6102,9 @@ function renderSettings() {
   html += '<div class="setting-group">';
   html += '<div class="setting-row" onclick="exportJSON()"><div class="setting-label">📤 导出数据（JSON）</div><div class="setting-value">备份到文件</div></div>';
   html += '<div class="setting-row" onclick="document.getElementById(\'import-input\').click()"><div class="setting-label">📥 导入数据</div><div class="setting-value">从文件恢复</div></div>';
+  var arcN = archivedCountAll();
+  html += '<div class="setting-row" onclick="showArchivedBox()"><div class="setting-label">📦 归档箱</div><div class="setting-value">' + (arcN > 0 ? arcN + ' 件' : '空') + '</div></div>';
+  html += '<div class="setting-row" onclick="cleanupFinishedVariants()"><div class="setting-label">🧹 清理用完的品牌</div><div class="setting-value">先固化年度数据</div></div>';
   html += '</div>';
 
   // 板块管理
@@ -5892,6 +6121,8 @@ function renderSettings() {
   html += '<div class="setting-row"><div class="setting-label">委托待接</div><div class="setting-value">' + DB.tasks.filter(function(t){return t.status==='待接';}).length + '件</div></div>';
   html += '<div class="setting-row"><div class="setting-label">进行中</div><div class="setting-value">' + DB.tasks.filter(function(t){return t.status==='进行中';}).length + '件</div></div>';
   html += '<div class="setting-row"><div class="setting-label">凯旋/搁置</div><div class="setting-value">' + DB.tasks.filter(function(t){return t.status==='凯旋'||t.status==='搁置';}).length + '件</div></div>';
+  var years = Object.keys(DB.yearStats || {});
+  html += '<div class="setting-row" onclick="openYearReview()"><div class="setting-label">📅 年度回顾</div><div class="setting-value">' + (years.length ? years.length + ' 年档案' : '按年看消耗与花费') + '</div></div>';
   html += '</div>';
 
   // 版本与更新
