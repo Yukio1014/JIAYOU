@@ -329,6 +329,7 @@ body {
 .badge-good { background: rgba(52,199,89,0.85); }
 .badge-bad { background: rgba(255,59,48,0.85); }
 .badge-oneshot { background: rgba(255,149,0,0.92); }
+.badge-archived { background: rgba(142,142,147,0.92); }
 
 /* 卡片3D翻面 */
 .card-detail-overlay {
@@ -1726,6 +1727,15 @@ function getItem(zoneId, itemId) {
   }
   return null;
 }
+// ========== 归档（不再补货/不再提醒，但保留全部历史数据）==========
+function isArchived(it) { return !!(it && it.archived); }
+function visibleItems(zone) { return (zone.items || []).filter(function(it) { return !it.archived; }); }
+function archivedItemsOf(zone) { return (zone.items || []).filter(function(it) { return !!it.archived; }); }
+function archivedCountAll() {
+  var n = 0;
+  DB.zones.forEach(function(z) { n += archivedItemsOf(z).length; });
+  return n;
+}
 function getItemsByCategory(zoneId, catId) {
   var zone = getZone(zoneId);
   if (!zone) return [];
@@ -1738,6 +1748,8 @@ function getItemsByCategory(zoneId, catId) {
     });
   }
   return zone.items.filter(function(it) {
+    // 归档物品默认隐藏；搜索时才露出来（带"已归档"标记），方便找回
+    if (it.archived && !currentSearchQuery) return false;
     if (currentSearchQuery && !matchesSearch(it, zone, currentSearchQuery)) return false;
     return catId === 'all' || allowedIds.indexOf(it.categoryId) >= 0;
   });
@@ -1748,7 +1760,7 @@ function renderHome() {
   var html = '';
   var allItems = [];
   DB.zones.forEach(function(zone) {
-    zone.items.forEach(function(it) {
+    visibleItems(zone).forEach(function(it) {
       it._zoneId = zone.id;
       it._zoneType = zone.type;
       allItems.push(it);
@@ -1760,7 +1772,7 @@ function renderHome() {
   var inUseItems = [], stockpileItems = [];
   DB.zones.forEach(function(zone) {
     if (zone.type !== 'consumable') return;
-    zone.items.forEach(function(it) {
+    visibleItems(zone).forEach(function(it) {
       var status = getItemStatus(it);
       if (status.expired) expired.push({item: it, zone: zone});
       if (status.expiring) expiring.push({item: it, zone: zone});
@@ -1820,9 +1832,9 @@ function renderHome() {
     var count;
     // 耐用品：统计所有variant的实际件数总和；补给品：按物品卡片数量
     if (zone.type === 'durable') {
-      count = zone.items.reduce(function(s, it) { return s + calcDurableItemCount(it); }, 0);
+      count = visibleItems(zone).reduce(function(s, it) { return s + calcDurableItemCount(it); }, 0);
     } else {
-      count = zone.items.length;
+      count = visibleItems(zone).length;
     }
     var themeClass = 'zone-theme-' + (zone.theme || (zone.type === 'consumable' ? 'consumable' : 'durable'));
     html += '<div class="zone-card ' + themeClass + '" onclick="enterZone(\'' + zone.id + '\')">';
@@ -2074,7 +2086,7 @@ function renderAIAnalysis() {
   var buySuggestions = [], stopSuggestions = [];
   DB.zones.forEach(function(zone) {
     if (zone.type !== 'consumable') return;
-    zone.items.forEach(function(it) {
+    visibleItems(zone).forEach(function(it) {
       var rate = calcUsageRate(it);
       var status = getItemStatus(it);
       var totS = getTotalStock(it);
@@ -2234,6 +2246,11 @@ function renderZone() {
   if (currentCategoryId !== 'all') {
     html += '<div style="margin:10px 0 14px"><button class="btn btn-outline btn-sm" style="width:100%" onclick="taskOpenFormFromCategory(\'' + currentZoneId + '\',\'' + currentCategoryId + '\')">📋 委托补货（引用本分类产品）</button></div>';
   }
+  // 归档箱入口（用完不再买的物品都在这里，数据保留可恢复）
+  var arcCnt = archivedCountAll();
+  if (arcCnt > 0 && !currentSearchQuery) {
+    html += '<div style="margin:0 0 14px"><button class="btn btn-outline btn-sm" style="width:100%;font-size:12px" onclick="showArchivedBox()">📦 归档箱（' + arcCnt + ' 件 · 用完不再买）</button></div>';
+  }
   var items = getItemsByCategory(currentZoneId, currentCategoryId);
   if (items.length === 0) {
     html += '<div class="empty-state">';
@@ -2276,7 +2293,9 @@ function renderItemCard(item, zone) {
   var html = '<div class="item-card item-card-compact" onclick="openCardDetail(\'' + zone.id + '\',\'' + item.id + '\')">';
 
   // 角标
-  if (status.expired) {
+  if (item.archived) {
+    html += '<div class="card-badge badge-archived">📦 已归档</div>';
+  } else if (status.expired) {
     html += '<div class="card-badge badge-expire">已过期</div>';
   } else if (status.expiring) {
     html += '<div class="card-badge badge-warn">' + status.daysLeft + '天</div>';
@@ -2469,13 +2488,26 @@ function renderCardBack(item, zone) {
   if (item.oneShot === true) {
     html += '<div style="display:inline-block;margin-left:8px;padding:2px 8px;border-radius:6px;background:rgba(255,149,0,0.12);color:var(--orange);font-size:12px;font-weight:600;vertical-align:middle">⚡ 开袋即用完</div>';
   }
-  // 顶部快捷操作：编辑 / 删除（不用滑到底部）
+  // 顶部快捷操作：编辑 / 归档 / 删除（不用滑到底部）
   html += '<div style="display:flex;gap:6px;align-items:center">';
   html += '<button class="btn btn-outline btn-sm" style="font-size:12px;padding:4px 10px" onclick="editItem(\'' + item.id + '\')">✏ 编辑</button>';
+  if (item.archived) {
+    html += '<button class="btn btn-outline btn-sm" style="font-size:12px;padding:4px 10px" onclick="unarchiveItem(\'' + item.id + '\')">↩️ 恢复</button>';
+  } else {
+    html += '<button class="btn btn-outline btn-sm" style="font-size:12px;padding:4px 10px" onclick="archiveItem(\'' + item.id + '\')">📦 归档</button>';
+  }
   html += '<button class="btn btn-danger btn-sm" style="font-size:12px;padding:4px 10px" onclick="deleteItem(\'' + item.id + '\')">🗑</button>';
   html += '<button class="back-close" onclick="closeCardDetail()">✕</button>';
   html += '</div>';
   html += '</div>';
+
+  // 已归档提示条：说清楚归档意味着什么，随时可恢复
+  if (item.archived) {
+    html += '<div style="margin:0 0 12px;padding:10px 12px;border-radius:10px;background:rgba(142,142,147,0.12);font-size:12px;color:var(--text-secondary);line-height:1.6">';
+    html += '📦 <strong style="color:var(--text)">已归档</strong> · 不再出现在首页提醒和分类列表，也不会再催你补货。<br>使用记录、价格、感受等历史数据全部保留，随时可恢复。';
+    html += '<button class="btn btn-outline btn-sm" style="margin-top:8px" onclick="unarchiveItem(\'' + item.id + '\')">↩️ 恢复使用</button>';
+    html += '</div>';
+  }
 
   // === 吸顶操作条（补给品：开封/补货/盘点，滚动时始终可见） ===
   if (zone.type === 'consumable') {
@@ -3033,8 +3065,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791258510 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791258510';
+// deploy.py 部署时会把 1791260025 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791260025';
 
 function checkAppUpdate(manual) {
   try {
@@ -4286,15 +4318,103 @@ function editItem(itemId) {
   openItemForm(itemId);
 }
 
+// 删除：会连同使用记录一起消失，所以先说清楚，并给「归档」这个更稳的出路
 function deleteItem(itemId) {
-  if (!confirm('确定删除？此操作不可撤销。')) return;
+  var item = findItemByIdGlobal(itemId);
+  var recCnt = (item && item.usageRecords) ? item.usageRecords.length : 0;
+  var msg = '确定永久删除？此操作不可撤销。';
+  if (item) {
+    msg = '确定永久删除「' + item.name + '」？\n\n⚠️ 它的 ' + recCnt + ' 条使用记录、价格历史、使用感受会一起消失，且无法找回。\n\n如果只是「用完不再买」，建议改用 📦 归档：不再提醒补货，数据全部保留，随时可恢复。\n\n仍要永久删除吗？';
+  }
+  if (!confirm(msg)) return;
   var zone = getZone(currentZoneId);
   zone.items = zone.items.filter(function(it) { return it.id !== itemId; });
   saveDB();
   closeModal();
   closeCardDetail();
   renderZone();
-  toast('已删除');
+  if (document.getElementById('home-content')) renderHome();
+  toast('已永久删除');
+}
+
+// 归档：不再提醒/不再出现在列表，但使用记录等历史数据全部保留
+function archiveItem(itemId) {
+  var item = findItemByIdGlobal(itemId);
+  if (!item) return;
+  var recCnt = (item.usageRecords && item.usageRecords.length) || 0;
+  var msg = '归档「' + item.name + '」？\n\n归档后：不再出现在首页提醒和分类列表，也不再催你补货。\n\n' + recCnt + ' 条使用记录、价格、使用感受全部保留，随时可一键恢复。';
+  if (!confirm(msg)) return;
+  item.archived = true;
+  item.archivedAt = new Date().toISOString();
+  saveDB();
+  closeModal();
+  closeCardDetail();
+  renderZone();
+  if (document.getElementById('home-content')) renderHome();
+  toast('📦 已归档 · 数据都留着');
+}
+
+function unarchiveItem(itemId) {
+  var item = findItemByIdGlobal(itemId);
+  if (!item) return;
+  item.archived = false;
+  delete item.archivedAt;
+  saveDB();
+  closeModal();
+  closeCardDetail();
+  renderZone();
+  if (document.getElementById('home-content')) renderHome();
+  toast('↩️ 已恢复');
+}
+
+// 归档箱：列出全部已归档物品，可恢复或彻底删除
+function showArchivedBox() {
+  var html = '<div class="modal-handle"></div>';
+  html += '<div class="modal-title">📦 归档箱</div>';
+  var rows = [];
+  DB.zones.forEach(function(z) {
+    archivedItemsOf(z).forEach(function(it) { rows.push({item: it, zone: z}); });
+  });
+  if (rows.length === 0) {
+    html += '<div class="empty-state"><div class="empty-icon">📦</div><div class="empty-text">还没有归档的物品<br>用完不想再买的，点卡片里「📦 归档」</div></div>';
+    html += '<button class="btn btn-ghost btn-full" style="margin-top:12px" onclick="closeModal()">关闭</button>';
+    document.getElementById('modal-content').innerHTML = html;
+    document.getElementById('modal-overlay').classList.add('show');
+    return;
+  }
+  html += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">共 ' + rows.length + ' 件 · 数据都还在，随时可恢复</div>';
+  rows.forEach(function(r) {
+    var it = r.item, z = r.zone;
+    var recCnt = (it.usageRecords && it.usageRecords.length) || 0;
+    html += '<div style="padding:12px;border:0.5px solid var(--separator);border-radius:10px;margin-bottom:10px">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">';
+    html += '<div><strong>' + escapeHtml(it.name) + '</strong>';
+    html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px">' + z.icon + ' ' + escapeHtml(z.name) + ' · ' + recCnt + '条使用记录</div></div>';
+    html += '<button class="btn btn-outline btn-sm" onclick="unarchiveItem(\'' + it.id + '\')">↩️ 恢复</button>';
+    html += '</div>';
+    html += '<div style="margin-top:8px;display:flex;gap:8px">';
+    html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="closeModal();openCardDetail(\'' + z.id + '\',\'' + it.id + '\')">👀 查看记录</button>';
+    html += '<button class="btn btn-danger btn-sm" onclick="deleteItemFromArchive(\'' + z.id + '\',\'' + it.id + '\')">🗑 删除</button>';
+    html += '</div>';
+    html += '</div>';
+  });
+  html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">关闭</button>';
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('show');
+}
+
+function deleteItemFromArchive(zoneId, itemId) {
+  var zone = getZone(zoneId);
+  if (!zone) return;
+  var item = zone.items.find(function(it) { return it.id === itemId; });
+  var recCnt = (item && item.usageRecords) ? item.usageRecords.length : 0;
+  if (!confirm('永久删除「' + (item ? item.name : '') + '」？\n\n⚠️ ' + recCnt + ' 条使用记录会一起消失，无法找回。')) return;
+  zone.items = zone.items.filter(function(it) { return it.id !== itemId; });
+  saveDB();
+  closeModal();
+  renderZone();
+  if (document.getElementById('home-content')) renderHome();
+  toast('已永久删除');
 }
 
 // ========== 使用感受 ==========
@@ -4624,7 +4744,7 @@ function openCategoryManager() {
     var subs = getSubcategories(zone, cat.id);
     // 大类计数 = 自身 + 子分类的物品总数
     var subIds = subs.map(function(s) { return s.id; });
-    var count = zone.items.filter(function(it) {
+    var count = visibleItems(zone).filter(function(it) {
       return it.categoryId === cat.id || subIds.indexOf(it.categoryId) >= 0;
     }).length;
     html += '<div class="setting-row" style="border-radius:0;background:var(--card-bg)">';
@@ -4636,7 +4756,7 @@ function openCategoryManager() {
     html += '</div></div>';
     // 子分类行（缩进）
     subs.forEach(function(sub) {
-      var subCount = zone.items.filter(function(it) { return it.categoryId === sub.id; }).length;
+      var subCount = visibleItems(zone).filter(function(it) { return it.categoryId === sub.id; }).length;
       html += '<div class="setting-row" style="border-radius:0;padding-left:28px">';
       html += '<div><span class="setting-label">└ ' + escapeHtml(sub.name) + '</span><br><span class="setting-value">' + subCount + '件</span></div>';
       html += '<div style="display:flex;gap:6px">';
@@ -4697,7 +4817,7 @@ function deleteCategory(catId) {
       return;
     }
   }
-  var count = zone.items.filter(function(it) { return it.categoryId === catId; }).length;
+  var count = visibleItems(zone).filter(function(it) { return it.categoryId === catId; }).length;
   if (count > 0) {
     toast('该分类下还有' + count + '件物品，请先移走');
     return;
@@ -5468,7 +5588,7 @@ function taskRefSearch(kw) {
   var hits = [];
   DB.zones.forEach(function (z) {
     if (zoneFilter && z.id !== zoneFilter) return;
-    (z.items || []).forEach(function (it) {
+    visibleItems(z).forEach(function (it) {
       if (preset && (z.id !== preset.zoneId || (it.categoryId || null) !== (preset.categoryId || null))) return;
       if (kw === '') { hits.push({ zone: z, item: it }); return; }
       var inName = (it.name || '').toLowerCase().indexOf(kw) >= 0;
@@ -5857,7 +5977,7 @@ function showAlertDetail(type) {
     title = '🔴 已过期';
     DB.zones.forEach(function(zone) {
       if (zone.type !== 'consumable') return;
-      zone.items.forEach(function(it) {
+      visibleItems(zone).forEach(function(it) {
         if (getItemStatus(it).expired) items.push({item: it, zone: zone});
       });
     });
@@ -5865,7 +5985,7 @@ function showAlertDetail(type) {
     title = '🟡 即将过期（30天内）';
     DB.zones.forEach(function(zone) {
       if (zone.type !== 'consumable') return;
-      zone.items.forEach(function(it) {
+      visibleItems(zone).forEach(function(it) {
         if (getItemStatus(it).expiring) items.push({item: it, zone: zone});
       });
     });
@@ -5873,7 +5993,7 @@ function showAlertDetail(type) {
     title = '🟡 库存告急';
     DB.zones.forEach(function(zone) {
       if (zone.type !== 'consumable') return;
-      zone.items.forEach(function(it) {
+      visibleItems(zone).forEach(function(it) {
         if (getItemStatus(it).lowStock) items.push({item: it, zone: zone});
       });
     });
@@ -5881,7 +6001,7 @@ function showAlertDetail(type) {
     title = '🔵 余量较少';
     DB.zones.forEach(function(zone) {
       if (zone.type !== 'consumable') return;
-      zone.items.forEach(function(it) {
+      visibleItems(zone).forEach(function(it) {
         if (getItemStatus(it).lowStockSoft) items.push({item: it, zone: zone});
       });
     });
@@ -5889,14 +6009,14 @@ function showAlertDetail(type) {
     title = '🔓 使用中（已开封正在用）';
     DB.zones.forEach(function(zone) {
       if (zone.type !== 'consumable') return;
-      zone.items.forEach(function(it) {
+      visibleItems(zone).forEach(function(it) {
         if (getItemStatus(it).hasInUse) items.push({item: it, zone: zone});
       });
     });
   } else if (type === 'stockpile') {
     title = '📦 囤货区（买了未开封）';
     DB.zones.forEach(function(zone) {
-      zone.items.forEach(function(it) {
+      visibleItems(zone).forEach(function(it) {
         if (getItemStatus(it).allUnopened) items.push({item: it, zone: zone});
       });
     });
@@ -5966,6 +6086,9 @@ function showAlertDetail(type) {
       }
       html += '</div>';
       html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0;align-self:center;font-size:12px;padding:6px 10px" onclick="event.stopPropagation();taskFromItem(\'' + zone.id + '\',\'' + it.id + '\')">📋 委托</button>';
+      if (type === 'lowStock' || type === 'expired' || type === 'expiring') {
+        html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0;align-self:center;font-size:12px;padding:6px 8px" title="用完不再买 → 归档（保留使用记录）" onclick="event.stopPropagation();archiveItem(\'' + it.id + '\')">📦</button>';
+      }
       html += '</div>';
     });
   }
