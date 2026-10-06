@@ -326,6 +326,7 @@ body {
 .badge-expire { background: rgba(255,59,48,0.9); }
 .badge-warn { background: rgba(255,149,0,0.9); }
 .badge-low { background: rgba(255,149,0,0.9); }
+.badge-restock { background: rgba(175,82,222,0.9); }
 .badge-good { background: rgba(52,199,89,0.85); }
 .badge-bad { background: rgba(255,59,48,0.85); }
 .badge-oneshot { background: rgba(255,149,0,0.92); }
@@ -1927,7 +1928,7 @@ function renderHome() {
   });
 
   // === 消耗品预警 ===
-  var expired = [], expiring = [], lowStock = [], lowStockSoft = [];
+  var expired = [], expiring = [], lowStock = [], lowStockSoft = [], stockUpList = [];
   var inUseItems = [], stockpileItems = [];
   DB.zones.forEach(function(zone) {
     if (zone.type !== 'consumable') return;
@@ -1937,6 +1938,7 @@ function renderHome() {
       if (status.expiring) expiring.push({item: it, zone: zone});
       if (status.lowStock) lowStock.push({item: it, zone: zone});
       else if (status.lowStockSoft) lowStockSoft.push({item: it, zone: zone});
+      if (status.stockUpAlert) stockUpList.push({item: it, zone: zone});
       if (status.hasInUse) inUseItems.push({item: it, zone: zone});
       if (status.allUnopened) stockpileItems.push({item: it, zone: zone});
     });
@@ -1964,6 +1966,11 @@ function renderHome() {
     html += '<div class="badge-num">' + lowStockSoft.length + '</div>';
     html += '<div class="badge-label">余量较少</div></div>';
   }
+  if (stockUpList.length > 0) {
+    html += '<div class="alert-badge alert-purple" onclick="filterStockUp()">';
+    html += '<div class="badge-num">' + stockUpList.length + '</div>';
+    html += '<div class="badge-label">该囤货了</div></div>';
+  }
   if (inUseItems.length > 0) {
     html += '<div class="alert-badge alert-green" onclick="filterInUse()">';
     html += '<div class="badge-num">' + inUseItems.length + '</div>';
@@ -1974,7 +1981,7 @@ function renderHome() {
     html += '<div class="badge-num">' + stockpileItems.length + '</div>';
     html += '<div class="badge-label">囤货区</div></div>';
   }
-  if (expired.length === 0 && expiring.length === 0 && lowStock.length === 0 && lowStockSoft.length === 0 && inUseItems.length === 0 && stockpileItems.length === 0) {
+  if (expired.length === 0 && expiring.length === 0 && lowStock.length === 0 && lowStockSoft.length === 0 && stockUpList.length === 0 && inUseItems.length === 0 && stockpileItems.length === 0) {
     html += '<div class="alert-badge alert-green">';
     html += '<div class="badge-num">✓</div>';
     html += '<div class="badge-label">一切正常</div></div>';
@@ -2025,8 +2032,8 @@ function renderHome() {
 function getItemStatus(item) {
   var status = {
     expired: false, expiring: false,
-    lowStock: false, lowStockSoft: false,
-    shelfPercent: 100, daysLeft: null, estDaysLeft: null
+    lowStock: false, lowStockSoft: false, stockUpAlert: false,
+    shelfPercent: 100, daysLeft: null, estDaysLeft: null, monthsLeft: null
   };
 
   var totalStock = getActiveStock(item);
@@ -2111,6 +2118,29 @@ function getItemStatus(item) {
   // 余量较少/告急：够用天数少或余量低都要提示，未开封也提示（抽纸未开封但只剩 3 包）
   var hasAnyStock = (item.variants && item.variants.length ? item.variants : [item]).some(function (v) { return (v.stock || 0) > 0; });
   if (!status.hasInUse && !hasAnyStock) status.lowStockSoft = false;
+
+  // === 囤货提醒（独立于使用状态） ===
+  // 用户的采购节奏：一年只在双 11 采购一次
+  // 规则：只要「有过使用记录」且按消耗速率预估「撑不满一年」→ 就该囤货
+  // 与是否开封、是否使用中无关；库存 0 也照常提示
+  var hasAnyRecord = (item.usageRecords || []).some(function (r) { return r.startDate && r.endDate; });
+  if (hasAnyRecord) {
+    var estAll = null;
+    if (totalStock > 0) {
+      estAll = estimateStockDaysLeft(item, totalStock, variants);
+    } else {
+      // 库存为 0：还有使用中的那份在用 → 它用完就彻底没了，剩余天数取其预估值
+      var inUseV = variants.filter(function (v) { return v.opened && !v.usedUp; });
+      if (inUseV.length) estAll = Math.max(0, estimateOpenedDaysLeft(item, variants) || 0);
+      else estAll = 0;
+    }
+    if (estAll !== null) {
+      status.estDaysLeft = (status.estDaysLeft === null || status.estDaysLeft === undefined) ? estAll : status.estDaysLeft;
+      status.monthsLeft = Math.round((estAll / 30) * 10) / 10;
+      // 撑不满 365 天 → 该囤货了
+      if (estAll < 365) status.stockUpAlert = true;
+    }
+  }
 
   return status;
 }
@@ -2370,11 +2400,11 @@ function renderAIAnalysis() {
         var monthsLeft = (crAI && crAI.perMonth > 0 && scAI !== null) ? scAI / crAI.perMonth
                         : ((crAI && crAI.perMonth > 0 && (it.usageRecords || []).some(function (r) { return r.specText; })) ? null
                         : totS / rate);
-        // 只要够用月数 < 2（含余量较少/未开封快用完）就进采购建议，不再只看「告急」
-        if (monthsLeft !== null && (status.lowStock || monthsLeft < 2)) {
+        // 只要「撑不到一年」就该备货（status.stockUpAlert 已含此规则），告急也一并进
+        if (monthsLeft !== null && (status.lowStock || status.stockUpAlert || monthsLeft < 12)) {
           var hasSpecAI = (it.usageRecords || []).some(function (r) { return r.specText; });
-          var suggestQty = Math.ceil(rate * 6); // 建议买半年量（记录口径：份/套/小单位）
-          var reason = '库存仅够' + monthsLeft.toFixed(1) + '月';
+          var suggestQty = Math.ceil(rate * 12); // 一年只采购一次 → 建议买够一年量（记录口径：份/套/小单位）
+          var reason = '库存仅够' + monthsLeft.toFixed(1) + '月，撑不到下次采购';
           if (it.consumeMode === 'pack' && it.variants && it.variants.length && (it.variants[0].packQty || 1) > 1) {
             var apq = it.variants[0].packQty;
             reason += '（约 ' + Math.ceil(suggestQty / Math.max(1, apq)) + ' 套）';
@@ -2581,6 +2611,8 @@ function renderItemCard(item, zone) {
     html += '<div class="card-badge badge-warn">' + status.daysLeft + '天</div>';
   } else if (status.lowStock) {
     html += '<div class="card-badge badge-low">告急</div>';
+  } else if (status.stockUpAlert) {
+    html += '<div class="card-badge badge-restock">🛒 囤货</div>';
   }
   // 开袋即用完标记（用于排查被误开的开关）
   if (item.oneShot === true) {
@@ -3076,6 +3108,11 @@ function renderCardBack(item, zone) {
         }
       }
       html += '</div></div>';
+      // 囤货状态：撑不到一年 → 提醒按「一年一采」节奏备货
+      var stBack = getItemStatus(item);
+      if (stBack.stockUpAlert) {
+        html += '<div style="margin-top:8px;padding:8px 10px;border-radius:10px;background:rgba(175,82,222,0.08);font-size:12px;color:var(--purple);font-weight:600">🛒 按当前消耗约够 ' + (stBack.monthsLeft !== null ? stBack.monthsLeft : '?') + ' 个月，撑不到下次采购，建议囤货</div>';
+      }
     } else {
       html += '<div class="back-row"><span class="back-label" style="color:var(--text-tertiary)">数据不足，暂无法估算</span></div>';
       html += '<div style="font-size:12px;color:var(--text-tertiary);margin-top:4px">记录几次使用后会给出采购建议</div>';
@@ -3407,8 +3444,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791292877 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791292877';
+// deploy.py 部署时会把 1791293532 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791293532';
 
 function checkAppUpdate(manual) {
   try {
@@ -5685,22 +5722,32 @@ function saveStockAudit(itemId) {
     diff: diff
   });
 
-  // 校正库存：把差异按消耗速率摊回使用记录
+  // 校正库存：把差异记成一条使用记录
+  // 场景：出差/家人代用 → 中间没写记录，盘点时消失的那部分也是被用掉了
+  // 规则：起点 = 上一条记录的结束日（没有则用 30 天前兜底），终点 = 今天
+  // 这样「这一段」才会作为一条真实使用记录参与速率计算
   if (diff > 0) {
-    // 实际少于记录（用得更快），差异记入消耗总量
-    var rate = calcUsageRate(item);
-    if (rate > 0) {
-      // 生成一条"盘点差异"使用记录，qty=差异量，endDate=今天，摊回消耗
-      if (!item.usageRecords) item.usageRecords = [];
-      item.usageRecords.push({
-        startDate: item.auditHistory.length > 1 ? item.auditHistory[item.auditHistory.length-2].date : new Date(Date.now() - 30*86400000).toISOString(),
-        endDate: new Date().toISOString(),
-        qty: diff,
-        variantId: null,
-        brand: '盘点差异(共用)',
-        isAudit: true
-      });
-    }
+    if (!item.usageRecords) item.usageRecords = [];
+    var nowA = new Date();
+    // 找最近一条已结束记录的 endDate 作为起点（按日期不按数组顺序，防止乱序）
+    var lastEndMs = null;
+    item.usageRecords.forEach(function (r) {
+      if (!r.endDate) return;
+      var t = new Date(r.endDate).getTime();
+      if (isNaN(t)) return;
+      if (lastEndMs === null || t > lastEndMs) lastEndMs = t;
+    });
+    var startA = lastEndMs !== null ? new Date(lastEndMs) : new Date(nowA.getTime() - 30 * 86400000);
+    // 起点不能晚于今天
+    if (startA.getTime() > nowA.getTime()) startA = new Date(nowA.getTime() - 86400000);
+    item.usageRecords.push({
+      startDate: startA.toISOString(),
+      endDate: nowA.toISOString(),
+      qty: diff,
+      variantId: null,
+      brand: '盘点差异(共用)',
+      isAudit: true
+    });
   }
 
   syncItemFromVariants(item);
@@ -7291,6 +7338,14 @@ function showAlertDetail(type) {
         if (getItemStatus(it).lowStockSoft) items.push({item: it, zone: zone});
       });
     });
+  } else if (type === 'stockUp') {
+    title = '🟣 该囤货了（撑不到下次采购）';
+    DB.zones.forEach(function(zone) {
+      if (zone.type !== 'consumable') return;
+      visibleItems(zone).forEach(function(it) {
+        if (getItemStatus(it).stockUpAlert) items.push({item: it, zone: zone});
+      });
+    });
   } else if (type === 'inUse') {
     title = '🔓 使用中（已开封正在用）';
     DB.zones.forEach(function(zone) {
@@ -7334,6 +7389,7 @@ function showAlertDetail(type) {
       else if (type === 'expiring') bgColor = 'rgba(255,149,0,0.06)';
       else if (type === 'lowStock') bgColor = 'rgba(255,149,0,0.06)';
       else if (type === 'lowStockSoft') bgColor = 'rgba(90,200,250,0.06)';
+      else if (type === 'stockUp') bgColor = 'rgba(175,82,222,0.06)';
       else if (type === 'stockpile') bgColor = 'rgba(142,142,147,0.06)';
 
       html += '<div style="display:flex;gap:10px;padding:12px;border-radius:10px;background:' + bgColor + ';margin-bottom:8px;cursor:pointer" onclick="closeModal();setTimeout(function(){enterZone(\'' + zone.id + '\')},200)">';
@@ -7363,6 +7419,10 @@ function showAlertDetail(type) {
       } else if (type === 'lowStockSoft') {
         var est = status.estDaysLeft;
         html += '<div style="font-size:13px;color:var(--blue);font-weight:600;margin-top:2px">⏳ 预计 ' + (est!==null?est:'?') + ' 天内用完</div>';
+      } else if (type === 'stockUp') {
+        var ml = status.monthsLeft;
+        var estS = status.estDaysLeft;
+        html += '<div style="font-size:13px;color:var(--purple);font-weight:600;margin-top:2px">🛒 约够用 ' + (ml!==null?ml:'?') + ' 个月' + (estS!==null&&estS!==undefined?'（'+estS+' 天）':'') + '，撑不到下次采购</div>';
       } else if (type === 'inUse') {
         var activeBrands = (it.variants||[]).filter(function(v){ return v.opened && !v.usedUp; }).map(function(v){ return v.brand||'未命名'; });
         html += '<div style="font-size:13px;color:var(--green);font-weight:600;margin-top:2px">🔓 使用中：' + (activeBrands.join('、') || '—') + '</div>';
@@ -7386,6 +7446,7 @@ function filterExpired() { showAlertDetail('expired'); }
 function filterExpiring() { showAlertDetail('expiring'); }
 function filterLowStock() { showAlertDetail('lowStock'); }
 function filterLowStockSoft() { showAlertDetail('lowStockSoft'); }
+function filterStockUp() { showAlertDetail('stockUp'); }
 function filterInUse() { showAlertDetail('inUse'); }
 function filterStockpile() { showAlertDetail('stockpile'); }
 </script>
