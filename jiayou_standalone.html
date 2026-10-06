@@ -431,6 +431,8 @@ body {
 .vc-badge { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px; flex-shrink: 0; }
 .vc-badge.using { background: rgba(255,149,0,0.14); color: var(--orange); }
 .vc-badge.done { background: rgba(52,199,89,0.14); color: var(--green); }
+.vc-badge.norestock { background: rgba(142,142,147,0.16); color: var(--text-secondary); }
+.variant-card.vc-norestock { opacity: 0.66; border-style: dashed; }
 .vc-price-line { display: flex; align-items: baseline; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .vc-price { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
 .vc-price-note { font-size: 12px; color: var(--text-secondary); }
@@ -444,7 +446,7 @@ body {
 .vc-stars { font-size: 14px; line-height: 1.2; }
 .vc-tags { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
 .vc-note { font-size: 12px; color: var(--text-secondary); margin-top: 4px; font-style: italic; line-height: 1.5; }
-.vc-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.vc-foot { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 
 @media (prefers-color-scheme: dark) {
   .variant-card.vc-using { border-color: var(--orange); }
@@ -1507,6 +1509,13 @@ function getTotalStock(item) {
   }
   return item.stock || 0;
 }
+// 有效库存：排除标记了「不再买」的品牌（它们不算进补货提醒）
+function getActiveStock(item) {
+  if (item.variants && item.variants.length > 0) {
+    return item.variants.filter(function(v) { return !v.noRestock; }).reduce(function(s, v) { return s + (v.stock || 0); }, 0);
+  }
+  return item.stock || 0;
+}
 
 // ===== 套餐模型展示辅助 =====
 // 折算单价：有重量→每KG单价，否则→每小单位单价
@@ -1871,10 +1880,15 @@ function getItemStatus(item) {
     shelfPercent: 100, daysLeft: null, estDaysLeft: null
   };
 
-  var totalStock = getTotalStock(item);
+  var totalStock = getActiveStock(item);
 
-  // 保质期：取所有variants中最早过期的
-  var variants = (item.variants && item.variants.length > 0) ? item.variants : [item];
+  // 保质期：取所有variants中最早过期的（不再买的品牌不参与提醒计算）
+  var allVariants = (item.variants && item.variants.length > 0) ? item.variants : [item];
+  var variants = allVariants.filter(function(v) { return !v.noRestock; });
+  if (variants.length === 0) {
+    // 全部品牌都标记了「不再买」→ 整个物品不再提醒，只保留保质期信息
+    variants = [];
+  }
   var earliestDaysLeft = null;
   var earliestShelfPercent = 100;
   variants.forEach(function(v) {
@@ -1901,8 +1915,12 @@ function getItemStatus(item) {
   }
 
   // === 使用状态 ===
-  status.hasInUse = variants.some(function(v) { return v.opened && !v.usedUp; });
+  // 使用中：含「不再买」的品牌（还在开封用的，开封天数照常跟踪）
+  status.hasInUse = allVariants.some(function(v) { return v.opened && !v.usedUp; });
   status.allUnopened = variants.length > 0 && variants.every(function(v) { return !v.opened; });
+
+  // 全部品牌都标记「不再买」→ 整个物品不再提醒补货（保质期提醒保留）
+  if (variants.length === 0) return status;
 
   // === 库存告急判断（基于消耗速率预估） ===
   if (totalStock > 0) {
@@ -2488,26 +2506,12 @@ function renderCardBack(item, zone) {
   if (item.oneShot === true) {
     html += '<div style="display:inline-block;margin-left:8px;padding:2px 8px;border-radius:6px;background:rgba(255,149,0,0.12);color:var(--orange);font-size:12px;font-weight:600;vertical-align:middle">⚡ 开袋即用完</div>';
   }
-  // 顶部快捷操作：编辑 / 归档 / 删除（不用滑到底部）
+  // 顶部快捷操作：⋯（编辑/归档/删除）+ 关闭，保持标题宽松不挤
   html += '<div style="display:flex;gap:6px;align-items:center">';
-  html += '<button class="btn btn-outline btn-sm" style="font-size:12px;padding:4px 10px" onclick="editItem(\'' + item.id + '\')">✏ 编辑</button>';
-  if (item.archived) {
-    html += '<button class="btn btn-outline btn-sm" style="font-size:12px;padding:4px 10px" onclick="unarchiveItem(\'' + item.id + '\')">↩️ 恢复</button>';
-  } else {
-    html += '<button class="btn btn-outline btn-sm" style="font-size:12px;padding:4px 10px" onclick="archiveItem(\'' + item.id + '\')">📦 归档</button>';
-  }
-  html += '<button class="btn btn-danger btn-sm" style="font-size:12px;padding:4px 10px" onclick="deleteItem(\'' + item.id + '\')">🗑</button>';
+  html += '<button class="back-close" onclick="openItemActionsMenu(\'' + item.id + '\')" style="font-size:18px;font-weight:700">⋯</button>';
   html += '<button class="back-close" onclick="closeCardDetail()">✕</button>';
   html += '</div>';
   html += '</div>';
-
-  // 已归档提示条：说清楚归档意味着什么，随时可恢复
-  if (item.archived) {
-    html += '<div style="margin:0 0 12px;padding:10px 12px;border-radius:10px;background:rgba(142,142,147,0.12);font-size:12px;color:var(--text-secondary);line-height:1.6">';
-    html += '📦 <strong style="color:var(--text)">已归档</strong> · 不再出现在首页提醒和分类列表，也不会再催你补货。<br>使用记录、价格、感受等历史数据全部保留，随时可恢复。';
-    html += '<button class="btn btn-outline btn-sm" style="margin-top:8px" onclick="unarchiveItem(\'' + item.id + '\')">↩️ 恢复使用</button>';
-    html += '</div>';
-  }
 
   // === 吸顶操作条（补给品：开封/补货/盘点，滚动时始终可见） ===
   if (zone.type === 'consumable') {
@@ -2551,12 +2555,13 @@ function renderCardBack(item, zone) {
       item.variants.forEach(function(v, vi) {
         var isUsing = v.opened && !v.usedUp;
         var isDone = !!v.usedUp;
-        var cardCls = 'variant-card' + (isUsing ? ' vc-using' : (isDone ? ' vc-done' : ''));
+        var cardCls = 'variant-card' + (isUsing ? ' vc-using' : (isDone ? ' vc-done' : '')) + (v.noRestock ? ' vc-norestock' : '');
         html += '<div class="' + cardCls + '">';
-        // 头部：品牌名 + 状态徽章
+        // 头部：品牌名 + 状态徽章 + 不再买标记
         html += '<div class="vc-head">';
         html += '<div class="vc-brand">' + escapeHtml(v.brand || '未命名') + '</div>';
-        if (isUsing) html += '<span class="vc-badge using">使用中</span>';
+        if (v.noRestock) html += '<span class="vc-badge norestock">🚫 不再买</span>';
+        else if (isUsing) html += '<span class="vc-badge using">使用中</span>';
         else if (isDone) html += '<span class="vc-badge done">已用完</span>';
         html += '</div>';
         // 价格：总价为主数字，套餐构成作为副说明
@@ -2604,8 +2609,13 @@ function renderCardBack(item, zone) {
           }
           html += '</div>';
         }
-        // 操作：用完了/撤销 + 感受
+        // 操作：用完了/撤销 + 感受 + 不再买
         html += '<div class="vc-foot">';
+        if (v.noRestock) {
+          html += '<button class="btn btn-outline btn-sm" onclick="toggleVariantNoRestock(\'' + item.id + '\',\'' + v.id + '\')">↩️ 恢复回购</button>';
+        } else {
+          html += '<button class="btn btn-outline btn-sm" onclick="toggleVariantNoRestock(\'' + item.id + '\',\'' + v.id + '\')">🚫 不再买</button>';
+        }
         if (isUsing) {
           html += '<button class="btn btn-outline btn-sm" onclick="finishVariant(\'' + item.id + '\',\'' + v.id + '\')">✅ 用完了</button>';
         } else if (isDone) {
@@ -3065,8 +3075,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791260025 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791260025';
+// deploy.py 部署时会把 1791261144 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791261144';
 
 function checkAppUpdate(manual) {
   try {
@@ -3340,6 +3350,25 @@ function finishCurrentVariant(itemId) {
     return;
   }
   finishVariant(itemId, active.id);
+}
+
+// 品牌级「不再买」：该品牌不再计入补货提醒，卡片和历史数据都保留
+function toggleVariantNoRestock(itemId, variantId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  var v = (item.variants || []).find(function(x) { return x.id === variantId; });
+  if (!v) return;
+  if (!v.noRestock) {
+    v.noRestock = true;
+    saveDB();
+    openCardDetail(currentZoneId, itemId);
+    toast('🚫 「' + (v.brand || '未命名') + '」不再买 · 不再计入补货提醒');
+  } else {
+    delete v.noRestock;
+    saveDB();
+    openCardDetail(currentZoneId, itemId);
+    toast('↩️ 「' + (v.brand || '未命名') + '」已恢复回购');
+  }
 }
 
 // ========== 补货 ==========
@@ -3773,6 +3802,8 @@ function renderConsumableVariantRows() {
     html += '</div>';
     // 库存提示（衍生，非编辑）：带计算过程，一眼看懂"每套含"该填什么
     html += '<div id="packstock-' + i + '" style="font-size:12px;color:var(--text-secondary);line-height:1.5">' + packHintOf(v) + '</div>';
+    // 不再买：该品牌不回购，不计入补货提醒（卡片与历史数据保留）
+    html += '<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:' + (v.noRestock ? 'var(--red)' : 'var(--text-secondary)') + ';margin-top:6px;cursor:pointer"><input type="checkbox" ' + (v.noRestock ? 'checked' : '') + ' onchange="updateConsumableVariantField(' + i + ',\'noRestock\',this.checked)"> 🚫 不再买（这个品牌不回购，不再计入补货提醒）</label>';
     html += '</div>';
     // 删除按钮
     if (variants.length > 1) {
@@ -4335,6 +4366,26 @@ function deleteItem(itemId) {
   renderZone();
   if (document.getElementById('home-content')) renderHome();
   toast('已永久删除');
+}
+
+// 详情页「⋯」菜单：编辑 / 归档 / 删除（不占顶部空间）
+function openItemActionsMenu(itemId) {
+  var item = findItemByIdGlobal(itemId);
+  if (!item) return;
+  var recCnt = (item.usageRecords && item.usageRecords.length) || 0;
+  var html = '<div class="modal-handle"></div>';
+  html += '<div class="modal-title">操作</div>';
+  html += '<div style="text-align:center;font-size:16px;font-weight:700;margin-bottom:16px">' + escapeHtml(item.name) + (item.archived ? ' <span style="font-size:12px;color:var(--text-secondary)">（已归档）</span>' : '') + '</div>';
+  html += '<button class="btn btn-outline btn-full" style="margin-bottom:10px" onclick="closeModal();editItem(\'' + itemId + '\')">✏ 编辑</button>';
+  if (item.archived) {
+    html += '<button class="btn btn-outline btn-full" style="margin-bottom:10px" onclick="unarchiveItem(\'' + itemId + '\')">↩️ 取消归档（重新提醒补货）</button>';
+  } else {
+    html += '<button class="btn btn-outline btn-full" style="margin-bottom:10px" onclick="archiveItem(\'' + itemId + '\')">📦 归档整个物品（整个都不再买时用）</button>';
+  }
+  html += '<button class="btn btn-danger btn-full" style="margin-bottom:10px" onclick="deleteItem(\'' + itemId + '\')">🗑 永久删除（' + recCnt + '条使用记录会一起删）</button>';
+  html += '<button class="btn btn-ghost btn-full" onclick="closeModal()">取消</button>';
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('show');
 }
 
 // 归档：不再提醒/不再出现在列表，但使用记录等历史数据全部保留
@@ -5283,6 +5334,7 @@ function doWin(t) {
           v.packQty = vPackQty;
           if (isWV && +plan.spec > 0) v.packWeight = +plan.spec;
           if (plan.unit) v.packUnit = plan.unit;
+          delete v.noRestock; // 又买回来了 → 自动恢复计入补货提醒
           v.packCount = (v.packCount || 0) + qty;
           v.stock = (v.stock || 0) + qty * vPackQty;
           if (plan.comboPrice > 0) v.packPrice = plan.comboPrice;
@@ -6086,9 +6138,6 @@ function showAlertDetail(type) {
       }
       html += '</div>';
       html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0;align-self:center;font-size:12px;padding:6px 10px" onclick="event.stopPropagation();taskFromItem(\'' + zone.id + '\',\'' + it.id + '\')">📋 委托</button>';
-      if (type === 'lowStock' || type === 'expired' || type === 'expiring') {
-        html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0;align-self:center;font-size:12px;padding:6px 8px" title="用完不再买 → 归档（保留使用记录）" onclick="event.stopPropagation();archiveItem(\'' + it.id + '\')">📦</button>';
-      }
       html += '</div>';
     });
   }
