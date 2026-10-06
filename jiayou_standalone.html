@@ -792,6 +792,16 @@ body {
 </head>
 <body>
 
+<!-- 含量/规格单位候选（可自选也可手填，不写死） -->
+<datalist id="spec-unit-list">
+  <option value="ml"></option><option value="L"></option>
+  <option value="g"></option><option value="kg"></option>
+  <option value="粒"></option><option value="个"></option>
+  <option value="片"></option><option value="颗"></option>
+  <option value="包"></option><option value="瓶"></option>
+  <option value="盒"></option><option value="抽"></option>
+</datalist>
+
 <!-- ========== 首页 ========== -->
 <div class="navbar" id="nav-home">
   <h1>家有</h1>
@@ -1526,59 +1536,40 @@ function genId() {
 
 // ========== 子物品（品牌变体）辅助 ==========
 // 库存摘要（人话版）：套餐数 + 容量，如「4套 · ≈200ml」；没有套餐数据则退回「200ml」
-// ---------- 混合套餐（库存侧）：套餐是「购买单位」，变体是「库存单位」----------
-// 一份套餐 = 若干种不同规格的组合（如 44粒装×3盒 + 70粒装×2盒 = 272粒），金额记在套餐上，不分摊到变体
-function itemComboOf(item) {
-  var c = item && item.combo;
-  if (!c || !c.items || !c.items.length) return null;
-  var subs = c.items.filter(function (s) { return (+s.spec > 0) && (+s.count > 0); });
-  if (!subs.length) return null;
-  return { name: c.name || '套餐', price: +c.price || 0, items: subs };
+// ---------- 变体级混合规格：每个品牌（变体）自己可选，互不干扰 ----------
+// 例：品牌A面霜 = 正装 1瓶×50ml + 小样 3个×15ml = 95ml；单位自由：ml / kg / g / L / 粒 / 个 …
+function variantSpecsOf(v) {
+  return ((v && v.specs) || []).filter(function (s) { return (+s.qty > 0) && (+s.content > 0); });
 }
-function comboPerSpec(c) {
-  var t = 0;
-  (c.items || []).forEach(function (s) { t += (+s.spec || 0) * (+s.count || 0); });
+function variantSpecContent(v) { // 总含量（库存口径）
+  var ss = variantSpecsOf(v); if (!ss.length) return 0;
+  var t = 0; ss.forEach(function (s) { t += (+s.qty || 0) * (+s.content || 0); });
   return Math.round(t * 100) / 100;
 }
-function itemComboText(c) {
-  var subs = c.items || [];
-  if (!subs.length) return '';
-  var parts = subs.map(function (s) {
-    var nm = String(s.name || '').trim() || (trimNum(+s.spec) + (s.unit || ''));
-    return nm + '×' + trimNum(+s.count);
-  });
-  return parts.join(' + ') + ' = ' + trimNum(comboPerSpec(c)) + (subs[0].unit || '');
+function variantSpecPieces(v) { // 总件数（参考）
+  var ss = variantSpecsOf(v); if (!ss.length) return 0;
+  var t = 0; ss.forEach(function (s) { t += (+s.qty || 0); });
+  return Math.round(t * 100) / 100;
 }
-// 各规格现有盒数，按套餐构成能凑出几套（取最小值）
-function itemComboCount(item) {
-  var c = itemComboOf(item); if (!c) return 0;
-  var n = null;
-  c.items.forEach(function (s) {
-    var v = null;
-    (item.variants || []).forEach(function (vv) { if (String(vv.brand || '').trim() === String(s.name || '').trim()) v = vv; });
-    var have = v ? (+v.packCount || 0) : 0;
-    var per = +s.count || 0;
-    if (per <= 0) return;
-    var k = Math.floor(have / per);
-    if (n === null || k < n) n = k;
+function variantSpecUnit(v) {
+  var ss = variantSpecsOf(v);
+  return ss.length ? (ss[0].unit || '') : '';
+}
+function variantSpecText(v) { // "正装 1×50ml + 小样 3×15ml = 95ml"
+  var ss = variantSpecsOf(v); if (!ss.length) return '';
+  var parts = ss.map(function (s) {
+    var nm = String(s.name || '').trim();
+    return (nm ? nm + ' ' : '') + trimNum(+s.qty) + '×' + trimNum(+s.content) + (s.unit || '');
   });
-  return n === null ? 0 : n;
+  return parts.join(' + ') + ' = ' + trimNum(variantSpecContent(v)) + (ss[0].unit || '');
 }
 function stockSummaryOf(item) {
-  var cmb = itemComboOf(item);
-  if (cmb) {
-    var cn = itemComboCount(item);
-    var st = getTotalStock(item) || 0;
-    var un = mainPackUnit(item);
-    var txt = (cn > 0 ? (cn + ' 套餐 · ') : '') + trimNum(st) + un;
-    if (cmb.price > 0) txt += ' · 套餐价 ' + fmtMoney(cmb.price);
-    return txt;
-  }
   var vs = (item.variants && item.variants.length) ? item.variants : [];
   var packs = 0, hasPacks = false;
   var wTotals = {}, wOrder = [];
   vs.forEach(function(v) {
     if (v.packCount) { packs += v.packCount; hasPacks = true; }
+    if (variantSpecsOf(v).length) return; // 混合规格：容量口径本身就是含量，不重复累加
     var w = parseFloat(v.packWeight) || 0;
     if (w > 0 && v.packCount) {
       var u = weightUnitOf(v);
@@ -1590,7 +1581,10 @@ function stockSummaryOf(item) {
   var unit = mainPackUnit(item);
   var capTxt = st > 0 ? (round1(st) + unit) : '';
   // 总含量按单位分组显示（如「≈600ml」；混合单位时「≈6kg · ≈600ml」）
-  var wTxt = wOrder.length ? (' · ' + wOrder.map(function(u) { return '≈' + round1(wTotals[u]) + u; }).join(' · ')) : '';
+  // 含量单位若与容量单位相同（混合规格下容量就是含量），不再重复显示
+  var wTxt = '';
+  var wParts = wOrder.filter(function(u) { return u !== unit; }).map(function(u) { return '≈' + round1(wTotals[u]) + u; });
+  if (wParts.length) wTxt = ' · ' + wParts.join(' · ');
   if (hasPacks && packs > 0) {
     // 每套=1 时容量数和套数是同一个数，说了等于没说 → 只显示套数
     if (capTxt && Math.round(st) !== packs) return packs + '套 · ≈' + capTxt + wTxt;
@@ -1616,6 +1610,7 @@ function getActiveStock(item) {
 // ===== 套餐模型展示辅助 =====
 // 变体总含量：套数 × 每套含 × 每小单位含量（packWeight=每个小单位的含量，单位见 packWeightUnit）
 function variantTotalWeight(v) {
+  if (variantSpecsOf(v).length) return variantSpecContent(v); // 混合规格：直接用明细汇总的含量
   var w = parseFloat(v.packWeight) || 0;
   if (w <= 0) return 0;
   var pc = parseFloat(v.packCount) || 0;
@@ -1637,6 +1632,10 @@ function variantUnitPrice(v) {
 }
 // 库存展示文本：packQty>1 时显示"X套 (+余Y个)"
 function variantPackText(v, item) {
+  var spAll = variantSpecsOf(v);
+  if (spAll.length) {
+    return trimNum(variantSpecContent(v)) + variantSpecUnit(v) + '（共 ' + trimNum(variantSpecPieces(v)) + ' 件）';
+  }
   var stock = v.stock || 0;
   var pq = v.packQty || 1;
   var unit = v.packUnit || (item && item.unit) || '个';
@@ -1983,7 +1982,6 @@ function renderHome() {
   });
   html += '</div>';
 
-
   // === AI分析 ===
   html += renderAIAnalysis();
 
@@ -2159,7 +2157,8 @@ function calcUsageRate(item) {
 // ===== 含量口径的消耗速率：把使用记录折算成 ml/g 等含量单位 =====
 // 记录口径：pack 模式 qty=套 → 含量 = qty × 每套含 × 每小单位含量；unit 模式 qty=小单位 → 含量 = qty × 每小单位含量
 // 返回 { perMonth, unit }；任一记录无法换算（未配含量 / ml 混 kg）→ 返回 null，展示退回记录口径
-var CONTENT_UNIT_TABLE = { ml: ['ml', 1], L: ['ml', 1000], g: ['g', 1], kg: ['g', 1000] };
+// 含量单位换算表：容量/重量可换算，计数类（粒/个/片/颗）按自身计，不写死单位
+var CONTENT_UNIT_TABLE = { ml: ['ml', 1], L: ['ml', 1000], g: ['g', 1], kg: ['g', 1000], 粒: ['粒', 1], 个: ['个', 1], 片: ['片', 1], 颗: ['颗', 1], 包: ['包', 1], 瓶: ['瓶', 1], 盒: ['盒', 1], 抽: ['抽', 1] };
 function contentRateOf(item) {
   if (!item.usageRecords || !item.usageRecords.length) return null;
   var vs = item.variants || [];
@@ -2168,6 +2167,7 @@ function contentRateOf(item) {
   // 基准含量单位：第一个配了含量且单位可换算的变体
   var baseUnit = null;
   for (var i = 0; i < vs.length; i++) {
+    if (variantSpecsOf(vs[i]).length) { baseUnit = variantSpecUnit(vs[i]); break; } // 混合规格：以明细单位为准
     if ((parseFloat(vs[i].packWeight) || 0) > 0 && CONTENT_UNIT_TABLE[weightUnitOf(vs[i])]) { baseUnit = weightUnitOf(vs[i]); break; }
   }
   if (!baseUnit) return null;
@@ -2523,11 +2523,6 @@ function renderItemCard(item, zone) {
     // 补给品品牌变体数
     if (item.variants && item.variants.length > 0) {
       html += '<div class="card-info" style="color:var(--accent);font-weight:500">' + item.variants.length + '个品牌</div>';
-    }
-    // 混合套餐构成（一次买进来的是哪几种规格，金额记在套餐价上）
-    var cmbCard = itemComboOf(item);
-    if (cmbCard) {
-      html += '<div class="card-info" style="font-size:11px;color:var(--text-secondary)">🧩 ' + escapeHtml(itemComboText(cmbCard)) + '</div>';
     }
     // 消耗品正面：库存条 + 保质期
     var totalStock = getTotalStock(item);
@@ -3270,8 +3265,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791278555 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791278555';
+// deploy.py 部署时会把 1791279824 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791279824';
 
 function checkAppUpdate(manual) {
   try {
@@ -3838,6 +3833,7 @@ function openItemForm(itemId) {
         packWeight: (typeof v.packWeight!=='undefined'?v.packWeight:0),
         packWeightUnit: v.packWeightUnit || 'kg',
         noRestock: !!v.noRestock,
+        specs: (v.specs || []).map(function (s) { return { name: s.name || '', qty: +s.qty || 0, content: +s.content || 0, unit: s.unit || '' }; }),
         photos: (v.photos||[]).slice()
       };
     });
@@ -3845,14 +3841,6 @@ function openItemForm(itemId) {
     html += renderConsumableVariantRows();
     html += '</div>';
     html += '<button class="btn btn-outline btn-sm" style="margin-top:6px;width:100%" onclick="addConsumableVariantRow()">＋ 添加品牌</button>';
-    html += '</div>';
-
-    // 混合套餐（物品级）：一次买进来的是多种规格的组合，金额统一记在套餐价上，不分摊到各变体
-    window._editCombo = (item && item.combo)
-      ? { name: item.combo.name || '', price: item.combo.price || 0, items: (item.combo.items || []).map(function (s) { return { name: s.name || '', spec: s.spec || 0, count: s.count || 0, unit: s.unit || '' }; }) }
-      : { name: '', price: 0, items: [] };
-    html += '<div class="form-group"><label class="form-label">🧩 混合套餐（选填）</label>';
-    html += '<div id="item-combo-box">' + renderItemCombo() + '</div>';
     html += '</div>';
 
     // 消耗模式（用户手动定义，系统不自动猜）
@@ -3967,60 +3955,6 @@ function removeItemPhoto(idx) {
 
 // ========== 补给品品牌变体编辑器（带照片） ==========
 // 物品级混合套餐编辑块
-function renderItemCombo() {
-  var c = window._editCombo || { name: '', price: 0, items: [] };
-  if (!c.items) c.items = [];
-  var h = '';
-  h += '<div style="font-size:12px;color:var(--text-secondary);line-height:1.5;margin-bottom:6px">一次买进来的是<b>多种规格的组合</b>时填（如 3盒44粒 + 2盒70粒）。金额只填套餐价，不再分摊到各品牌变体，变体只填数量。</div>';
-  h += '<div style="display:flex;gap:6px;margin-bottom:6px">';
-  h += '<input type="text" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="套餐名（选填）" value="' + escapeHtml(c.name || '') + '" onchange="onItemComboInput(\'name\',this.value)">';
-  h += '<input type="number" class="form-input" style="font-size:13px;width:104px;flex-shrink:0" placeholder="套餐价" value="' + (c.price || '') + '" onchange="onItemComboInput(\'price\',parseFloat(this.value)||0)" step="0.01">';
-  h += '</div>';
-  c.items.forEach(function (s, k) {
-    h += '<div style="display:flex;gap:4px;margin-bottom:6px">';
-    h += '<input type="text" class="form-input" style="font-size:12px;flex:1.5;min-width:0;padding:6px 8px" placeholder="规格名(44粒装)" value="' + escapeHtml(s.name || '') + '" onchange="onItemComboSub(' + k + ',\'name\',this.value)">';
-    h += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0;padding:6px 8px" placeholder="每份含量" value="' + (s.spec || '') + '" onchange="onItemComboSub(' + k + ',\'spec\',parseFloat(this.value)||0)">';
-    h += '<input type="text" class="form-input" style="font-size:12px;flex:.7;min-width:0;padding:6px 8px" placeholder="单位" value="' + escapeHtml(s.unit || '') + '" onchange="onItemComboSub(' + k + ',\'unit\',this.value)">';
-    h += '<input type="number" class="form-input" style="font-size:12px;flex:.7;min-width:0;padding:6px 8px" placeholder="份数" value="' + (s.count || '') + '" onchange="onItemComboSub(' + k + ',\'count\',parseFloat(this.value)||0)">';
-    h += '<button class="btn btn-danger btn-sm" style="flex-shrink:0;padding:6px 8px" onclick="removeItemComboRow(' + k + ')">✕</button>';
-    h += '</div>';
-  });
-  h += '<button class="btn btn-outline btn-sm" style="width:100%;margin-bottom:6px" onclick="addItemComboRow()">＋ 添加套餐规格</button>';
-  var valid = c.items.filter(function (s) { return (+s.spec > 0) && (+s.count > 0); });
-  if (valid.length) {
-    var cc = { name: c.name, price: c.price, items: valid };
-    var per = comboPerSpec(cc);
-    h += '<div style="font-size:12px;color:var(--accent);font-weight:600;line-height:1.5">' + escapeHtml(itemComboText(cc)) + (c.price > 0 && per > 0 ? ' · ≈' + fmtMoney(c.price / per) + '/' + (valid[0].unit || '') : '') + '</div>';
-    if (c.price > 0) h += '<div style="font-size:12px;color:var(--text-secondary);margin-top:2px">保存后：物品金额 = 套餐数 × ' + fmtMoney(c.price) + '，各品牌变体金额自动清空</div>';
-  }
-  return h;
-}
-function onItemComboInput(field, val) {
-  if (!window._editCombo) window._editCombo = { name: '', price: 0, items: [] };
-  window._editCombo[field] = val;
-  refreshItemCombo();
-}
-function onItemComboSub(k, field, val) {
-  var c = window._editCombo; if (!c || !c.items || !c.items[k]) return;
-  c.items[k][field] = val;
-  refreshItemCombo();
-}
-function addItemComboRow() {
-  var c = window._editCombo || { name: '', price: 0, items: [] };
-  if (!c.items) c.items = [];
-  c.items.push({ name: '', spec: 0, count: 1, unit: (c.items[0] ? c.items[0].unit : '') || '' });
-  window._editCombo = c;
-  refreshItemCombo();
-}
-function removeItemComboRow(k) {
-  var c = window._editCombo; if (!c || !c.items) return;
-  c.items.splice(k, 1);
-  refreshItemCombo();
-}
-function refreshItemCombo() {
-  var box = document.getElementById('item-combo-box');
-  if (box) box.innerHTML = renderItemCombo();
-}
 
 function renderConsumableVariantRows() {
   var html = '';
@@ -4061,15 +3995,25 @@ function renderConsumableVariantRows() {
     html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="每套含多少(如30ml填30)" value="' + (cPackQty||'') + '" oninput="onConsumablePriceInput(' + i + ',\'packqty\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'packqty\',this.value)" step="1" title="一套里含多少个小单位；混合套餐可直接写算式，如 3*77+2*45">';
     html += '<input type="text" class="form-input" style="font-size:12px;width:76px;flex-shrink:0" placeholder="单位:ml/颗/片" value="' + escapeHtml(v.packUnit || '') + '" oninput="onConsumableUnitInput(' + i + ',this.value)" title="每套含数的单位，任意填写：ml、毫升、L、颗、片、包…">';
     html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="每单位含量选填" value="' + (cWeight||'') + '" oninput="onConsumablePriceInput(' + i + ',\'weight\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'weight\',this.value)" step="0.01" title="填每个小单位的含量（如猫粮一袋1kg填1；护理液一瓶200ml填200）。填了就按含量单位比价，库存也会显示总含量">';
-    html += '<select class="form-input" style="font-size:12px;width:58px;flex-shrink:0" onchange="onConsumableWeightUnitInput(' + i + ',this.value)" title="含量单位：kg / g / ml / L">';
-    html += '<option value="kg"' + (cWeightUnit === 'kg' ? ' selected' : '') + '>kg</option>';
-    html += '<option value="g"' + (cWeightUnit === 'g' ? ' selected' : '') + '>g</option>';
-    html += '<option value="ml"' + (cWeightUnit === 'ml' ? ' selected' : '') + '>ml</option>';
-    html += '<option value="L"' + (cWeightUnit === 'L' ? ' selected' : '') + '>L</option>';
-    html += '</select>';
+    // 含量单位不写死：可选常用项，也可自己填（ml / kg / g / L / 粒 / 个 / 片 / 颗 / 包 / 瓶 …）
+    html += '<input type="text" class="form-input" style="font-size:12px;width:58px;flex-shrink:0" list="spec-unit-list" placeholder="单位" value="' + escapeHtml(cWeightUnit || '') + '" onchange="onConsumableWeightUnitInput(' + i + ',this.value)" title="含量单位，可自己填：ml / kg / g / L / 粒 / 个 / 片 / 颗 …">';
     html += '</div>';
     // 库存提示（衍生，非编辑）：带计算过程，一眼看懂"每套含"该填什么
     html += '<div id="packstock-' + i + '" style="font-size:12px;color:var(--text-secondary);line-height:1.5">' + packHintOf(v) + '</div>';
+    // 混合规格（本品牌可选）：一个品牌下可以有多种规格的存货（正装 1瓶×50ml + 小样 3个×15ml）
+    html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:6px">🧩 混合规格（本品牌选填：正装+小样等，单位可填 ml/kg/粒/个…）</div>';
+    (v.specs || []).forEach(function (s, k) {
+      html += '<div style="display:flex;gap:4px;margin-bottom:4px">';
+      html += '<input type="text" class="form-input" style="font-size:12px;flex:1.2;min-width:0;padding:5px 6px" placeholder="名称(正装)" value="' + escapeHtml(s.name || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'name\',this.value)">';
+      html += '<input type="number" class="form-input" style="font-size:12px;flex:.8;min-width:0;padding:5px 6px" placeholder="份数" value="' + (s.qty || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'qty\',parseFloat(this.value)||0)">';
+      html += '<input type="number" class="form-input" style="font-size:12px;flex:.9;min-width:0;padding:5px 6px" placeholder="每份含量" value="' + (s.content || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'content\',parseFloat(this.value)||0)">';
+      html += '<input type="text" class="form-input" style="font-size:12px;width:52px;flex-shrink:0;padding:5px 4px" placeholder="单位" value="' + escapeHtml(s.unit || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'unit\',this.value)" list="spec-unit-list">';
+      html += '<button class="btn btn-danger btn-sm" style="flex-shrink:0;padding:5px 7px" onclick="removeVariantSpec(' + i + ',' + k + ')">✕</button>';
+      html += '</div>';
+    });
+    html += '<button class="btn btn-outline btn-sm" style="width:100%;padding:5px;margin-bottom:4px" onclick="addVariantSpec(' + i + ')">＋ 添加规格</button>';
+    var spTxt = variantSpecText(v);
+    if (spTxt) html += '<div style="font-size:12px;color:var(--accent);font-weight:600;margin-bottom:4px">' + escapeHtml(spTxt) + '</div>';
     // 不再买：该品牌不回购，不计入补货提醒（卡片与历史数据保留）
     html += '<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:' + (v.noRestock ? 'var(--red)' : 'var(--text-secondary)') + ';margin-top:6px;cursor:pointer"><input type="checkbox" ' + (v.noRestock ? 'checked' : '') + ' onchange="updateConsumableVariantField(' + i + ',\'noRestock\',this.checked)"> 🚫 不再买（这个品牌不回购，不再计入补货提醒）</label>';
     html += '</div>';
@@ -4092,6 +4036,27 @@ function renderConsumableVariantRows() {
     html += '</div>';
   });
   return html;
+}
+// 变体级混合规格编辑：改完只重绘品牌列表（数量变化必须重绘，改值只刷提示）
+function addVariantSpec(i) {
+  var v = (window._editVariants || [])[i]; if (!v) return;
+  if (!v.specs) v.specs = [];
+  v.specs.push({ name: '', qty: 1, content: 0, unit: (v.specs[0] ? v.specs[0].unit : (v.packWeightUnit || '')) });
+  renderVariantList();
+}
+function removeVariantSpec(i, k) {
+  var v = (window._editVariants || [])[i]; if (!v || !v.specs) return;
+  v.specs.splice(k, 1);
+  renderVariantList();
+}
+function setVariantSpec(i, k, field, val) {
+  var v = (window._editVariants || [])[i]; if (!v || !v.specs || !v.specs[k]) return;
+  v.specs[k][field] = val;
+  renderVariantList();
+}
+function renderVariantList() {
+  var box = document.getElementById('variant-list');
+  if (box) box.innerHTML = renderConsumableVariantRows();
 }
 function updateConsumableVariantField(idx, field, val) {
   if (window._editVariants && window._editVariants[idx]) {
@@ -4178,6 +4143,15 @@ function onConsumablePriceBlur(idx, which, val) {
 }
 // 库存提示：带计算过程（套餐数 × 每套含 = 库存小单位）
 function packHintOf(v) {
+  // 混合规格：直接列出每种规格的件数与含量，再汇总
+  var sp = variantSpecsOf(v);
+  if (sp.length) {
+    var parts = sp.map(function (s) {
+      var nm = String(s.name || '').trim();
+      return (nm ? nm + ' ' : '') + trimNum(+s.qty) + '×' + trimNum(+s.content) + (s.unit || '') + ' = ' + trimNum((+s.qty) * (+s.content)) + (s.unit || '');
+    });
+    return '📦 库存 = ' + parts.join(' + ') + ' = ' + trimNum(variantSpecContent(v)) + variantSpecUnit(v) + '（共 ' + trimNum(variantSpecPieces(v)) + ' 件）';
+  }
   var pc = parseFloat(v.packCount) || 0;
   var pq = parseFloat(v.packQty) || 1;
   var st = Math.max(0, Math.round(pc * pq));
@@ -4527,6 +4501,20 @@ function saveItem() {
       nv.packQty = (typeof ev.packQty !== 'undefined' ? ev.packQty : 1);
       nv.packUnit = ev.packUnit || '个';
       nv.packWeight = (typeof ev.packWeight !== 'undefined' ? ev.packWeight : 0);
+      // 混合规格（本品牌可选）：库存按含量口径汇总，件数仅作参考
+      nv.specs = (ev.specs || []).filter(function (s) { return (+s.qty > 0) && (+s.content > 0); }).map(function (s) {
+        return { name: (s.name || '').trim(), qty: +s.qty || 0, content: +s.content || 0, unit: (s.unit || '').trim() };
+      });
+      if (nv.specs.length) {
+        var sc = 0, spc = 0;
+        nv.specs.forEach(function (s) { sc += s.qty * s.content; spc += s.qty; });
+        nv.stock = Math.round(sc * 100) / 100;
+        nv.packCount = Math.round(spc * 100) / 100; // 件数（参考，不参与库存换算）
+        nv.packQty = 1;
+        nv.packUnit = nv.specs[0].unit || nv.packUnit;
+        nv.packWeight = 1;
+        nv.packWeightUnit = nv.specs[0].unit || nv.packWeightUnit;
+      }
       return nv;
     });
     // 合并变体照片，用于卡片展示
@@ -4539,26 +4527,6 @@ function saveItem() {
     data.stock = data.variants.reduce(function(s,v) { return s + (v.stock||0); }, 0);
     // 补给品总金额 = 各品牌总价之和
     data.currentPrice = data.variants.reduce(function(s,v){ return s + (v.totalPrice || ((v.price||0)*(v.stock||0))); }, 0);
-    // 混合套餐：金额统一记在套餐价上（套餐数 × 套餐价），各变体不再各自计价
-    var ec = window._editCombo || null;
-    var ecItems = ec ? (ec.items || []).filter(function (s) { return (+s.spec > 0) && (+s.count > 0); }).map(function (s) {
-      return { name: (s.name || '').trim(), spec: +s.spec || 0, count: +s.count || 0, unit: (s.unit || '').trim() };
-    }) : [];
-    if (ecItems.length) {
-      data.combo = { name: (ec.name || '').trim(), price: +ec.price || 0, items: ecItems };
-      var cnt = null;
-      ecItems.forEach(function (s) {
-        var vv = null;
-        data.variants.forEach(function (x) { if (String(x.brand || '').trim() === String(s.name || '').trim()) vv = x; });
-        var have = vv ? (+vv.packCount || 0) : 0;
-        if (+s.count > 0) { var k2 = Math.floor(have / (+s.count)); if (cnt === null || k2 < cnt) cnt = k2; }
-      });
-      if (cnt === null) cnt = 0;
-      data.currentPrice = Math.round((+data.combo.price * cnt) * 100) / 100;
-      data.variants.forEach(function (v) { v.packPrice = 0; v.price = 0; v.totalPrice = 0; });
-    } else {
-      data.combo = null;
-    }
     data.unit = document.getElementById('item-unit').value || '个';
     data.shelfLife = parseInt(document.getElementById('item-shelf').value) || null;
     var prodDate = document.getElementById('item-prod-date').value;
@@ -6030,16 +5998,14 @@ function winMultiSpec(t, plan, totalPrice) {
     // 价格不分摊：变体只记数量，金额统一由套餐价 × 套餐数得出
     v.packPrice = 0; v.price = 0; v.totalPrice = 0;
   });
-  // 把套餐结构写进库存：以后补货按套餐算，不必在库存里再录一遍
-  if (!item.combo || !(item.combo.items || []).length) {
-    item.combo = {
-      name: plan.name || (t.name + '套餐'),
-      price: Math.round((+plan.comboPrice > 0 ? +plan.comboPrice : (qty > 0 ? totalPrice / qty : totalPrice)) * 100) / 100,
-      items: subs.map(function (s) { return { name: String(s.name || '').trim() || (trimNum(+s.spec) + (s.unit || '')), spec: +s.spec || 0, count: +s.count || 0, unit: s.unit || '' }; })
-    };
+  // 套餐价不分摊：记在第一个规格变体上，保证物品账面总额正确
+  var firstV = item.variants.filter(function (x) { return subs.some(function (s) { return String(s.name || '').trim() === String(x.brand || '').trim(); }); })[0];
+  if (firstV) {
+    firstV.packPrice = plan.comboPrice || 0;
+    firstV.totalPrice = totalPrice;
+    firstV.price = firstV.stock > 0 ? Math.round((totalPrice / firstV.stock) * 100) / 100 : 0;
   }
-  var cmbN = itemComboCount(item);
-  item.currentPrice = Math.round((+item.combo.price * cmbN) * 100) / 100;
+  item.currentPrice = item.variants.reduce(function (s2, x) { return s2 + (x.totalPrice || ((x.price || 0) * (x.stock || 0))); }, 0);
   if (!item.priceHistory) item.priceHistory = [];
   item.priceHistory.push({ date: new Date().toISOString(), channel: '', quantity: qty, totalPrice: totalPrice, unitPrice: d.unitPrice || 0, notes: '任务委托·凯旋补货（混合套餐 ' + specTxt + '，价格未分摊）', brand: '', attachments: (plan.photos || []).slice() });
   return true;
@@ -6662,7 +6628,6 @@ function taskFormSave(id) {
   closeModal(); saveDB(); renderTasks(); toast(id ? '已保存' : '已加入委托');
 }
 function taskEdit(id) { taskOpenForm(id); }
-
 
 function renderSettings() {
   var html = '';
