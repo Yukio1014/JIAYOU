@@ -1915,19 +1915,40 @@ function estimateStockDaysLeft(item, totalStock, variants) {
   var totalDays = daysBetween(earliestDate, new Date());
   if (totalDays < 1) totalDays = 1;
   var avgDaysPerUnit = totalDays / totalQty;
+  // 剩余库存换算成"套"：消耗记录 qty 记的是套餐数，pack 模式 stock 是小单位总数，需除以每套含数
+  var isPackMode = item.consumeMode === 'pack';
+  var avgPq = 1;
+  if (isPackMode && variants && variants.length) {
+    avgPq = variants.reduce(function(s, v) { return s + (v.packQty || 1); }, 0) / variants.length;
+  }
+  var remainingPacks = isPackMode ? (totalStock / Math.max(1, avgPq)) : totalStock;
   // 如果有使用中的变体，减去已用天数
   var activeVariant = variants.find(function(v) { return v.opened && !v.usedUp; });
-  var remainingStock = totalStock;
   if (activeVariant && activeVariant.openDate) {
     var usedDays = daysBetween(new Date(activeVariant.openDate), new Date());
     var remainingInCurrent = Math.max(0, avgDaysPerUnit - usedDays);
-    return Math.round(remainingInCurrent + (remainingStock - 1) * avgDaysPerUnit);
+    return Math.round(remainingInCurrent + Math.max(0, remainingPacks - 1) * avgDaysPerUnit);
   }
-  return Math.round(remainingStock * avgDaysPerUnit);
+  return Math.round(remainingPacks * avgDaysPerUnit);
 }
 
 // ========== 消耗速率计算 ==========
 // 基于"首次使用日期到今天"的总时间跨度，计算平均月/年消耗
+// 消耗速率的单位名：pack 模式记录的是"开了几套"→套；unit 模式→小单位
+function rateUnitName(item) { return item.consumeMode === 'pack' ? '套' : (item.unit || '个'); }
+// 平均每套含数（小单位/套）
+function avgPackQtyOf(item) {
+  if (item.consumeMode !== 'pack' || !item.variants || !item.variants.length) return 1;
+  return item.variants.reduce(function (s, v) { return s + (v.packQty || 1); }, 0) / item.variants.length;
+}
+// 主变体的小单位名（ml/颗/包…）
+function mainPackUnit(item) {
+  if (item.variants && item.variants.length) {
+    for (var i = 0; i < item.variants.length; i++) { if (item.variants[i].packUnit) return item.variants[i].packUnit; }
+  }
+  return item.unit || '个';
+}
+function round1(x) { return Math.round((+x || 0) * 10) / 10; }
 function calcUsageRate(item) {
   if (!item.usageRecords || item.usageRecords.length === 0) return 0;
   var records = item.usageRecords.filter(function(r) { return r.startDate && r.endDate; });
@@ -1995,7 +2016,7 @@ function renderAIAnalysis() {
     html += '<div class="ai-section">';
     html += '<div class="ai-section-title">消耗速率 TOP5</div>';
     var items = consumableZone.items.map(function(it) {
-      return { name: it.name, rate: calcUsageRate(it), unit: it.unit || '个' };
+      return { name: it.name, rate: calcUsageRate(it), unit: rateUnitName(it) };
     }).filter(function(it) { return it.rate > 0; })
       .sort(function(a,b) { return b.rate - a.rate; })
       .slice(0, 5);
@@ -2567,22 +2588,30 @@ function renderCardBack(item, zone) {
       html += '<div class="back-section-title">使用记录 (' + item.usageRecords.length + '次)</div>';
       var rate = calcUsageRate(item);
       if (rate > 0) {
-        html += '<div class="back-row"><span class="back-label">月消耗量</span><span class="back-value">' + rate.toFixed(1) + (item.unit||'') + '/月</span></div>';
-        html += '<div class="back-row"><span class="back-label">年消耗量</span><span class="back-value">' + (rate*12).toFixed(1) + (item.unit||'') + '/年</span></div>';
+        var ru0 = rateUnitName(item);
+        html += '<div class="back-row"><span class="back-label">月消耗量</span><span class="back-value">' + rate.toFixed(1) + ru0 + '/月</span></div>';
+        html += '<div class="back-row"><span class="back-label">年消耗量</span><span class="back-value">' + (rate*12).toFixed(1) + ru0 + '/年</span></div>';
+        if (item.consumeMode === 'pack') {
+          var aq0 = avgPackQtyOf(item);
+          if (aq0 > 1) html += '<div class="back-row"><span class="back-label">年需求容量</span><span class="back-value">≈ ' + round1(rate*12*aq0) + escapeHtml(mainPackUnit(item)) + '/年</span></div>';
+        }
       }
       html += '<div class="usage-log" style="margin-top:8px">';
+      var aqR = avgPackQtyOf(item);
       var shownRecs = item.usageRecords.map(function(r, oi) { return { r: r, oi: oi }; }).reverse().slice(0, 5);
       shownRecs.forEach(function(w) {
         var r = w.r;
         var startStr = r.startDate ? formatDate(r.startDate) : (r.date ? formatDate(r.date) : '');
+        var qtyTxt = (r.qty||1) + rateUnitName(item);
+        if (item.consumeMode === 'pack' && aqR > 1) qtyTxt += '（≈' + round1((r.qty||1) * aqR) + escapeHtml(mainPackUnit(item)) + '）';
         var recTxt;
         if (r.endDate) {
           var days = daysBetween(new Date(r.startDate), new Date(r.endDate));
-          recTxt = '📅 ' + startStr + ' → ' + formatDate(r.endDate) + ' · ' + days + '天 · ' + (r.qty||1) + (item.unit||'');
+          recTxt = '📅 ' + startStr + ' → ' + formatDate(r.endDate) + ' · ' + days + '天 · ' + qtyTxt;
         } else if (startStr) {
-          recTxt = '📅 ' + startStr + ' · 使用中 · ' + (r.qty||1) + (item.unit||'');
+          recTxt = '📅 ' + startStr + ' · 使用中 · ' + qtyTxt;
         } else {
-          recTxt = '📅 记录 · ' + (r.qty||1) + (item.unit||'');
+          recTxt = '📅 记录 · ' + qtyTxt;
         }
         html += '<div class="open-record" style="cursor:pointer" onclick="openUsageEdit(\'' + item.id + '\',' + w.oi + ')">' + recTxt + '<span style="float:right;font-size:11px;color:var(--text-tertiary)">✏️</span></div>';
       });
@@ -2596,25 +2625,28 @@ function renderCardBack(item, zone) {
     var rate2 = calcUsageRate(item);
     var totalStock2 = getTotalStock(item);
     if (rate2 > 0) {
+      var ru2 = rateUnitName(item);
+      var aq2 = avgPackQtyOf(item);
+      var pu2 = mainPackUnit(item);
       var halfQty = Math.max(1, Math.ceil(rate2 * 6));
       var yearQty = Math.max(1, Math.ceil(rate2 * 12));
-      html += '<div class="back-row"><span class="back-label">预估月消耗</span><span class="back-value">' + rate2.toFixed(1) + (item.unit||'个') + '/月</span></div>';
+      var volSuffix = (item.consumeMode === 'pack' && aq2 > 1) ? '（≈' + round1(halfQty*aq2) + escapeHtml(pu2) + '）' : '';
+      var volSuffixY = (item.consumeMode === 'pack' && aq2 > 1) ? '（≈' + round1(yearQty*aq2) + escapeHtml(pu2) + '）' : '';
+      html += '<div class="back-row"><span class="back-label">预估月消耗</span><span class="back-value">' + rate2.toFixed(1) + ru2 + '/月</span></div>';
       html += '<div style="margin-top:8px;padding:10px;border-radius:10px;background:#F0F7FF">';
       html += '<div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px">🛒 建议采购</div>';
       html += '<div style="font-size:13px;line-height:1.7">';
-      html += '· 半年量：<strong>' + halfQty + (item.unit||'个') + '</strong><br>';
-      html += '· 一年量：<strong>' + yearQty + (item.unit||'个') + '</strong><br>';
-      // 套餐维度补货建议
-      if (item.consumeMode === 'pack' && item.variants && item.variants.length && (item.variants[0].packQty || 1) > 1) {
-        var avgPq = item.variants.reduce(function(s, v) { return s + (v.packQty || 1); }, 0) / item.variants.length;
-        var yearPacks = Math.ceil(yearQty / avgPq);
-        html += '· 年耗约 <strong>' + yearPacks + ' 套</strong>（每套约 ' + avgPq + (item.unit||'个') + '）<br>';
-        html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px">线上套餐内含若变化，按当前每套 ' + avgPq + (item.unit||'个') + ' 换算，明年约买 ' + Math.max(1, yearPacks) + ' 套</div>';
+      html += '· 半年量：<strong>' + halfQty + ru2 + '</strong>' + volSuffix + '<br>';
+      html += '· 一年量：<strong>' + yearQty + ru2 + '</strong>' + volSuffixY + '<br>';
+      // 容量维度：年耗套数 × 每套含数 = 年需求容量；线上套餐内含变化时按容量反推应买套数
+      if (item.consumeMode === 'pack' && aq2 > 1) {
+        var yearVol = (rate2 * 12) * aq2;
+        html += '· 年需求容量：<strong>≈ ' + round1(yearVol) + escapeHtml(pu2) + '</strong>（' + (rate2*12).toFixed(1) + ' 套 × ' + round1(aq2) + escapeHtml(pu2) + '/套）<br>';
+        html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px">线上套餐内含若变化（如 15→30' + escapeHtml(pu2) + '/套），按年需求 ' + round1(yearVol) + escapeHtml(pu2) + ' ÷ 新每套含数 = 明年约买 ' + Math.max(1, Math.round(yearVol / aq2)) + ' 套</div>';
       }
-      if (rate2 > 0) {
-        var monthEst = Math.ceil((totalStock2 || 0) / rate2);
-        html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">当前库存约够用 ' + monthEst + ' 个月</div>';
-      }
+      var remainPacks2 = item.consumeMode === 'pack' ? (totalStock2 || 0) / Math.max(1, aq2) : (totalStock2 || 0);
+      var monthEst = Math.ceil(remainPacks2 / rate2);
+      html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">当前库存约' + (item.consumeMode === 'pack' ? round1(remainPacks2) + ru2 + '，' : '') + '够用 ' + Math.max(0, monthEst) + ' 个月</div>';
       html += '</div></div>';
     } else {
       html += '<div class="back-row"><span class="back-label" style="color:var(--text-tertiary)">数据不足，暂无法估算</span></div>';
@@ -2947,8 +2979,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791221887 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791221887';
+// deploy.py 部署时会把 1791253948 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791253948';
 
 function checkAppUpdate(manual) {
   try {
@@ -3647,10 +3679,11 @@ function renderConsumableVariantRows() {
     html += '<span style="font-size:12px;color:var(--text-tertiary)">=</span>';
     html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="总价" value="' + (cTotal||'') + '" oninput="onConsumablePriceInput(' + i + ',\'total\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'total\',this.value)" step="0.01">';
     html += '</div>';
-    // 每套含数 + 每套重量（用于折算单价比价）
+    // 每套含数 + 每套单位 + 每套重量（用于折算单价比价）
     html += '<div style="display:flex;gap:4px;align-items:center;margin-top:2px">';
-    html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="每套含(个/包/颗)" value="' + (cPackQty>1?cPackQty:'') + '" oninput="onConsumablePriceInput(' + i + ',\'packqty\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'packqty\',this.value)" step="1" title="每套餐内含多少个小单位，如纸巾一套30包">';
-    html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="每套重量KG" value="' + (cWeight||'') + '" oninput="onConsumablePriceInput(' + i + ',\'weight\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'weight\',this.value)" step="0.01" title="猫粮等按重量比价时填">';
+    html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="每套含(数量)" value="' + (cPackQty||'') + '" oninput="onConsumablePriceInput(' + i + ',\'packqty\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'packqty\',this.value)" step="1" title="每套餐内含多少个小单位；混合套餐可直接写算式，如 3*77+2*45">';
+    html += '<input type="text" class="form-input" style="font-size:12px;width:76px;flex-shrink:0" placeholder="单位:ml/颗/片" value="' + escapeHtml(v.packUnit || '') + '" oninput="onConsumableUnitInput(' + i + ',this.value)" title="每套含数的单位，任意填写：ml、毫升、L、颗、片、包…">';
+    html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="每套重量(kg)" value="' + (cWeight||'') + '" oninput="onConsumablePriceInput(' + i + ',\'weight\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'weight\',this.value)" step="0.01" title="猫粮等按重量比价时填">';
     html += '</div>';
     // 库存提示（衍生，非编辑）
     html += '<div id="packstock-' + i + '" style="font-size:11px;color:var(--text-secondary);margin-top:2px">📦 库存 = ' + cStock + ' ' + (v.packUnit||'个') + (cPackQty>1 ? '（约 ' + (Math.floor(cStock/cPackQty)) + ' 套）':'') + '</div>';
@@ -3681,6 +3714,15 @@ function updateConsumableVariantField(idx, field, val) {
   }
 }
 // 补给品：库存 × 单价 = 总价 三联动
+// 简单算式求值：只允许数字与 + - * / ( ) . 空格，如混合套餐 3*77+2*45
+function evalSimpleExpr(str) {
+  var s = String(str || '').trim();
+  if (!s || !/^[0-9+\-*/().\s]+$/.test(s) || !/[0-9]/.test(s)) return NaN;
+  try {
+    var r = Function('"use strict";return (' + s + ')')();
+    return (typeof r === 'number' && isFinite(r)) ? r : NaN;
+  } catch (e) { return NaN; }
+}
 function onConsumablePriceInput(idx, which, val) {
   var v = window._editVariants && window._editVariants[idx];
   if (!v) return;
@@ -3701,7 +3743,9 @@ function onConsumablePriceInput(idx, which, val) {
     var t = parseFloat(val) || 0; v.totalPrice = t;
     if (packCount > 0) { packPrice = t / packCount; v.packPrice = packPrice; }
   } else if (which === 'packqty') {
-    packQty = parseFloat(val) || 1; v.packQty = packQty;
+    var evQ = evalSimpleExpr(val);
+    packQty = (!isNaN(evQ) && evQ > 0) ? evQ : (parseFloat(val) || 1);
+    v.packQty = packQty;
   } else if (which === 'weight') {
     weight = parseFloat(val) || 0; v.packWeight = weight;
   }
@@ -3715,7 +3759,7 @@ function onConsumablePriceInput(idx, which, val) {
   if (packEl && packEl !== curEl) packEl.value = packCount || '';
   if (priceEl && priceEl !== curEl) priceEl.value = packPrice || '';
   if (totalEl && totalEl !== curEl) totalEl.value = v.totalPrice || '';
-  if (qtyEl && qtyEl !== curEl) qtyEl.value = (packQty > 1 ? packQty : '');
+  if (qtyEl && qtyEl !== curEl) qtyEl.value = (packQty > 0 ? packQty : '');
   if (weightEl && weightEl !== curEl) weightEl.value = weight || '';
   var hint = document.getElementById('packstock-' + idx);
   if (hint) hint.innerHTML = '📦 库存 = ' + stock + ' ' + (v.packUnit||'个') + (packQty > 1 ? '（约 ' + (Math.floor(stock / packQty)) + ' 套）' : '');
@@ -3729,7 +3773,11 @@ function onConsumablePriceBlur(idx, which, val) {
   if (which === 'pack') v.packCount = num;
   else if (which === 'packprice') v.packPrice = num;
   else if (which === 'total') v.totalPrice = num;
-  else if (which === 'packqty') v.packQty = num > 0 ? num : 1;
+  else if (which === 'packqty') {
+    var evB = evalSimpleExpr(raw);
+    num = (!isNaN(evB) && evB > 0) ? evB : num;
+    v.packQty = num > 0 ? num : 1;
+  }
   else if (which === 'weight') v.packWeight = num;
   var row = document.querySelectorAll('.consumable-variant-row')[idx];
   if (!row) return;
@@ -3738,10 +3786,24 @@ function onConsumablePriceBlur(idx, which, val) {
   if (el) {
     if (raw === '') el.value = '';
     else if (which === 'pack') el.value = String(num);
-    else if (which === 'packqty') el.value = num > 1 ? String(num) : '';
+    else if (which === 'packqty') el.value = num > 0 ? String(num) : '';
     else el.value = num.toFixed(2);
   }
   onConsumablePriceInput(idx, which, String(num));
+}
+// 每套单位：任意文本（ml / 毫升 / L / 颗 / 片 / 包…），不限制
+function onConsumableUnitInput(idx, val) {
+  var v = window._editVariants && window._editVariants[idx];
+  if (!v) return;
+  v.packUnit = (val || '').trim();
+  var row = document.querySelectorAll('.consumable-variant-row')[idx];
+  if (!row) return;
+  var hint = document.getElementById('packstock-' + idx);
+  if (hint) {
+    var packQty = parseFloat(v.packQty) || 1;
+    var stock = Math.max(0, Math.round((parseFloat(v.packCount) || 0) * packQty));
+    hint.innerHTML = '📦 库存 = ' + stock + ' ' + (v.packUnit || '个') + (packQty > 1 ? '（约 ' + (Math.floor(stock / packQty)) + ' 套）' : '');
+  }
 }
 function addConsumableVariantRow() {
   window._editVariants = window._editVariants || [];
