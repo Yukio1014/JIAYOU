@@ -1526,7 +1526,54 @@ function genId() {
 
 // ========== 子物品（品牌变体）辅助 ==========
 // 库存摘要（人话版）：套餐数 + 容量，如「4套 · ≈200ml」；没有套餐数据则退回「200ml」
+// ---------- 混合套餐（库存侧）：套餐是「购买单位」，变体是「库存单位」----------
+// 一份套餐 = 若干种不同规格的组合（如 44粒装×3盒 + 70粒装×2盒 = 272粒），金额记在套餐上，不分摊到变体
+function itemComboOf(item) {
+  var c = item && item.combo;
+  if (!c || !c.items || !c.items.length) return null;
+  var subs = c.items.filter(function (s) { return (+s.spec > 0) && (+s.count > 0); });
+  if (!subs.length) return null;
+  return { name: c.name || '套餐', price: +c.price || 0, items: subs };
+}
+function comboPerSpec(c) {
+  var t = 0;
+  (c.items || []).forEach(function (s) { t += (+s.spec || 0) * (+s.count || 0); });
+  return Math.round(t * 100) / 100;
+}
+function itemComboText(c) {
+  var subs = c.items || [];
+  if (!subs.length) return '';
+  var parts = subs.map(function (s) {
+    var nm = String(s.name || '').trim() || (trimNum(+s.spec) + (s.unit || ''));
+    return nm + '×' + trimNum(+s.count);
+  });
+  return parts.join(' + ') + ' = ' + trimNum(comboPerSpec(c)) + (subs[0].unit || '');
+}
+// 各规格现有盒数，按套餐构成能凑出几套（取最小值）
+function itemComboCount(item) {
+  var c = itemComboOf(item); if (!c) return 0;
+  var n = null;
+  c.items.forEach(function (s) {
+    var v = null;
+    (item.variants || []).forEach(function (vv) { if (String(vv.brand || '').trim() === String(s.name || '').trim()) v = vv; });
+    var have = v ? (+v.packCount || 0) : 0;
+    var per = +s.count || 0;
+    if (per <= 0) return;
+    var k = Math.floor(have / per);
+    if (n === null || k < n) n = k;
+  });
+  return n === null ? 0 : n;
+}
 function stockSummaryOf(item) {
+  var cmb = itemComboOf(item);
+  if (cmb) {
+    var cn = itemComboCount(item);
+    var st = getTotalStock(item) || 0;
+    var un = mainPackUnit(item);
+    var txt = (cn > 0 ? (cn + ' 套餐 · ') : '') + trimNum(st) + un;
+    if (cmb.price > 0) txt += ' · 套餐价 ' + fmtMoney(cmb.price);
+    return txt;
+  }
   var vs = (item.variants && item.variants.length) ? item.variants : [];
   var packs = 0, hasPacks = false;
   var wTotals = {}, wOrder = [];
@@ -2477,6 +2524,11 @@ function renderItemCard(item, zone) {
     if (item.variants && item.variants.length > 0) {
       html += '<div class="card-info" style="color:var(--accent);font-weight:500">' + item.variants.length + '个品牌</div>';
     }
+    // 混合套餐构成（一次买进来的是哪几种规格，金额记在套餐价上）
+    var cmbCard = itemComboOf(item);
+    if (cmbCard) {
+      html += '<div class="card-info" style="font-size:11px;color:var(--text-secondary)">🧩 ' + escapeHtml(itemComboText(cmbCard)) + '</div>';
+    }
     // 消耗品正面：库存条 + 保质期
     var totalStock = getTotalStock(item);
     if (totalStock !== undefined) {
@@ -3218,8 +3270,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791277640 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791277640';
+// deploy.py 部署时会把 1791278555 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791278555';
 
 function checkAppUpdate(manual) {
   try {
@@ -3795,6 +3847,14 @@ function openItemForm(itemId) {
     html += '<button class="btn btn-outline btn-sm" style="margin-top:6px;width:100%" onclick="addConsumableVariantRow()">＋ 添加品牌</button>';
     html += '</div>';
 
+    // 混合套餐（物品级）：一次买进来的是多种规格的组合，金额统一记在套餐价上，不分摊到各变体
+    window._editCombo = (item && item.combo)
+      ? { name: item.combo.name || '', price: item.combo.price || 0, items: (item.combo.items || []).map(function (s) { return { name: s.name || '', spec: s.spec || 0, count: s.count || 0, unit: s.unit || '' }; }) }
+      : { name: '', price: 0, items: [] };
+    html += '<div class="form-group"><label class="form-label">🧩 混合套餐（选填）</label>';
+    html += '<div id="item-combo-box">' + renderItemCombo() + '</div>';
+    html += '</div>';
+
     // 消耗模式（用户手动定义，系统不自动猜）
     var mPack = (!item || item.consumeMode !== 'unit');
     var mUnit = (item && item.consumeMode === 'unit');
@@ -3906,6 +3966,62 @@ function removeItemPhoto(idx) {
 }
 
 // ========== 补给品品牌变体编辑器（带照片） ==========
+// 物品级混合套餐编辑块
+function renderItemCombo() {
+  var c = window._editCombo || { name: '', price: 0, items: [] };
+  if (!c.items) c.items = [];
+  var h = '';
+  h += '<div style="font-size:12px;color:var(--text-secondary);line-height:1.5;margin-bottom:6px">一次买进来的是<b>多种规格的组合</b>时填（如 3盒44粒 + 2盒70粒）。金额只填套餐价，不再分摊到各品牌变体，变体只填数量。</div>';
+  h += '<div style="display:flex;gap:6px;margin-bottom:6px">';
+  h += '<input type="text" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="套餐名（选填）" value="' + escapeHtml(c.name || '') + '" onchange="onItemComboInput(\'name\',this.value)">';
+  h += '<input type="number" class="form-input" style="font-size:13px;width:104px;flex-shrink:0" placeholder="套餐价" value="' + (c.price || '') + '" onchange="onItemComboInput(\'price\',parseFloat(this.value)||0)" step="0.01">';
+  h += '</div>';
+  c.items.forEach(function (s, k) {
+    h += '<div style="display:flex;gap:4px;margin-bottom:6px">';
+    h += '<input type="text" class="form-input" style="font-size:12px;flex:1.5;min-width:0;padding:6px 8px" placeholder="规格名(44粒装)" value="' + escapeHtml(s.name || '') + '" onchange="onItemComboSub(' + k + ',\'name\',this.value)">';
+    h += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0;padding:6px 8px" placeholder="每份含量" value="' + (s.spec || '') + '" onchange="onItemComboSub(' + k + ',\'spec\',parseFloat(this.value)||0)">';
+    h += '<input type="text" class="form-input" style="font-size:12px;flex:.7;min-width:0;padding:6px 8px" placeholder="单位" value="' + escapeHtml(s.unit || '') + '" onchange="onItemComboSub(' + k + ',\'unit\',this.value)">';
+    h += '<input type="number" class="form-input" style="font-size:12px;flex:.7;min-width:0;padding:6px 8px" placeholder="份数" value="' + (s.count || '') + '" onchange="onItemComboSub(' + k + ',\'count\',parseFloat(this.value)||0)">';
+    h += '<button class="btn btn-danger btn-sm" style="flex-shrink:0;padding:6px 8px" onclick="removeItemComboRow(' + k + ')">✕</button>';
+    h += '</div>';
+  });
+  h += '<button class="btn btn-outline btn-sm" style="width:100%;margin-bottom:6px" onclick="addItemComboRow()">＋ 添加套餐规格</button>';
+  var valid = c.items.filter(function (s) { return (+s.spec > 0) && (+s.count > 0); });
+  if (valid.length) {
+    var cc = { name: c.name, price: c.price, items: valid };
+    var per = comboPerSpec(cc);
+    h += '<div style="font-size:12px;color:var(--accent);font-weight:600;line-height:1.5">' + escapeHtml(itemComboText(cc)) + (c.price > 0 && per > 0 ? ' · ≈' + fmtMoney(c.price / per) + '/' + (valid[0].unit || '') : '') + '</div>';
+    if (c.price > 0) h += '<div style="font-size:12px;color:var(--text-secondary);margin-top:2px">保存后：物品金额 = 套餐数 × ' + fmtMoney(c.price) + '，各品牌变体金额自动清空</div>';
+  }
+  return h;
+}
+function onItemComboInput(field, val) {
+  if (!window._editCombo) window._editCombo = { name: '', price: 0, items: [] };
+  window._editCombo[field] = val;
+  refreshItemCombo();
+}
+function onItemComboSub(k, field, val) {
+  var c = window._editCombo; if (!c || !c.items || !c.items[k]) return;
+  c.items[k][field] = val;
+  refreshItemCombo();
+}
+function addItemComboRow() {
+  var c = window._editCombo || { name: '', price: 0, items: [] };
+  if (!c.items) c.items = [];
+  c.items.push({ name: '', spec: 0, count: 1, unit: (c.items[0] ? c.items[0].unit : '') || '' });
+  window._editCombo = c;
+  refreshItemCombo();
+}
+function removeItemComboRow(k) {
+  var c = window._editCombo; if (!c || !c.items) return;
+  c.items.splice(k, 1);
+  refreshItemCombo();
+}
+function refreshItemCombo() {
+  var box = document.getElementById('item-combo-box');
+  if (box) box.innerHTML = renderItemCombo();
+}
+
 function renderConsumableVariantRows() {
   var html = '';
   var variants = window._editVariants || [];
@@ -4423,6 +4539,26 @@ function saveItem() {
     data.stock = data.variants.reduce(function(s,v) { return s + (v.stock||0); }, 0);
     // 补给品总金额 = 各品牌总价之和
     data.currentPrice = data.variants.reduce(function(s,v){ return s + (v.totalPrice || ((v.price||0)*(v.stock||0))); }, 0);
+    // 混合套餐：金额统一记在套餐价上（套餐数 × 套餐价），各变体不再各自计价
+    var ec = window._editCombo || null;
+    var ecItems = ec ? (ec.items || []).filter(function (s) { return (+s.spec > 0) && (+s.count > 0); }).map(function (s) {
+      return { name: (s.name || '').trim(), spec: +s.spec || 0, count: +s.count || 0, unit: (s.unit || '').trim() };
+    }) : [];
+    if (ecItems.length) {
+      data.combo = { name: (ec.name || '').trim(), price: +ec.price || 0, items: ecItems };
+      var cnt = null;
+      ecItems.forEach(function (s) {
+        var vv = null;
+        data.variants.forEach(function (x) { if (String(x.brand || '').trim() === String(s.name || '').trim()) vv = x; });
+        var have = vv ? (+vv.packCount || 0) : 0;
+        if (+s.count > 0) { var k2 = Math.floor(have / (+s.count)); if (cnt === null || k2 < cnt) cnt = k2; }
+      });
+      if (cnt === null) cnt = 0;
+      data.currentPrice = Math.round((+data.combo.price * cnt) * 100) / 100;
+      data.variants.forEach(function (v) { v.packPrice = 0; v.price = 0; v.totalPrice = 0; });
+    } else {
+      data.combo = null;
+    }
     data.unit = document.getElementById('item-unit').value || '个';
     data.shelfLife = parseInt(document.getElementById('item-shelf').value) || null;
     var prodDate = document.getElementById('item-prod-date').value;
@@ -5870,7 +6006,6 @@ function winMultiSpec(t, plan, totalPrice) {
     plan.syncedItemId = item.id;
   }
   if (!item.variants) item.variants = [];
-  var first = true;
   subs.forEach(function (s) {
     var perSpec = +s.spec || 0;
     var addCount = (+s.count || 0) * qty; // 该规格的份数（盒数）
@@ -5892,14 +6027,19 @@ function winMultiSpec(t, plan, totalPrice) {
     v.packCount = (v.packCount || 0) + addCount;
     v.stock = (v.stock || 0) + addCount * perSpec;
     delete v.noRestock;
-    if (first) { // 价格不分摊：套餐总价记在第一个规格变体上，保证物品账面总额正确
-      v.packPrice = plan.comboPrice || 0;
-      v.totalPrice = totalPrice;
-      v.price = v.stock > 0 ? Math.round((totalPrice / v.stock) * 100) / 100 : 0;
-      first = false;
-    }
+    // 价格不分摊：变体只记数量，金额统一由套餐价 × 套餐数得出
+    v.packPrice = 0; v.price = 0; v.totalPrice = 0;
   });
-  item.currentPrice = item.variants.reduce(function (s2, x) { return s2 + (x.totalPrice || ((x.price || 0) * (x.stock || 0))); }, 0);
+  // 把套餐结构写进库存：以后补货按套餐算，不必在库存里再录一遍
+  if (!item.combo || !(item.combo.items || []).length) {
+    item.combo = {
+      name: plan.name || (t.name + '套餐'),
+      price: Math.round((+plan.comboPrice > 0 ? +plan.comboPrice : (qty > 0 ? totalPrice / qty : totalPrice)) * 100) / 100,
+      items: subs.map(function (s) { return { name: String(s.name || '').trim() || (trimNum(+s.spec) + (s.unit || '')), spec: +s.spec || 0, count: +s.count || 0, unit: s.unit || '' }; })
+    };
+  }
+  var cmbN = itemComboCount(item);
+  item.currentPrice = Math.round((+item.combo.price * cmbN) * 100) / 100;
   if (!item.priceHistory) item.priceHistory = [];
   item.priceHistory.push({ date: new Date().toISOString(), channel: '', quantity: qty, totalPrice: totalPrice, unitPrice: d.unitPrice || 0, notes: '任务委托·凯旋补货（混合套餐 ' + specTxt + '，价格未分摊）', brand: '', attachments: (plan.photos || []).slice() });
   return true;
