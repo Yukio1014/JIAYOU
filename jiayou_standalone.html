@@ -2979,8 +2979,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791253948 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791253948';
+// deploy.py 部署时会把 1791256717 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791256717';
 
 function checkAppUpdate(manual) {
   try {
@@ -3681,12 +3681,12 @@ function renderConsumableVariantRows() {
     html += '</div>';
     // 每套含数 + 每套单位 + 每套重量（用于折算单价比价）
     html += '<div style="display:flex;gap:4px;align-items:center;margin-top:2px">';
-    html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="每套含(数量)" value="' + (cPackQty||'') + '" oninput="onConsumablePriceInput(' + i + ',\'packqty\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'packqty\',this.value)" step="1" title="每套餐内含多少个小单位；混合套餐可直接写算式，如 3*77+2*45">';
+    html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="每套含多少(如30ml填30)" value="' + (cPackQty||'') + '" oninput="onConsumablePriceInput(' + i + ',\'packqty\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'packqty\',this.value)" step="1" title="一套里含多少个小单位；混合套餐可直接写算式，如 3*77+2*45">';
     html += '<input type="text" class="form-input" style="font-size:12px;width:76px;flex-shrink:0" placeholder="单位:ml/颗/片" value="' + escapeHtml(v.packUnit || '') + '" oninput="onConsumableUnitInput(' + i + ',this.value)" title="每套含数的单位，任意填写：ml、毫升、L、颗、片、包…">';
-    html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="每套重量(kg)" value="' + (cWeight||'') + '" oninput="onConsumablePriceInput(' + i + ',\'weight\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'weight\',this.value)" step="0.01" title="猫粮等按重量比价时填">';
+    html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="重量kg选填" value="' + (cWeight||'') + '" oninput="onConsumablePriceInput(' + i + ',\'weight\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'weight\',this.value)" step="0.01" title="仅按公斤比价时填（如猫粮每袋6kg填6）；容量请填在左边的每套含">';
     html += '</div>';
-    // 库存提示（衍生，非编辑）
-    html += '<div id="packstock-' + i + '" style="font-size:11px;color:var(--text-secondary);margin-top:2px">📦 库存 = ' + cStock + ' ' + (v.packUnit||'个') + (cPackQty>1 ? '（约 ' + (Math.floor(cStock/cPackQty)) + ' 套）':'') + '</div>';
+    // 库存提示（衍生，非编辑）：带计算过程，一眼看懂"每套含"该填什么
+    html += '<div id="packstock-' + i + '" style="font-size:11px;color:var(--text-secondary);margin-top:2px">' + packHintOf(v) + '</div>';
     html += '</div>';
     // 删除按钮
     if (variants.length > 1) {
@@ -3762,7 +3762,7 @@ function onConsumablePriceInput(idx, which, val) {
   if (qtyEl && qtyEl !== curEl) qtyEl.value = (packQty > 0 ? packQty : '');
   if (weightEl && weightEl !== curEl) weightEl.value = weight || '';
   var hint = document.getElementById('packstock-' + idx);
-  if (hint) hint.innerHTML = '📦 库存 = ' + stock + ' ' + (v.packUnit||'个') + (packQty > 1 ? '（约 ' + (Math.floor(stock / packQty)) + ' 套）' : '');
+  if (hint) hint.innerHTML = packHintOf(v);
 }
 // 失焦时把当前框格式化为两位小数，并触发一次联动重算
 function onConsumablePriceBlur(idx, which, val) {
@@ -3791,6 +3791,15 @@ function onConsumablePriceBlur(idx, which, val) {
   }
   onConsumablePriceInput(idx, which, String(num));
 }
+// 库存提示：带计算过程（套餐数 × 每套含 = 库存小单位）
+function packHintOf(v) {
+  var pc = parseFloat(v.packCount) || 0;
+  var pq = parseFloat(v.packQty) || 1;
+  var st = Math.max(0, Math.round(pc * pq));
+  var u = v.packUnit || '个';
+  if (pq > 1) return '📦 库存 = ' + pc + ' 套 × ' + pq + u + '/套 = ' + st + u;
+  return '📦 库存 = ' + st + ' ' + u;
+}
 // 每套单位：任意文本（ml / 毫升 / L / 颗 / 片 / 包…），不限制
 function onConsumableUnitInput(idx, val) {
   var v = window._editVariants && window._editVariants[idx];
@@ -3799,11 +3808,7 @@ function onConsumableUnitInput(idx, val) {
   var row = document.querySelectorAll('.consumable-variant-row')[idx];
   if (!row) return;
   var hint = document.getElementById('packstock-' + idx);
-  if (hint) {
-    var packQty = parseFloat(v.packQty) || 1;
-    var stock = Math.max(0, Math.round((parseFloat(v.packCount) || 0) * packQty));
-    hint.innerHTML = '📦 库存 = ' + stock + ' ' + (v.packUnit || '个') + (packQty > 1 ? '（约 ' + (Math.floor(stock / packQty)) + ' 套）' : '');
-  }
+  if (hint) hint.innerHTML = packHintOf(v);
 }
 function addConsumableVariantRow() {
   window._editVariants = window._editVariants || [];
