@@ -1430,12 +1430,22 @@ function mergeDB(defaults, loaded) {
   if (!result.zones) result.zones = [];
   if (!result.tasks) result.tasks = [];
   if (!result.yearStats) result.yearStats = {};
+  // 防御：loaded.zones 为空数组但 defaults 有真实数据时，不能把本地数据冲成空
+  // （浅合并 Object.assign 会让空数组覆盖本地，必须显式兜底）
+  var defZones = (defaults && defaults.zones) || [];
+  var defItems = defZones.reduce(function (s, z) { return s + ((z.items || []).length); }, 0);
+  var resItems = (result.zones || []).reduce(function (s, z) { return s + ((z.items || []).length); }, 0);
+  if (resItems === 0 && defItems > 0) result.zones = defZones;
   // 旧版「目标锁定」数据迁移为「任务委托」
   if (result.pool && !result.tasks.length) {
     migratePoolToTasks(result);
   }
   // 补给品套餐模型迁移（只增字段，零破坏：stock/totalPrice/price 原值不动）
   migrateConsumablePackages(result);
+  // 规格两层结构迁移（packCount 包数 × packQty 每包含量 × content 每份规格）
+  // 关键：云端可能存着旧单层结构（只有 qty/content），合并时必须就地升级，
+  // 不能依赖调用方事后再补跑 —— 否则 specPackQty 读不到会退回默认 1 造成口径错乱
+  migrateSpecTwoLayer(result);
   // 历史脏数据：表单内连续添加方案曾共用同一个 id，导致点任一方案只切换第一个 → 全局去重
   migrateTaskPlanIds(result);
   return result;
@@ -1755,9 +1765,11 @@ function consumeModelOf(item) {
 }
 // 迁移：specs 从一层(qty×content)升级为两层(packCount包数 × packQty每包含量 × content每份规格)
 // 原则：库存数值必须不变 —— qty=3,content=44 → packCount=3,packQty=1,content=44（3×1×44=132，与旧值一致）
-function migrateSpecTwoLayer() {
+function migrateSpecTwoLayer(target) {
+  var db = target || DB;
+  if (!db || !db.zones) return 0;
   var fixed = 0;
-  DB.zones.forEach(function(zone) {
+  db.zones.forEach(function(zone) {
     (zone.items || []).forEach(function(item) {
       if (!item.variants || !item.variants.length) return;
       var touched = false;
@@ -1778,7 +1790,7 @@ function migrateSpecTwoLayer() {
       if (touched) syncItemFromVariants(item);
     });
   });
-  if (fixed) {
+  if (fixed && typeof DB !== 'undefined' && db === DB) {
     saveDB();
     console.log('[自愈] 规格两层结构：迁移 ' + fixed + ' 条规格明细（库存数值不变）');
   }
@@ -3824,8 +3836,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791303112 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791303112';
+// deploy.py 部署时会把 1791303588 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791303588';
 
 function checkAppUpdate(manual) {
   try {
