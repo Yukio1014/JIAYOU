@@ -1494,6 +1494,7 @@ function migrateConsumablePackages(db) {
         if (typeof v.packPrice === 'undefined') v.packPrice = v.totalPrice || 0;
         if (typeof v.packUnit === 'undefined') v.packUnit = item.unit || '个';
         if (typeof v.packWeight === 'undefined') v.packWeight = 0;
+        if (typeof v.packWeightUnit === 'undefined') v.packWeightUnit = 'kg';
         // stock / price / totalPrice 原值一律不动
       });
     });
@@ -1508,12 +1509,22 @@ function genId() {
 // 库存摘要（人话版）：套餐数 + 容量，如「4套 · ≈200ml」；没有套餐数据则退回「200ml」
 function stockSummaryOf(item) {
   var vs = (item.variants && item.variants.length) ? item.variants : [];
-  var packs = 0, hasPacks = false, totalW = 0;
-  vs.forEach(function(v) { if (v.packCount) { packs += v.packCount; hasPacks = true; } totalW += variantTotalWeight(v); });
+  var packs = 0, hasPacks = false;
+  var wTotals = {}, wOrder = [];
+  vs.forEach(function(v) {
+    if (v.packCount) { packs += v.packCount; hasPacks = true; }
+    var w = parseFloat(v.packWeight) || 0;
+    if (w > 0 && v.packCount) {
+      var u = weightUnitOf(v);
+      if (!wTotals[u]) { wTotals[u] = 0; wOrder.push(u); }
+      wTotals[u] += variantTotalWeight(v);
+    }
+  });
   var st = getTotalStock(item) || 0;
   var unit = mainPackUnit(item);
   var capTxt = st > 0 ? (round1(st) + unit) : '';
-  var wTxt = totalW > 0 ? (' · ≈' + round1(totalW) + 'kg') : '';
+  // 总含量按单位分组显示（如「≈600ml」；混合单位时「≈6kg · ≈600ml」）
+  var wTxt = wOrder.length ? (' · ' + wOrder.map(function(u) { return '≈' + round1(wTotals[u]) + u; }).join(' · ')) : '';
   if (hasPacks && packs > 0) {
     // 每套=1 时容量数和套数是同一个数，说了等于没说 → 只显示套数
     if (capTxt && Math.round(st) !== packs) return packs + '套 · ≈' + capTxt + wTxt;
@@ -3127,8 +3138,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791268095 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791268095';
+// deploy.py 部署时会把 1791269275 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791269275';
 
 function checkAppUpdate(manual) {
   try {
@@ -3693,6 +3704,8 @@ function openItemForm(itemId) {
         packQty: (typeof v.packQty!=='undefined'?v.packQty:1),
         packUnit: v.packUnit||(item?item.unit||'个':'个'),
         packWeight: (typeof v.packWeight!=='undefined'?v.packWeight:0),
+        packWeightUnit: v.packWeightUnit || 'kg',
+        noRestock: !!v.noRestock,
         photos: (v.photos||[]).slice()
       };
     });
@@ -4300,18 +4313,25 @@ function saveItem() {
     data.variants = editVariants.map(function(ev, i) {
       var evStock = parseFloat(ev.stock) || 0;
       var evPrice = parseFloat(ev.price) || 0;
-      return {
-        id: ev.id, brand: ev.brand || '未命名', stock: evStock, price: evPrice,
-        totalPrice: ev.totalPrice || +(evPrice * evStock).toFixed(2),
-        channel: '', photos: (editPhotos[i] || []).slice(),
-        opened: false, openDate: null, finishDate: null,
-        usedUp: false, openQty: 0, feeling: null, shelfLife: null, productionDate: null,
-        packCount: (typeof ev.packCount !== 'undefined' ? ev.packCount : evStock),
-        packPrice: (typeof ev.packPrice !== 'undefined' ? ev.packPrice : (ev.totalPrice || 0)),
-        packQty: (typeof ev.packQty !== 'undefined' ? ev.packQty : 1),
-        packUnit: ev.packUnit || '个',
-        packWeight: (typeof ev.packWeight !== 'undefined' ? ev.packWeight : 0)
-      };
+      // 以编辑行数据为基础（保留 packWeightUnit / noRestock / notes 等扩展字段，避免保存时丢失），
+      // 再覆盖本表单实际管理的字段
+      var nv = {};
+      Object.keys(ev).forEach(function(k) { nv[k] = ev[k]; });
+      nv.id = ev.id;
+      nv.brand = ev.brand || '未命名';
+      nv.stock = evStock;
+      nv.price = evPrice;
+      nv.totalPrice = ev.totalPrice || +(evPrice * evStock).toFixed(2);
+      nv.channel = '';
+      nv.photos = (editPhotos[i] || []).slice();
+      nv.opened = false; nv.openDate = null; nv.finishDate = null;
+      nv.usedUp = false; nv.openQty = 0; nv.feeling = null; nv.shelfLife = null; nv.productionDate = null;
+      nv.packCount = (typeof ev.packCount !== 'undefined' ? ev.packCount : evStock);
+      nv.packPrice = (typeof ev.packPrice !== 'undefined' ? ev.packPrice : (ev.totalPrice || 0));
+      nv.packQty = (typeof ev.packQty !== 'undefined' ? ev.packQty : 1);
+      nv.packUnit = ev.packUnit || '个';
+      nv.packWeight = (typeof ev.packWeight !== 'undefined' ? ev.packWeight : 0);
+      return nv;
     });
     // 合并变体照片，用于卡片展示
     var variantPhotos = [];
