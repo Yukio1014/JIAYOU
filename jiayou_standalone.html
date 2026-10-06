@@ -3199,8 +3199,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791271207 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791271207';
+// deploy.py 部署时会把 1791272543 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791272543';
 
 function checkAppUpdate(manual) {
   try {
@@ -5369,22 +5369,60 @@ function planDerived(p) {
   var unitPrice = totalSpec > 0 ? amount / totalSpec : 0;
   return { amount: amount, qty: qty, spec: spec, comboPrice: comboPrice, totalSpec: totalSpec, unitPrice: unitPrice };
 }
+// 从方案"单位"文本解析每小单位含量："1kg"→1kg、"3kg"→3kg、"500g"→0.5kg、"200ml/瓶"→200ml+小单位名"瓶"
+// 解析不了（如纯文字"包"）返回 null
+function parseUnitContent(unit) {
+  var s = String(unit || '').toLowerCase().trim();
+  if (!s) return null;
+  var m = s.match(/([0-9.]+)\s*(kg|千克|公斤|g|克|ml|毫升|l|升)/);
+  if (!m) return null;
+  var v = parseFloat(m[1]); if (!(v > 0)) return null;
+  var u = m[2];
+  if (u === '千克' || u === '公斤') u = 'kg';
+  else if (u === '克') u = 'g';
+  else if (u === '毫升') u = 'ml';
+  else if (u === 'l' || u === '升') u = 'L';
+  if (u === 'g' && v >= 1000) { u = 'kg'; v = v / 1000; }
+  if (u === 'ml' && v >= 1000) { u = 'L'; v = v / 1000; }
+  // 小单位名：含量匹配之后的剩余文本（"1kg/包"→包）；纯重量则无名
+  var name = s.slice(m.index + m[0].length).replace(/^[\s\/\\*x×每\.\-、]+/, '').trim();
+  if (/^[0-9]*$/.test(name)) name = '';
+  return { v: v, u: u, name: name };
+}
+// 方案总含量：总份数 × 每份含量（单位文本可解析时），如 3套×4包×1kg = 12kg
+function planTotalContent(p) {
+  var d = planDerived(p);
+  var c = parseUnitContent(p.unit);
+  if (!c || !(d.totalSpec > 0)) return null;
+  return { total: d.totalSpec * c.v, u: c.u, perUnit: c.v, name: c.name, totalUnits: d.totalSpec };
+}
 function planMin(t) { var m = Infinity; (t.plans || []).forEach(function (p) { var a = +p.amount || 0; if (a > 0 && a < m) m = a; }); return m === Infinity ? 0 : m; }
 function planMax(t) { var m = 0; (t.plans || []).forEach(function (p) { var a = +p.amount || 0; if (a > m) m = a; }); return m; }
-function planWeightStr(p) { var d = planDerived(p); return d.totalSpec > 0 ? ('📦 ' + trimNum(d.totalSpec) + (p.unit ? ' ' + p.unit : '')) : ''; }
+function planWeightStr(p) {
+  var d = planDerived(p); if (!(d.totalSpec > 0)) return '';
+  var tc = planTotalContent(p);
+  if (tc) return '📦 ≈' + trimNum(tc.total) + tc.u; // 真总重量（套×每套含×每份含量）
+  return '📦 共 ' + trimNum(d.totalSpec) + (p.unit ? ' ' + p.unit : ' 份');
+}
 function taskWeightStr(t) {
-  if (t.status === '进行中' || t.status === '凯旋') {
-    var arr = []; (t.plans || []).forEach(function (p) { if (p.buy !== false) { var d = planDerived(p); if (d.totalSpec > 0) arr.push(d.totalSpec); } });
-    if (arr.length === 0) return '';
-    var mn = Math.min.apply(null, arr), mx = Math.max.apply(null, arr);
-    if (mn === mx) return '📦 ' + trimNum(mn) + ' ' + ((t.plans[0] && t.plans[0].unit) || '');
-    return '📦 ' + trimNum(mn) + '~' + trimNum(mx) + ' ' + ((t.plans[0] && t.plans[0].unit) || '');
-  }
-  var arr2 = []; (t.plans || []).forEach(function (p) { var d = planDerived(p); if (d.totalSpec > 0) arr2.push(d.totalSpec); });
-  if (arr2.length === 0) return '';
-  var mn2 = Math.min.apply(null, arr2), mx2 = Math.max.apply(null, arr2);
-  if (mn2 === mx2) return '📦 ' + trimNum(mn2) + ' ' + ((t.plans[0] && t.plans[0].unit) || '');
-  return '📦 ' + trimNum(mn2) + '~' + trimNum(mx2) + ' ' + ((t.plans[0] && t.plans[0].unit) || '');
+  var inProgress = (t.status === '进行中' || t.status === '凯旋');
+  var arr = [];
+  (t.plans || []).forEach(function (p) {
+    if (inProgress && p.buy === false) return;
+    var tc = planTotalContent(p);
+    if (tc) { arr.push({ v: tc.total, s: tc.u }); return; }
+    var d = planDerived(p);
+    if (d.totalSpec > 0) arr.push({ v: d.totalSpec, s: p.unit ? ' ' + p.unit : ' 份' });
+  });
+  if (arr.length === 0) return '';
+  var suffixes = {};
+  arr.forEach(function (x) { suffixes[x.s] = true; });
+  var keys = Object.keys(suffixes);
+  var vals = arr.map(function (x) { return x.v; });
+  var mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals);
+  if (keys.length > 1) return '📦 ' + arr.map(function (x) { return trimNum(x.v) + x.s; }).join(' + ');
+  if (mn === mx) return '📦 ' + trimNum(mn) + keys[0];
+  return '📦 ' + trimNum(mn) + '~' + trimNum(mx) + keys[0];
 }
 function taskAbandonAmt(t) {
   if (t.status === '搁置') return planMin(t);
@@ -5559,7 +5597,9 @@ function taskCard(t) {
     var d = planDerived(p);
     var line = fmtMoney(p.amount);
     var ws = planWeightStr(p); if (ws) line += ' · ' + ws;
-    if (d.unitPrice > 0) line += ' · ≈' + fmtMoney(d.unitPrice) + '/' + (p.unit || '');
+    var tcL = planTotalContent(p);
+    if (tcL && tcL.total > 0) line += ' · ≈' + fmtMoney((+p.amount || 0) / tcL.total) + '/' + tcL.u;
+    else if (d.unitPrice > 0) line += ' · ≈' + fmtMoney(d.unitPrice) + '/' + (p.unit || '');
     if (p.note) line += ' · ' + escTask(p.note);
     html += '<div class="task-plan-row">';
     if (p.photos && p.photos.length) html += '<img src="' + p.photos[0] + '" style="width:46px;height:46px;border-radius:8px;object-fit:cover;flex-shrink:0">';
@@ -5580,8 +5620,13 @@ function taskStockWarn(t) {
   var existing = zone.items.filter(function (it) { return it.categoryId === t.categoryId; });
   if (existing.length > 0) {
     if (zone.type === 'durable') return '<div class="pool-warn">⚠️ 你已经有 ' + existing.length + ' 件同类物品了，确定要买吗？</div>';
-    var totalStock = existing.reduce(function (s, it) { return s + (it.stock || 0); }, 0);
-    return '<div class="pool-warn">⚠️ 同类已有 ' + totalStock + ' 件库存</div>';
+    // 补给品：各物品按自身口径显示（套数/小单位/含量），不跨单位相加（颗+包+ml 求和毫无意义）
+    var linked = {};
+    (t.plans || []).forEach(function (p) { if (p.sourceItemId) linked[p.sourceItemId] = true; });
+    existing.sort(function (a, b) { return (linked[b.id] ? 1 : 0) - (linked[a.id] ? 1 : 0); });
+    var parts = existing.slice(0, 3).map(function (it) { return it.name + ' ' + stockSummaryOf(it); });
+    var more = existing.length > 3 ? ' 等 ' + existing.length + ' 种' : '';
+    return '<div class="pool-warn">⚠️ 同类已有库存：' + escTask(parts.join('、')) + more + '</div>';
   }
   return '<div class="pool-ok">✓ 同类暂无库存，可以买</div>';
 }
@@ -5699,11 +5744,15 @@ function doWin(t) {
         if (v) {
           // 容量数：以本次采购为准（线上套餐内含若变化，同步更新）
           var isWV = /kg|公斤|千克/i.test(plan.unit || '');
+          var pcW = parseUnitContent(plan.unit);
           var vPackQty = (+plan.spec > 0) ? +plan.spec : (v.packQty || 1);
           v.packQty = vPackQty;
-          // 单位是 kg：每套含 spec 就是 spec 个 1kg 小单位 → 每包重量记 1kg
-          if (isWV && +plan.spec > 0) { v.packWeight = 1; v.packWeightUnit = 'kg'; }
-          if (plan.unit) v.packUnit = plan.unit;
+          // 单位文本可解析含量（"1kg"/"3kg"/"500g"）→ 每包重量按解析值记录，不再写死 1kg
+          if (pcW && +plan.spec > 0) {
+            v.packWeight = pcW.v; v.packWeightUnit = pcW.u;
+            if (pcW.name && (!v.packUnit || v.packUnit === '个')) v.packUnit = pcW.name; // "1kg/包"→包
+          } else if (isWV && +plan.spec > 0) { v.packWeight = 1; v.packWeightUnit = 'kg'; }
+          if (plan.unit && !pcW) v.packUnit = plan.unit; // 非重量文本才作为小单位名覆盖
           delete v.noRestock; // 又买回来了 → 自动恢复计入补货提醒
           v.packCount = (v.packCount || 0) + qty;
           v.stock = (v.stock || 0) + qty * vPackQty;
@@ -5722,14 +5771,16 @@ function doWin(t) {
       var item2 = findItemByIdGlobal(plan.sourceItemId);
       if (item2) {
         if (!item2.variants) item2.variants = [];
-        var isW = /kg|公斤|千克|千克/i.test(plan.unit || '');
+        var isW = /kg|公斤|千克/i.test(plan.unit || '');
+        var pcN = parseUnitContent(plan.unit);
         var nvSpec = plan.spec || 1;
         var nvPackQty = nvSpec;
-        var nvPackWeight = isW ? 1 : 0;
+        var nvPackWeight = pcN ? pcN.v : (isW ? 1 : 0);
+        var nvPackUnit = pcN ? (pcN.name || '包') : (plan.unit || '个');
         var nvStock = qty * nvPackQty;
         var nv = {
           id: genId(), brand: plan.name || '新品牌',
-          packCount: qty, packPrice: plan.comboPrice || 0, packQty: nvPackQty, packUnit: (plan.unit || '个'), packWeight: nvPackWeight, packWeightUnit: 'kg',
+          packCount: qty, packPrice: plan.comboPrice || 0, packQty: nvPackQty, packUnit: nvPackUnit, packWeight: nvPackWeight, packWeightUnit: pcN ? pcN.u : 'kg',
           stock: nvStock, price: nvStock > 0 ? Math.round((totalPrice / nvStock) * 100) / 100 : (plan.amount || 0), totalPrice: totalPrice,
           photos: (plan.photos || []).slice(), notes: (plan.note || ''), opened: false, usedUp: false, openQty: 0, feeling: null, shelfLife: null, productionDate: null
         };
@@ -5745,15 +5796,19 @@ function doWin(t) {
       var zone = getZone(t.zoneId); if (!zone) return;
       var unit = plan.unit || (zone.type === 'durable' ? '件' : '个');
       var note3 = (t.note || '');
-      if (d.totalSpec > 0) note3 += (note3 ? '\n' : '') + '规格总量：' + trimNum(d.totalSpec) + ' ' + unit;
-      var isW3 = /kg|公斤|千克|千克/i.test(unit || '');
+      var tc3 = planTotalContent(plan);
+      if (tc3) note3 += (note3 ? '\n' : '') + '规格总量：≈' + trimNum(tc3.total) + tc3.u + '（' + trimNum(d.qty) + ' 套 × ' + trimNum(d.spec) + (pc3 ? pc3.v + pc3.u : '') + '/套）';
+      else if (d.totalSpec > 0) note3 += (note3 ? '\n' : '') + '规格总量：' + trimNum(d.totalSpec) + ' ' + unit;
+      var isW3 = /kg|公斤|千克/i.test(unit || '');
+      var pc3 = parseUnitContent(unit);
       var spec3 = plan.spec || 1;
       var packQty3 = spec3;
-      var packWeight3 = isW3 ? 1 : 0;
+      var packWeight3 = pc3 ? pc3.v : (isW3 ? 1 : 0);
+      var packUnit3 = pc3 ? (pc3.name || '包') : unit;
       var stock3 = qty * packQty3;
       var newItem = {
         id: genId(), name: plan.name || t.name, categoryId: t.categoryId || null,
-        consumeMode: 'pack', packCount: qty, packPrice: plan.comboPrice || 0, packQty: packQty3, packUnit: unit, packWeight: packWeight3, packWeightUnit: 'kg',
+        consumeMode: 'pack', packCount: qty, packPrice: plan.comboPrice || 0, packQty: packQty3, packUnit: packUnit3, packWeight: packWeight3, packWeightUnit: pc3 ? pc3.u : 'kg',
         stock: stock3, unit: unit, currentPrice: plan.amount || 0,
         channel: '', location: '', notes: note3,
         photos: (plan.photos ? plan.photos.slice() : []),
@@ -5951,8 +6006,22 @@ function taskPlanSet(i, field, val) { if (taskState.formPlans[i]) taskState.form
 function taskAddPlan() { taskState.formPlans.push({ id: planNextId(), name: '', amount: 0, note: '', status: 'open', pinned: false, comboPrice: 0, qty: 0, spec: 0, unit: '', photos: [], buy: true, _calcOpen: false }); document.getElementById('task-plan-list').innerHTML = taskPlanRows(); taskUpdateRange(); }
 function taskRemovePlan(i) { taskState.formPlans.splice(i, 1); document.getElementById('task-plan-list').innerHTML = taskPlanRows(); taskUpdateRange(); }
 function taskToggleCalc(i) { if (taskState.formPlans[i]) { taskState.formPlans[i]._calcOpen = !taskState.formPlans[i]._calcOpen; var el = document.getElementById('task-calc-' + i); if (el) el.style.display = taskState.formPlans[i]._calcOpen ? 'block' : 'none'; } }
-function taskCalcLabel(p) { var d = planDerived(p); if (d.unitPrice > 0) return '🧮 ≈' + fmtMoney(d.unitPrice) + '/' + (p.unit || '') + ' · 点开调整'; return '🧮 规格对比（点开填）'; }
-function taskCalcOutHtml(p) { var d = planDerived(p); if (!(d.spec > 0)) return ''; return '📦 总重 ' + trimNum(d.totalSpec) + ' ' + (p.unit || '') + ' · ⚖️ 折算 ≈' + fmtMoney(d.unitPrice) + '/' + (p.unit || ''); }
+function taskCalcLabel(p) {
+  var tc = planTotalContent(p);
+  if (tc && tc.total > 0) return '🧮 ≈' + fmtMoney((+p.amount || 0) / tc.total) + '/' + tc.u + ' · 点开调整';
+  var d = planDerived(p); if (d.unitPrice > 0) return '🧮 ≈' + fmtMoney(d.unitPrice) + '/' + (p.unit || '') + ' · 点开调整';
+  return '🧮 规格对比（点开填）';
+}
+function taskCalcOutHtml(p) {
+  var d = planDerived(p); if (!(d.spec > 0)) return '';
+  var u = p.unit || '';
+  var deriveTxt = trimNum(d.qty) + ' 套 × ' + trimNum(d.spec) + (u ? ' × ' + escTask(u) + '/套' : ' 份/套');
+  var tc = planTotalContent(p);
+  if (tc) {
+    return '📦 总重 ≈' + trimNum(tc.total) + tc.u + '（' + deriveTxt + '） · ⚖️ 折算 ≈' + fmtMoney((+p.amount || 0) / tc.total) + '/' + tc.u;
+  }
+  return '📦 共 ' + trimNum(d.totalSpec) + (u ? ' ' + escTask(u) : ' 份') + '（' + deriveTxt + '） · ⚖️ 折算 ≈' + fmtMoney(d.unitPrice) + (u ? '/' + escTask(u) : '/份');
+}
 function taskFormPlanCalc(i, field, val) {
   var p = taskState.formPlans[i]; if (!p) return;
   p[field] = val;
