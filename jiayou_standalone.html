@@ -2465,6 +2465,169 @@ function rateValueText(item, perMonth, suffix) {
   return trimNum(round1(perMonth)) + ru + suffix;
 }
 
+// ===== 四模型统计层：统一产出「月消耗 / 剩余月数 / 建议采购」=====
+// 口径按模型区分：
+//   ①count  件数周期：记录 qty = 开了几件 → 件/月；库存件数 ÷ 速率
+//   ②spec   规格周期：记录 qty = 开了几份 → 份/月；剩余含量 ÷ 含量速率（退化到件/月）
+//   ③instant即时消耗：无周期概念 → 累计份数 ÷ 使用跨度（首末记录），今年已用单独统计
+//   ④combo  组合消耗：动作按包、统计按片 → 先算各子规格「片/月」，再换算成「套/月」（按套建议）
+function statsOf(item) {
+  if (!item) return null;
+  var model = consumeModelOf(item);
+  var recs = (item.usageRecords || []).filter(function (r) { return r.startDate; });
+  var out = { model: model, rate: 0, rateUnit: '', monthsLeft: null, perYearQty: 0, unit: '', breakdown: [] };
+
+  if (model === 'instant') {
+    // 模型③：打卡没有起止周期 → 用「首末记录跨度」；只有一条记录时用「距今」
+    var iq = instantUsedQty(item);
+    var dated = (item.usageRecords || []).filter(function (r) { return r.instant; });
+    var firstD = null, lastD = null;
+    dated.forEach(function (r) {
+      var d1 = new Date(r.startDate), d2 = new Date(r.endDate || r.startDate);
+      if (!firstD || d1 < firstD) firstD = d1;
+      if (!lastD || d2 > lastD) lastD = d2;
+    });
+    var spanDays = firstD ? Math.max(1, daysBetween(firstD, new Date())) : 1;
+    var rateM = iq / spanDays * 30;
+    var iu = (item.variants && item.variants[0] ? (item.variants[0].packUnit || mainPackUnit(item)) : mainPackUnit(item)) || '份';
+    out.rate = rateM; out.rateUnit = iu + '/月'; out.unit = iu;
+    out.usedThisYear = iq;
+    out.perYearQty = Math.max(1, Math.ceil(rateM * 12));
+    var restI = getTotalStock(item);
+    out.monthsLeft = rateM > 0 ? (restI / rateM) : null;
+    return out;
+  }
+
+  if (model === 'combo') {
+    // 模型④：按子规格分别算「片/月」，汇总成总片速率；再除以「每套片数」→ 套/月
+    var v0 = (item.variants || []).find(function (x) { return variantSpecsOf(x).length; }) || (item.variants || [])[0];
+    var sp = v0 ? variantSpecsOf(v0) : [];
+    var u = sp.length ? variantSpecUnit(v0) : (item.unit || '片');
+    // 开包即算消耗（库存已在开包时扣减）→ 统计所有带 specName 的记录，不区分是否已结束
+    var specRecs = recs.filter(function (r) { return r.specName && !r.instant; });
+    var earliest = null, totalPieces = 0;
+    specRecs.forEach(function (r) {
+      totalPieces += (parseFloat(r.qty) || 0) / (parseFloat(r.packPieces) || 1) * (parseFloat(r.packPieces) || 1);
+      var d = new Date(r.startDate);
+      if (!earliest || d < earliest) earliest = d;
+    });
+    var spanD = earliest ? Math.max(1, daysBetween(earliest, new Date())) : 1;
+    var ratePiecesM = totalPieces > 0 ? (totalPieces / spanD * 30) : 0;
+
+    // 「每套片数」= 保存时落账的 packQty（= 总片数 ÷ 套餐数，权威且不随消耗变化）
+    var setsTotal = parseFloat(v0 && v0.packCount) || 1;
+    if (setsTotal <= 0) setsTotal = 1;
+    var piecesPerSet = 0;
+    var savedPerSet = parseFloat(v0 && v0.packQty) || 0;
+    var sumPiecesNow = 0, sumPacksNow = 0;
+    sp.forEach(function (s) { sumPiecesNow += specPiecesOf(s); sumPacksNow += specPackCount(s); });
+    if (savedPerSet > 0) {
+      // 路径A（首选）：packQty 就是「每套多少片」，直接用
+      piecesPerSet = Math.max(1, Math.round(savedPerSet * 100) / 100);
+    } else if (sumPacksNow > 0) {
+      // 路径B（退化）：靠「子规格单包片数」加权平均估算每套片数
+      var avgPiecesPerPack = sumPiecesNow / sumPacksNow;
+      var packsPerSetEst = sumPacksNow / setsTotal;
+      piecesPerSet = Math.max(1, Math.round(packsPerSetEst * avgPiecesPerPack * 100) / 100);
+    } else {
+      piecesPerSet = 1;
+    }
+
+    out.ratePieces = ratePiecesM;
+    out.rate = ratePiecesM > 0 ? (ratePiecesM / piecesPerSet) : 0;   // 套/月
+    out.rateUnit = '套/月';
+    out.unit = '套';
+    out.unitSmall = u;
+    out.piecesPerSet = piecesPerSet;
+    out.piecesPerMonth = ratePiecesM;
+    out.perYearQty = out.rate > 0 ? Math.max(1, Math.ceil(out.rate * 12)) : 0;
+    var restPieces = 0;
+    sp.forEach(function (s) { restPieces += specPiecesOf(s); });
+    out.restSmall = restPieces;
+    out.monthsLeft = (ratePiecesM > 0) ? (restPieces / ratePiecesM) : null;
+    // 子规格明细（作为「按套」结论下的参考）
+    // 注意：直接遍历 v0.specs（不能用 variantSpecsOf 过滤，否则已用完 packCount===0 的规格会漏掉）
+    var allSpecs = (v0 && v0.specs) ? v0.specs : [];
+    allSpecs.forEach(function (s) {
+      var nm = s.name || '规格';
+      var sub = specRecs.filter(function (r) { return r.specName === nm; });
+      var q = 0, e = null;
+      sub.forEach(function (r) {
+        q += (parseFloat(r.qty) || 0);
+        var d = new Date(r.startDate);
+        if (!e || d < e) e = d;
+      });
+      var dd = e ? Math.max(1, daysBetween(e, new Date())) : 1;
+      var pm = q > 0 ? (q / dd * 30) : 0;
+      out.breakdown.push({
+        name: nm, unit: s.unit || u, perMonth: pm,
+        rest: specPiecesOf(s),
+        monthsLeft: pm > 0 ? (specPiecesOf(s) / pm) : null
+      });
+    });
+    return out;
+  }
+
+  // ①count / ②spec：原有周期口径（记录 qty = 件 / 份）
+  var rate = calcUsageRate(item);
+  var ru = rateUnitName(item);
+  if ((item.usageRecords || []).some(function (r) { return r.specText; })) ru = '份';
+  out.rate = rate; out.rateUnit = ru + '/月'; out.unit = ru;
+  out.perYearQty = rate > 0 ? Math.max(1, Math.ceil(rate * 12)) : 0;
+  var cr = contentRateOf(item);
+  if (cr && cr.perMonth > 0) { out.contentRate = cr.perMonth; out.contentUnit = cr.unit; }
+  var totS = getTotalStock(item);
+  var scS = itemStockContent(item);
+  // 库存与速率同口径：含量优先，否则件/份
+  if (cr && cr.perMonth > 0 && scS !== null) out.monthsLeft = scS / cr.perMonth;
+  else if (rate > 0 && !(item.usageRecords || []).some(function (r) { return r.specText; })) out.monthsLeft = (totS || 0) / rate;
+  return out;
+}
+
+// 采购建议文本（按模型分流）；返回 { main, detail }
+// 用户规则：一年只在双 11 采购一次 → 一律按「够一年」给建议
+function buyAdviceOf(item) {
+  var st = statsOf(item);
+  if (!st) return null;
+  if (st.model === 'instant') {
+    if (!(st.usedThisYear > 0)) return null;
+    var perYear = st.perYearQty;
+    var boxes = Math.max(1, Math.ceil(perYear / 10)); // 常见 10 片/盒
+    return {
+      main: '今年已用 ' + trimNum(st.usedThisYear) + st.unit + '，按此速度一年约 ' + perYear + st.unit + '，建议备 ' + boxes + ' 盒',
+      detail: null
+    };
+  }
+  if (st.model === 'combo') {
+    if (!(st.rate > 0)) return null;
+    var sets = st.perYearQty;
+    var detail = null;
+    if (st.breakdown && st.breakdown.length) {
+      detail = st.breakdown.map(function (b) {
+        return b.name + ' 剩 ' + trimNum(b.rest) + b.unit
+          + (b.monthsLeft !== null ? '（够 ' + Math.max(0, Math.round(b.monthsLeft)) + ' 月）' : '');
+      }).join(' · ');
+    }
+    return {
+      main: '建议囤 <strong>' + sets + ' 套</strong>（约够一年，含 '
+        + trimNum(round1(st.piecesPerSet)) + st.unitSmall + '/套）',
+      detail: detail
+    };
+  }
+  // ①count / ②spec
+  if (!(st.rate > 0)) return null;
+  var qty = st.perYearQty;
+  var main = '建议囤 <strong>' + qty + ' ' + st.unit + '</strong>（约够一年）';
+  var extra = '';
+  if (st.contentUnit && st.contentRate > 0) {
+    extra = '≈' + trimNum(round1(st.contentRate * 12)) + st.contentUnit + '/年';
+  } else if (item.consumeMode === 'pack' || item.consumeMode === 'spec') {
+    var aq = avgPackQtyOf(item);
+    if (aq > 1) extra = '≈' + round1(st.rate * 12 * aq) + mainPackUnit(item) + '/年';
+  }
+  return { main: main, detail: extra || null };
+}
+
 // ========== 预估使用中变体的剩余天数 ==========
 // 基于"首次使用到今天"的总时间跨度，预估剩余可用天数
 function estimateOpenedDaysLeft(item, variants) {
@@ -2535,35 +2698,27 @@ function renderAIAnalysis() {
     html += '</div>';
   }
 
-  // 2. 采购建议
+  // 2. 采购建议（四模型分流：③打卡看今年已用，④组合按套，①②按周期）
   html += '<div class="ai-section">';
   html += '<div class="ai-section-title">采购建议</div>';
   var buySuggestions = [], stopSuggestions = [];
   DB.zones.forEach(function(zone) {
     if (zone.type !== 'consumable') return;
     visibleItems(zone).forEach(function(it) {
-      var rate = calcUsageRate(it);
       var status = getItemStatus(it);
-      var totS = getTotalStock(it);
-      if (rate > 0 && totS !== undefined) {
-        // 库存与速率必须同口径：有含量口径且能折算剩余含量 → 用含量；否则份数（多规格记录 qty=份）
-        var crAI = contentRateOf(it);
-        var scAI = itemStockContent(it);
-        var monthsLeft = (crAI && crAI.perMonth > 0 && scAI !== null) ? scAI / crAI.perMonth
-                        : ((crAI && crAI.perMonth > 0 && (it.usageRecords || []).some(function (r) { return r.specText; })) ? null
-                        : totS / rate);
-        // 只要「撑不到一年」就该备货（status.stockUpAlert 已含此规则），告急也一并进
-        if (monthsLeft !== null && (status.lowStock || status.stockUpAlert || monthsLeft < 12)) {
-          var hasSpecAI = (it.usageRecords || []).some(function (r) { return r.specText; });
-          var suggestQty = Math.ceil(rate * 12); // 一年只采购一次 → 建议买够一年量（记录口径：份/套/小单位）
-          var reason = '库存仅够' + monthsLeft.toFixed(1) + '月，撑不到下次采购';
-          if (it.consumeMode === 'pack' && it.variants && it.variants.length && (it.variants[0].packQty || 1) > 1) {
-            var apq = it.variants[0].packQty;
-            reason += '（约 ' + Math.ceil(suggestQty / Math.max(1, apq)) + ' 套）';
-          }
-          buySuggestions.push({ name: it.name, qty: suggestQty, unit: hasSpecAI ? '份' : rateUnitName(it), reason: reason });
-        }
-      }
+      var st = statsOf(it);
+      if (!st) return;
+      var adv = buyAdviceOf(it);
+      if (!adv) return;
+      // 撑不到一年 or 已告急 → 进建议列表
+      var need = (st.monthsLeft !== null && st.monthsLeft < 12) || status.lowStock || status.stockUpAlert;
+      if (!need) return;
+      var monthsTxt = (st.monthsLeft !== null) ? Math.round(st.monthsLeft) : '?';
+      buySuggestions.push({
+        name: it.name,
+        reason: '约够 ' + monthsTxt + ' 个月，' + adv.main.replace(/<[^>]+>/g, ''),
+        detail: adv.detail
+      });
     });
   });
 
@@ -2571,9 +2726,9 @@ function renderAIAnalysis() {
     html += '<div class="ai-suggest">';
     html += '<strong>✅ 建议关注（详情见各卡片）：</strong><br>';
     buySuggestions.slice(0, 6).forEach(function(s) {
-      html += '· ' + s.name + '（' + s.reason + '）<br>';
+      html += '· ' + escapeHtml(s.name) + '（' + s.reason + '）<br>';
     });
-    html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px">点开卡片可查看建议采购量（半年/一年）</div>';
+    html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px">点开卡片可查看按套/按件的建议采购量</div>';
     html += '</div>';
   }
   if (stopSuggestions.length > 0) {
@@ -3255,53 +3410,53 @@ function renderCardBack(item, zone) {
     html += '<div class="back-section-title">📊 消耗与采购</div>';
     var rate2 = calcUsageRate(item);
     var totalStock2 = getTotalStock(item);
-    if (rate2 > 0) {
-      var ru2 = rateUnitName(item);
-      var aq2 = avgPackQtyOf(item);
-      var pu2 = mainPackUnit(item);
-      var cr2 = contentRateOf(item);
-      var cpu2 = (cr2 && cr2.perMonth > 0) ? (cr2.perMonth / rate2) : 0; // 每个记录单位折多少含量
-      // 多规格记录的 qty 是「份」，不是粒/个 —— 单位名不能再借用 mainPackUnit
-      var hasSpecRecs2 = (item.usageRecords || []).some(function (r) { return r.specText; });
-      var recUnit2 = hasSpecRecs2 ? '份' : ru2;
-      // 剩余含量（每个品牌都配了含量才有效）：如 3支×120g + 8支×100g = 1160g，而不是件数总和 11
-      var stockContent2 = itemStockContent(item);
-      html += '<div class="back-row"><span class="back-label">预估月消耗</span><span class="back-value">' + rateValueText(item, rate2, '/月') + '</span></div>';
+    var cModel2 = consumeModelOf(item);
+    var stAll = statsOf(item);
+    var adv = buyAdviceOf(item);
+    if (cModel2 === 'instant' || (stAll && stAll.rate > 0)) {
+      html += '<div class="back-row"><span class="back-label">预估月消耗</span><span class="back-value">'
+        + (cModel2 === 'instant'
+            ? (stAll.rate > 0 ? trimNum(round1(stAll.rate)) + stAll.unit + '/月' : '数据收集中')
+            : rateValueText(item, rate2, '/月'))
+        + '</span></div>';
+      if (cModel2 === 'instant') {
+        var restI2 = getTotalStock(item);
+        html += '<div class="back-row"><span class="back-label">今年已用</span><span class="back-value">' + trimNum(stAll.usedThisYear || 0) + ' ' + escapeHtml(stAll.unit) + '</span></div>';
+        html += '<div class="back-row"><span class="back-label">当前剩余</span><span class="back-value">' + trimNum(restI2) + ' ' + escapeHtml(stAll.unit) + '</span></div>';
+      }
       html += '<div style="margin-top:8px;padding:10px;border-radius:10px;background:#F0F7FF">';
       html += '<div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px">🛒 建议采购</div>';
       html += '<div style="font-size:13px;line-height:1.7">';
-      if (cr2 && cr2.perMonth > 0 && cpu2 > 0 && stockContent2 !== null) {
-        // 含量口径优先：主数字 = 多少 g/ml/粒，份数/套数只作括号参考（避免「6粒其实是6盒」的误会）
-        var halfVol = cr2.perMonth * 6, yearVol = cr2.perMonth * 12;
-        var halfU = Math.max(1, Math.ceil(halfVol / cpu2));
-        var yearU = Math.max(1, Math.ceil(yearVol / cpu2));
-        html += '· 半年量：<strong>≈' + trimNum(round1(halfVol)) + cr2.unit + '</strong>（约 ' + halfU + ' ' + recUnit2 + '）<br>';
-        html += '· 一年量：<strong>≈' + trimNum(round1(yearVol)) + cr2.unit + '</strong>（约 ' + yearU + ' ' + recUnit2 + '）<br>';
-        var monthEstC = Math.ceil(stockContent2 / cr2.perMonth); // 库存与速率同为含量口径
-        html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">当前库存 ' + trimNum(round1(stockContent2)) + cr2.unit + '，约够用 ' + Math.max(0, monthEstC) + ' 个月</div>';
-      } else {
-        var halfQty = Math.max(1, Math.ceil(rate2 * 6));
-        var yearQty = Math.max(1, Math.ceil(rate2 * 12));
-        var volSuffix = (item.consumeMode === 'pack' && aq2 > 1) ? '（≈' + round1(halfQty*aq2) + escapeHtml(pu2) + '）'
-                      : (cpu2 > 0 ? '（≈' + trimNum(round1(halfQty * cpu2)) + cr2.unit + '）' : '');
-        var volSuffixY = (item.consumeMode === 'pack' && aq2 > 1) ? '（≈' + round1(yearQty*aq2) + escapeHtml(pu2) + '）'
-                      : (cpu2 > 0 ? '（≈' + trimNum(round1(yearQty * cpu2)) + cr2.unit + '）' : '');
-        html += '· 半年量：<strong>' + halfQty + recUnit2 + '</strong>' + volSuffix + '<br>';
-        html += '· 一年量：<strong>' + yearQty + recUnit2 + '</strong>' + volSuffixY + '<br>';
-        // 容量维度：年耗套数 × 每套含数 = 年需求容量；线上套餐内含变化时按容量反推应买套数
-        if (item.consumeMode === 'pack' && aq2 > 1) {
-          var yearVol = (rate2 * 12) * aq2;
-          html += '· 年需求容量：<strong>≈ ' + round1(yearVol) + escapeHtml(pu2) + '</strong>（' + (rate2*12).toFixed(1) + ' 套 × ' + round1(aq2) + escapeHtml(pu2) + '/套）<br>';
-          html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px">线上套餐内含若变化（如 15→30' + escapeHtml(pu2) + '/套），按年需求 ' + round1(yearVol) + escapeHtml(pu2) + ' ÷ 新每套含数 = 明年约买 ' + Math.max(1, Math.round(yearVol / aq2)) + ' 套</div>';
+      if (adv) {
+        html += '· ' + adv.main + '<br>';
+        if (adv.detail) {
+          html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px">'
+            + (cModel2 === 'combo' ? '各规格余量：' : '')
+            + adv.detail + '</div>';
         }
-        var remainPacks2 = item.consumeMode === 'pack' ? (totalStock2 || 0) / Math.max(1, aq2) : (totalStock2 || 0);
-        if (hasSpecRecs2) {
-          // 记录是「份」口径、库存是件数/含量口径，两者相除必然失真（如「够用469个月」）
-          html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">部分品牌未配含量，暂无法估算够用月数</div>';
+        if (stAll.monthsLeft !== null && stAll.monthsLeft !== undefined) {
+          var uLeft = (cModel2 === 'combo') ? (trimNum(round1(stAll.restSmall)) + stAll.unitSmall) : (trimNum(round1(getTotalStock(item))) + escapeHtml(stAll.unit));
+          html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">当前库存 ' + uLeft + '，约够用 ' + Math.max(0, Math.round(stAll.monthsLeft)) + ' 个月</div>';
+        }
+      } else if (stAll && stAll.rate > 0) {
+        // 兼容旧路径（含含量口径的细分展示）
+        var hasSpecRecs2 = (item.usageRecords || []).some(function (r) { return r.specText; });
+        var cr2 = contentRateOf(item);
+        var cpu2 = (cr2 && cr2.perMonth > 0 && rate2 > 0) ? (cr2.perMonth / rate2) : 0;
+        var pu2 = mainPackUnit(item);
+        var aq2 = avgPackQtyOf(item);
+        var recUnit2 = hasSpecRecs2 ? '份' : rateUnitName(item);
+        var stockContent2 = itemStockContent(item);
+        if (cr2 && cr2.perMonth > 0 && cpu2 > 0 && stockContent2 !== null) {
+          var halfVol = cr2.perMonth * 6, yearVol = cr2.perMonth * 12;
+          html += '· 半年量：<strong>≈' + trimNum(round1(halfVol)) + cr2.unit + '</strong>（约 ' + Math.max(1, Math.ceil(halfVol / cpu2)) + ' ' + recUnit2 + '）<br>';
+          html += '· 一年量：<strong>≈' + trimNum(round1(yearVol)) + cr2.unit + '</strong>（约 ' + Math.max(1, Math.ceil(yearVol / cpu2)) + ' ' + recUnit2 + '）<br>';
         } else {
-          var monthEst = Math.ceil(remainPacks2 / rate2);
-          html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">当前库存约' + (item.consumeMode === 'pack' ? round1(remainPacks2) + ru2 + '，' : '') + '够用 ' + Math.max(0, monthEst) + ' 个月</div>';
+          html += '· 半年量：<strong>' + Math.max(1, Math.ceil(rate2 * 6)) + recUnit2 + '</strong><br>';
+          html += '· 一年量：<strong>' + Math.max(1, Math.ceil(rate2 * 12)) + recUnit2 + '</strong><br>';
         }
+      } else {
+        html += '<span style="color:var(--text-secondary)">继续记录使用情况，数据会更准</span>';
       }
       html += '</div></div>';
       // 囤货状态：撑不到一年 → 提醒按「一年一采」节奏备货
@@ -3647,8 +3802,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791301778 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791301778';
+// deploy.py 部署时会把 1791302705 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791302705';
 
 function checkAppUpdate(manual) {
   try {
@@ -3922,19 +4077,20 @@ function openOnePack(itemId, variantId, specIdx) {
   s.packCount = Math.round((packs - 1) * 100) / 100;
   // packQty 不变（新包的量），但「剩余件数」由 packCount × packQty 决定
   s.qty = Math.round(specPiecesOf(s) * 100) / 100;
-  // 记下「这一包正在用」的规格（同一时间每个规格最多一包在开）
+  // 记下「这一包正在用」的开始时间（同一规格同时只有一包在开）
+  var pkey = '__packOpenAt_' + specIdx;
+  if (!s[pkey]) s[pkey] = new Date().toISOString();
   s.__openPack = true;
 
   var nowISO = new Date().toISOString();
   if (!item.usageRecords) item.usageRecords = [];
-  // 同一规格已有未结束的开包记录 → 先收尾（用户连点两次开包 = 上一包也用完了）
-  (item.usageRecords || []).forEach(function (r) {
-    if (r.variantId === variantId && r.specName === nm && !r.endDate && !r.instant) r.endDate = nowISO;
-  });
+  // 注意：这里**不结束**同规格的上一条记录 —— 开新包只代表「开始用新的一包」，
+  // 上一条记录可能还没结束（同一规格可以同时开着多包，如日用+夜用同时在用）。
+  // 每条「开启」记录在「这包用完」时统一收尾，保证消耗量不丢失。
   item.usageRecords.push({
     startDate: nowISO, endDate: null,
     qty: pq, variantId: variantId, brand: v.brand,
-    specName: nm, packPieces: pq,
+    specName: nm, packIdx: specIdx, packPieces: pq,
     specText: nm + '×1包' + (pq !== 1 ? '（' + trimNum(pq) + u + '）' : '')
   });
 
@@ -3967,9 +4123,6 @@ function openAllPacks(itemId, variantId) {
     s.packCount = Math.round((specPackCount(s) - 1) * 100) / 100;
     s.qty = Math.round(specPiecesOf(s) * 100) / 100;
     s.__openPack = true;
-    (item.usageRecords || []).forEach(function (r) {
-      if (r.variantId === variantId && r.specName === nm && !r.endDate && !r.instant) r.endDate = nowISO;
-    });
     item.usageRecords.push({
       startDate: nowISO, endDate: null, qty: pq, variantId: variantId, brand: v.brand,
       specName: nm, packPieces: pq, specText: nm + '×1包'
@@ -4011,7 +4164,6 @@ function confirmOpenCombo(itemId, variantId) {
   openCardDetail(currentZoneId, itemId);
   toast('这包已用完（' + closed + ' 个规格，共 ' + trimNum(usedPieces) + variantSpecUnit(v) + '）');
 }
-
 function confirmOpen(itemId, variantId, markAsUsed) {
   var item = getItem(currentZoneId, itemId);
   if (!item) return;
