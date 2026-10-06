@@ -2051,8 +2051,8 @@ function estimateStockDaysLeft(item, totalStock, variants) {
 
 // ========== 消耗速率计算 ==========
 // 基于"首次使用日期到今天"的总时间跨度，计算平均月/年消耗
-// 消耗速率的单位名：pack 模式记录的是"开了几套"→套；unit 模式→小单位
-function rateUnitName(item) { return item.consumeMode === 'pack' ? '套' : (item.unit || '个'); }
+// 消耗速率的单位名：pack 模式记录的是"开了几套"→套；unit 模式→小单位（优先变体的 packUnit，如 瓶/袋/包）
+function rateUnitName(item) { return item.consumeMode === 'pack' ? '套' : mainPackUnit(item); }
 // 平均每套含数（小单位/套）
 function avgPackQtyOf(item) {
   if (item.consumeMode !== 'pack' || !item.variants || !item.variants.length) return 1;
@@ -2088,6 +2088,53 @@ function calcUsageRate(item) {
 
   var perDay = totalQty / totalDays;
   return perDay * 30; // 月消耗
+}
+
+// ===== 含量口径的消耗速率：把使用记录折算成 ml/g 等含量单位 =====
+// 记录口径：pack 模式 qty=套 → 含量 = qty × 每套含 × 每小单位含量；unit 模式 qty=小单位 → 含量 = qty × 每小单位含量
+// 返回 { perMonth, unit }；任一记录无法换算（未配含量 / ml 混 kg）→ 返回 null，展示退回记录口径
+var CONTENT_UNIT_TABLE = { ml: ['ml', 1], L: ['ml', 1000], g: ['g', 1], kg: ['g', 1000] };
+function contentRateOf(item) {
+  if (!item.usageRecords || !item.usageRecords.length) return null;
+  var vs = item.variants || [];
+  var recs = item.usageRecords.filter(function(r) { return r.startDate && r.endDate; });
+  if (!recs.length) return null;
+  // 基准含量单位：第一个配了含量且单位可换算的变体
+  var baseUnit = null;
+  for (var i = 0; i < vs.length; i++) {
+    if ((parseFloat(vs[i].packWeight) || 0) > 0 && CONTENT_UNIT_TABLE[weightUnitOf(vs[i])]) { baseUnit = weightUnitOf(vs[i]); break; }
+  }
+  if (!baseUnit) return null;
+  var baseFactor = CONTENT_UNIT_TABLE[baseUnit][1];
+  var total = 0, earliest = null, ok = true;
+  recs.forEach(function(r) {
+    var v = null;
+    if (r.variantId) v = vs.find(function(x) { return x.id === r.variantId; });
+    if (!v) v = vs.find(function(x) { return (parseFloat(x.packWeight) || 0) > 0; }); // 旧记录无variantId → 回退第一个有含量的
+    var w = v ? (parseFloat(v.packWeight) || 0) : 0;
+    var m = v ? CONTENT_UNIT_TABLE[weightUnitOf(v)] : null;
+    if (!v || w <= 0 || !m || m[0] !== CONTENT_UNIT_TABLE[baseUnit][0]) { ok = false; return; }
+    var mult = item.consumeMode === 'pack' ? (parseFloat(v.packQty) || 1) : 1;
+    total += (r.qty || 1) * w * mult * m[1] / baseFactor;
+    var s = new Date(r.startDate);
+    if (!earliest || s < earliest) earliest = s;
+  });
+  if (!ok || total <= 0 || !earliest) return null;
+  var days = daysBetween(earliest, new Date());
+  if (days < 1) days = 1;
+  return { perMonth: total / days * 30, unit: baseUnit };
+}
+// 速率展示文本：有含量口径 → 「≈9.6ml/月（0.6个/月）」；没有 → 「0.6个/月」
+function rateValueText(item, perMonth, suffix) {
+  var ru = rateUnitName(item);
+  var c = contentRateOf(item);
+  if (c && c.perMonth > 0) {
+    var cv = suffix === '/年' ? c.perMonth * 12 : c.perMonth;
+    var txt = '≈' + trimNum(round1(cv)) + c.unit + suffix;
+    if (ru !== c.unit) txt += '（' + trimNum(round1(perMonth)) + ru + suffix + '）';
+    return txt;
+  }
+  return trimNum(round1(perMonth)) + ru + suffix;
 }
 
 // ========== 预估使用中变体的剩余天数 ==========
@@ -2133,16 +2180,19 @@ function renderAIAnalysis() {
     html += '<div class="ai-section">';
     html += '<div class="ai-section-title">消耗速率 TOP5</div>';
     var items = consumableZone.items.map(function(it) {
-      return { name: it.name, rate: calcUsageRate(it), unit: rateUnitName(it) };
+      return { name: it.name, rate: calcUsageRate(it), unit: rateUnitName(it), content: contentRateOf(it) };
     }).filter(function(it) { return it.rate > 0; })
       .sort(function(a,b) { return b.rate - a.rate; })
       .slice(0, 5);
 
     if (items.length > 0) {
       items.forEach(function(it) {
-        var perYear = (it.rate * 12).toFixed(1);
+        // 优先含量口径（≈115ml/年）；没配含量退回记录口径（7.7个/年）
+        var valText = (it.content && it.content.perMonth > 0)
+          ? '≈' + trimNum(round1(it.content.perMonth * 12)) + it.content.unit + '/年'
+          : (it.rate * 12).toFixed(1) + it.unit + '/年';
         html += '<div class="ai-item"><span>' + escapeHtml(it.name) + '</span>';
-        html += '<span class="ai-val">' + perYear + it.unit + '/年</span></div>';
+        html += '<span class="ai-val">' + valText + '</span></div>';
       });
     } else {
       html += '<div class="ai-item"><span>数据收集中...</span><span>多用几次就有啦</span></div>';
@@ -2747,9 +2797,8 @@ function renderCardBack(item, zone) {
       html += '<div class="back-section-title">使用记录 (' + item.usageRecords.length + '次)</div>';
       var rate = calcUsageRate(item);
       if (rate > 0) {
-        var ru0 = rateUnitName(item);
-        html += '<div class="back-row"><span class="back-label">月消耗量</span><span class="back-value">' + rate.toFixed(1) + ru0 + '/月</span></div>';
-        html += '<div class="back-row"><span class="back-label">年消耗量</span><span class="back-value">' + (rate*12).toFixed(1) + ru0 + '/年</span></div>';
+        html += '<div class="back-row"><span class="back-label">月消耗量</span><span class="back-value">' + rateValueText(item, rate, '/月') + '</span></div>';
+        html += '<div class="back-row"><span class="back-label">年消耗量</span><span class="back-value">' + rateValueText(item, rate * 12, '/年') + '</span></div>';
         if (item.consumeMode === 'pack') {
           var aq0 = avgPackQtyOf(item);
           if (aq0 > 1) html += '<div class="back-row"><span class="back-label">年需求容量</span><span class="back-value">≈ ' + round1(rate*12*aq0) + escapeHtml(mainPackUnit(item)) + '/年</span></div>';
@@ -2763,6 +2812,14 @@ function renderCardBack(item, zone) {
         var startStr = r.startDate ? formatDate(r.startDate) : (r.date ? formatDate(r.date) : '');
         var qtyTxt = (r.qty||1) + rateUnitName(item);
         if (item.consumeMode === 'pack' && aqR > 1) qtyTxt += '（≈' + round1((r.qty||1) * aqR) + escapeHtml(mainPackUnit(item)) + '）';
+        else if (item.consumeMode !== 'pack') {
+          // unit 模式：按该记录对应品牌的「每个含量」折算含量（如 1个 ≈ 15ml）
+          var vsR = item.variants || [];
+          var vR = r.variantId ? vsR.find(function(x) { return x.id === r.variantId; }) : null;
+          if (!vR) vR = vsR.find(function(x) { return (parseFloat(x.packWeight) || 0) > 0; });
+          var wR = vR ? (parseFloat(vR.packWeight) || 0) : 0;
+          if (wR > 0) qtyTxt += '（≈' + trimNum(round1((r.qty||1) * wR)) + weightUnitOf(vR) + '）';
+        }
         var recTxt;
         if (r.endDate) {
           var days = daysBetween(new Date(r.startDate), new Date(r.endDate));
@@ -2789,9 +2846,13 @@ function renderCardBack(item, zone) {
       var pu2 = mainPackUnit(item);
       var halfQty = Math.max(1, Math.ceil(rate2 * 6));
       var yearQty = Math.max(1, Math.ceil(rate2 * 12));
-      var volSuffix = (item.consumeMode === 'pack' && aq2 > 1) ? '（≈' + round1(halfQty*aq2) + escapeHtml(pu2) + '）' : '';
-      var volSuffixY = (item.consumeMode === 'pack' && aq2 > 1) ? '（≈' + round1(yearQty*aq2) + escapeHtml(pu2) + '）' : '';
-      html += '<div class="back-row"><span class="back-label">预估月消耗</span><span class="back-value">' + rate2.toFixed(1) + ru2 + '/月</span></div>';
+      var cr2 = contentRateOf(item);
+      var cpu2 = (cr2 && cr2.perMonth > 0) ? (cr2.perMonth / rate2) : 0; // 每个记录单位折多少含量
+      var volSuffix = (item.consumeMode === 'pack' && aq2 > 1) ? '（≈' + round1(halfQty*aq2) + escapeHtml(pu2) + '）'
+                    : (cpu2 > 0 ? '（≈' + trimNum(round1(halfQty * cpu2)) + cr2.unit + '）' : '');
+      var volSuffixY = (item.consumeMode === 'pack' && aq2 > 1) ? '（≈' + round1(yearQty*aq2) + escapeHtml(pu2) + '）'
+                    : (cpu2 > 0 ? '（≈' + trimNum(round1(yearQty * cpu2)) + cr2.unit + '）' : '');
+      html += '<div class="back-row"><span class="back-label">预估月消耗</span><span class="back-value">' + rateValueText(item, rate2, '/月') + '</span></div>';
       html += '<div style="margin-top:8px;padding:10px;border-radius:10px;background:#F0F7FF">';
       html += '<div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px">🛒 建议采购</div>';
       html += '<div style="font-size:13px;line-height:1.7">';
@@ -3138,8 +3199,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791269275 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791269275';
+// deploy.py 部署时会把 1791271207 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791271207';
 
 function checkAppUpdate(manual) {
   try {
