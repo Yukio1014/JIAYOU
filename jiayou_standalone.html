@@ -219,6 +219,98 @@ body {
 .ai-card .ai-suggest .donate-buy { color: #007AFF; font-weight: 700; }
 .ai-card .ai-suggest .stop-buy { color: var(--red); font-weight: 700; }
 
+/* ========== 年报页 ========== */
+.report-hero {
+  margin: 0 0 16px; padding: 18px; border-radius: var(--radius);
+  background: linear-gradient(135deg, #E0F7FA, #B2DFDB, #E1BEE7);
+  border: 1px solid rgba(178,223,219,0.4); box-shadow: var(--shadow-lg);
+}
+.report-hero-title { font-size: 19px; font-weight: 700; color: #00695C; }
+.report-hero-sub { font-size: 12px; color: #00695C; opacity: .8; margin-top: 4px; line-height: 1.5; }
+.report-hero-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 14px;
+}
+.report-stat {
+  background: rgba(255,255,255,0.62); border-radius: 10px;
+  padding: 10px 4px; text-align: center;
+}
+.report-stat-num { font-size: 20px; font-weight: 700; color: #00695C; line-height: 1.1; }
+.report-stat-num.report-stat-warn { color: var(--orange); }
+.report-stat-label { font-size: 10px; color: #00695C; opacity: .75; margin-top: 3px; }
+.report-hero-spend {
+  margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(0,105,92,0.15);
+  font-size: 13px; color: #00695C;
+}
+.report-hero-spend strong { font-size: 16px; }
+
+.report-group {
+  margin-bottom: 18px; background: var(--card);
+  border-radius: var(--radius); border: 0.5px solid var(--separator);
+  overflow: hidden;
+}
+.report-group-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 14px 16px 6px; cursor: pointer; user-select: none;
+}
+.report-group-icon { font-size: 18px; }
+.report-group-title { font-size: 15px; font-weight: 700; flex: 1; }
+.report-group-count {
+  font-size: 12px; font-weight: 700; color: var(--text-secondary);
+  background: var(--bg); border-radius: 999px; padding: 2px 9px;
+}
+.report-group-arrow {
+  font-size: 16px; color: var(--text-tertiary);
+  transition: transform .2s ease; transform: rotate(0deg);
+}
+.report-group-arrow.folded { transform: rotate(-90deg); }
+.report-group-hint {
+  padding: 0 16px 10px; font-size: 11px; line-height: 1.55; color: var(--text-tertiary);
+}
+.report-group-body { padding: 0 16px 8px; }
+
+.report-row {
+  padding: 12px 0; border-top: 0.5px solid var(--separator); cursor: pointer;
+}
+.report-row:first-child { border-top: none; }
+.report-row-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.report-row-name { font-size: 15px; font-weight: 700; min-width: 0; }
+.report-row-zone { font-size: 11px; color: var(--text-tertiary); flex-shrink: 0; }
+.report-tag {
+  font-size: 10px; font-weight: 600; vertical-align: middle;
+  padding: 1px 6px; border-radius: 6px; margin-left: 5px;
+  background: var(--bg); color: var(--text-secondary);
+}
+.report-tag-warn { background: rgba(255,149,0,0.16); color: var(--orange); }
+.report-facts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.report-fact {
+  font-size: 12px; line-height: 1.4; padding: 3px 9px; border-radius: 8px;
+  background: var(--bg); color: var(--text-secondary);
+}
+.report-left { font-size: 12px; color: var(--purple); font-weight: 600; margin-top: 7px; }
+.report-advice {
+  font-size: 13px; line-height: 1.55; color: #00695C; font-weight: 600; margin-top: 7px;
+}
+.report-detail { font-size: 11px; line-height: 1.6; color: var(--text-tertiary); margin-top: 4px; }
+.report-foot {
+  padding: 16px 0 8px; font-size: 11px; line-height: 1.6;
+  color: var(--text-tertiary); text-align: center;
+}
+
+/* 首页年报入口 */
+.report-entry {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 16px; margin-bottom: 12px;
+  background: var(--card); border-radius: var(--radius);
+  border: 0.5px solid var(--separator); box-shadow: var(--shadow);
+  cursor: pointer;
+}
+.report-entry:active { opacity: .7; }
+.report-entry-icon { font-size: 24px; flex-shrink: 0; }
+.report-entry-body { flex: 1; min-width: 0; }
+.report-entry-title { font-size: 15px; font-weight: 700; color: var(--text); }
+.report-entry-sub { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+.report-entry-arrow { font-size: 22px; color: var(--text-tertiary); flex-shrink: 0; line-height: 1; }
+
 /* ========== 进度条 ========== */
 .bar-wrap { width: 100%; height: 8px; background: var(--separator); border-radius: 4px; overflow: hidden; }
 .bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
@@ -850,6 +942,16 @@ body {
 
 <div class="page" id="page-settings">
   <div id="settings-content"></div>
+</div>
+
+<!-- ========== 年报页 ========== -->
+<div class="navbar" id="nav-report" style="display:none;">
+  <button class="nav-btn" onclick="showPage('home')">‹</button>
+  <h1>📊 年报</h1>
+</div>
+
+<div class="page" id="page-report">
+  <div id="report-content"></div>
 </div>
 
 <!-- ========== 底部Tab栏 ========== -->
@@ -1975,6 +2077,7 @@ function showPage(page) {
   else if (page === 'zone') document.getElementById('nav-zone').style.display = 'flex';
   else if (page === 'pool') document.getElementById('nav-pool').style.display = 'flex';
   else if (page === 'settings') document.getElementById('nav-settings').style.display = 'flex';
+  else if (page === 'report') document.getElementById('nav-report').style.display = 'flex';
 
   document.querySelectorAll('.tabbar-item').forEach(function(t) {
     t.classList.toggle('active', t.dataset.tab === page);
@@ -1984,6 +2087,7 @@ function showPage(page) {
   else if (page === 'zone') renderZone();
   else if (page === 'pool') renderTasks();
   else if (page === 'settings') renderSettings();
+  else if (page === 'report') renderReport();
 
   window.scrollTo(0, 0);
 }
@@ -2201,10 +2305,32 @@ function renderHome() {
   });
   html += '</div>';
 
+  // === 年报入口（消耗速率 + 建议采购，独立页面展开） ===
+  html += '<div class="report-entry" onclick="showPage(\'report\')">';
+  html += '<div class="report-entry-icon">📊</div>';
+  html += '<div class="report-entry-body">';
+  html += '<div class="report-entry-title">年报</div>';
+  html += '<div class="report-entry-sub">' + aiEntrySubText() + '</div>';
+  html += '</div>';
+  html += '<div class="report-entry-arrow">›</div>';
+  html += '</div>';
+
   // === AI分析 ===
   html += renderAIAnalysis();
 
   document.getElementById('home-content').innerHTML = html;
+}
+
+// 年报入口一行摘要：把最关键的两件事摆出来，避免用户点进去才知道有没有内容
+function aiEntrySubText() {
+  var r = buildAnnualReport();
+  if (r.empty) return '记录几次消耗，这里就有速率与采购建议';
+  var parts = [];
+  parts.push(r.counts.rate + ' 件有速率');
+  if (r.counts.buy > 0) parts.push(r.counts.buy + ' 件该补货');
+  else parts.push('暂无需要补货');
+  if (r.counts.noData > 0) parts.push(r.counts.noData + ' 件差数据');
+  return parts.join(' · ');
 }
 
 // ========== 物品状态判断 ==========
@@ -2698,147 +2824,286 @@ function estimateOpenedDaysLeft(item, variants) {
   return Math.round(avgDaysPerUnit - usedDays);
 }
 
-// ========== AI分析渲染 ==========
+// ========== 首页 AI 摘要卡 ==========
+// 分工：首页只给「一眼速览 + 一个入口」，消耗速率与采购建议的完整明细都在「年报」独立页。
+// 之前把 4 个 section（速率 TOP5 / 采购建议 / 花费分析 / 大促倒计时）全塞在首页小卡里，
+// 既挤又和年报重复，且「别买了」是永远为空的死代码 —— 现在统一收口到年报。
 function renderAIAnalysis() {
-  var html = '<div class="section-title">AI 分析</div>';
-  html += '<div class="ai-card">';
+  var r = buildAnnualReport();
+  var html = '<div class="ai-card">';
   html += '<div class="ai-header"><span style="font-size:20px">🤖</span>';
-  html += '<span class="ai-title">智能报告</span>';
+  html += '<span class="ai-title">智能摘要</span>';
   html += '<span class="ai-badge">离线分析</span></div>';
 
-  // 1. 年消耗画像
-  var consumableZone = DB.zones.find(function(z) { return z.type === 'consumable'; });
-  if (consumableZone && consumableZone.items.length > 0) {
-    html += '<div class="ai-section">';
-    html += '<div class="ai-section-title">消耗速率 TOP5</div>';
-    var items = consumableZone.items.map(function(it) {
-      return { name: it.name, rate: calcUsageRate(it), unit: rateUnitName(it), content: contentRateOf(it) };
-    }).filter(function(it) { return it.rate > 0; })
-      .sort(function(a,b) { return b.rate - a.rate; })
-      .slice(0, 5);
+  if (r.empty) {
+    html += '<div class="ai-suggest">' + escapeHtml(r.emptyReason || '还没有可统计的数据') + '</div>';
+    html += '</div>';
+    return html;
+  }
 
-    if (items.length > 0) {
-      items.forEach(function(it) {
-        // 优先含量口径（≈115ml/年）；没配含量退回记录口径（7.7个/年）
-        var valText = (it.content && it.content.perMonth > 0)
-          ? '≈' + trimNum(round1(it.content.perMonth * 12)) + it.content.unit + '/年'
-          : (it.rate * 12).toFixed(1) + it.unit + '/年';
-        html += '<div class="ai-item"><span>' + escapeHtml(it.name) + '</span>';
-        html += '<span class="ai-val">' + valText + '</span></div>';
-      });
-    } else {
-      html += '<div class="ai-item"><span>数据收集中...</span><span>多用几次就有啦</span></div>';
-    }
+  // 一句话结论：最紧要的那件事
+  html += '<div class="ai-suggest" style="margin-bottom:10px">' + escapeHtml(aiSummaryLine(r)) + '</div>';
+
+  // 三个数字
+  html += '<div class="ai-item"><span>有速率的物品</span><span class="ai-val">' + r.counts.rate + ' 件</span></div>';
+  html += '<div class="ai-item"><span>需要补货</span><span class="ai-val">' + r.counts.buy + ' 件</span></div>';
+  if (r.counts.noData > 0) {
+    html += '<div class="ai-item"><span>还差数据</span><span class="ai-val">' + r.counts.noData + ' 件</span></div>';
+  }
+
+  // 采购建议：首页只露最紧的 3 条，完整列表在年报
+  var buyRows = (r.groups.find(function (g) { return g.key === 'buy'; }) || { rows: [] }).rows;
+  if (buyRows.length > 0) {
+    html += '<div class="ai-section" style="margin-top:12px">';
+    html += '<div class="ai-section-title">最先要补的</div>';
+    buyRows.slice(0, 3).forEach(function (e) {
+      var tail = e.leftText ? e.leftText.replace('按现在的速度', '').replace(/^[，,]?\s*/, '') : '';
+      html += '<div class="ai-item"><span>' + escapeHtml(e.name) + '</span>';
+      html += '<span class="ai-val">' + escapeHtml(tail || '该补货') + '</span></div>';
+    });
     html += '</div>';
   }
 
-  // 2. 采购建议（四模型分流：③打卡看今年已用，④组合按套，①②按周期）
-  html += '<div class="ai-section">';
-  html += '<div class="ai-section-title">采购建议</div>';
-  var buySuggestions = [], stopSuggestions = [];
-  DB.zones.forEach(function(zone) {
-    if (zone.type !== 'consumable') return;
-    visibleItems(zone).forEach(function(it) {
-      var status = getItemStatus(it);
-      var st = statsOf(it);
-      if (!st) return;
-      var adv = buyAdviceOf(it);
-      if (!adv) return;
-      // 撑不到一年 or 已告急 → 进建议列表
-      var need = (st.monthsLeft !== null && st.monthsLeft < 12) || status.lowStock || status.stockUpAlert;
-      if (!need) return;
-      var monthsTxt = (st.monthsLeft !== null) ? Math.round(st.monthsLeft) : '?';
-      buySuggestions.push({
-        name: it.name,
-        reason: '约够 ' + monthsTxt + ' 个月，' + adv.main.replace(/<[^>]+>/g, ''),
-        detail: adv.detail
-      });
-    });
-  });
-
-  if (buySuggestions.length > 0) {
-    html += '<div class="ai-suggest">';
-    html += '<strong>✅ 建议关注（详情见各卡片）：</strong><br>';
-    buySuggestions.slice(0, 6).forEach(function(s) {
-      html += '· ' + escapeHtml(s.name) + '（' + s.reason + '）<br>';
-    });
-    html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px">点开卡片可查看按套/按件的建议采购量</div>';
-    html += '</div>';
+  // 花费：只给今年总额，明细不在首页
+  if (r.totalSpend > 0) {
+    html += '<div class="ai-item" style="border-top:1px solid rgba(0,105,92,0.2);margin-top:8px">';
+    html += '<span>今年已记录花费</span><span class="ai-val">¥' + r.totalSpend.toFixed(2) + '</span></div>';
   }
-  if (stopSuggestions.length > 0) {
-    html += '<div class="ai-suggest" style="margin-top:8px">';
-    html += '<span class="stop-buy">⛔ 别买了：</span><br>';
-    stopSuggestions.slice(0, 3).forEach(function(s) {
-      html += '· ' + s.name + '（' + s.reason + '）<br>';
-    });
-    html += '</div>';
-  }
-  if (buySuggestions.length === 0 && stopSuggestions.length === 0) {
-    html += '<div class="ai-suggest">暂无采购建议。继续记录使用情况，数据会更准哦。</div>';
-  }
-  html += '</div>';
 
-  // 3. 花费分析
-  html += '<div class="ai-section">';
-  html += '<div class="ai-section-title">花费分析（今年）</div>';
-  var now = new Date();
-  var yearSpend = {};
-  var totalSpend = 0;
-  DB.zones.forEach(function(zone) {
-    zone.items.forEach(function(it) {
-      if (it.priceHistory) {
-        it.priceHistory.forEach(function(p) {
-          if (p.date) {
-            var d = new Date(p.date);
-            if (d.getFullYear() === now.getFullYear()) {
-              var zname = zone.name;
-              if (!yearSpend[zname]) yearSpend[zname] = 0;
-              yearSpend[zname] += (p.totalPrice || 0);
-              totalSpend += (p.totalPrice || 0);
-            }
-          }
-        });
-      }
-    });
-  });
-
-  if (totalSpend > 0) {
-    var sorted = Object.keys(yearSpend).map(function(k) {
-      return { name: k, amount: yearSpend[k] };
-    }).sort(function(a,b) { return b.amount - a.amount; });
-
-    sorted.forEach(function(s) {
-      var pct = (s.amount / totalSpend * 100).toFixed(0);
-      html += '<div class="ai-item"><span>' + s.name + '</span>';
-      html += '<span class="ai-val">¥' + s.amount.toFixed(0) + ' (' + pct + '%)</span></div>';
-    });
-    html += '<div class="ai-item" style="border-top:1px solid rgba(0,105,92,0.2)"><span>总计</span>';
-    html += '<span class="ai-val" style="color:#00695C;font-size:16px">¥' + totalSpend.toFixed(0) + '</span></div>';
-  } else {
-    html += '<div class="ai-suggest">今年还没有花费记录。</div>';
-  }
-  html += '</div>';
-
-  // 4. 大促倒计时
-  html += '<div class="ai-section">';
-  html += '<div class="ai-section-title">大促倒计时</div>';
-  var next618 = getNextPromo(6, 18);
-  var next1111 = getNextPromo(11, 11);
-  html += '<div class="ai-item"><span>618</span><span class="ai-val">' + next618 + '</span></div>';
-  html += '<div class="ai-item"><span>双十一</span><span class="ai-val">' + next1111 + '</span></div>';
-  html += '</div>';
+  // 入口
+  html += '<button class="btn btn-primary btn-full" style="margin-top:12px" onclick="showPage(\'report\')">📊 查看完整年报</button>';
+  html += '<div style="font-size:11px;color:#00695C;opacity:.75;margin-top:6px;text-align:center;line-height:1.5">年报含每件物品的消耗速率与建议采购量</div>';
 
   html += '</div>';
   return html;
 }
 
-function getNextPromo(month, day) {
-  var now = new Date();
-  var promo = new Date(now.getFullYear(), month - 1, day);
-  if (promo < now) promo = new Date(now.getFullYear() + 1, month - 1, day);
-  var days = Math.ceil((promo - now) / (1000 * 60 * 60 * 24));
-  if (days === 0) return '就是今天！';
-  return '还有' + days + '天';
+// 首页摘要卡的一句话结论：按「告急 > 撑不到一年 > 数据不足 > 一切正常」优先级挑一件说
+function aiSummaryLine(r) {
+  var all = r.groups.reduce(function (a, g) { return a.concat(g.rows.map(function (x) { return { g: g.key, e: x }; })); }, []);
+  var urgent = all.filter(function (x) { return x.g === 'buy' && x.e.lowStock; });
+  if (urgent.length > 0) {
+    return '⚠️ ' + urgent.length + ' 件已经告急，' + urgent[0].e.name + ' 最先要补。';
+  }
+  if (r.counts.buy > 0) {
+    var first = (r.groups.find(function (g) { return g.key === 'buy'; }) || { rows: [] }).rows[0];
+    return '🛒 ' + r.counts.buy + ' 件撑不到明年，' + first.name + ' 最紧。';
+  }
+  if (r.counts.rate === 0) {
+    return '⏳ 还没有足够的消耗记录，先用几次再来看看。';
+  }
+  return '✅ 库存都够撑到下次采购，暂时不用买。';
+}
+
+// ========== 年报数据层 ==========
+// 年报只回答两件事：① 消耗速率（现在用得多快）② 建议采购（这次该买多少）
+// 口径统一走 statsOf / buyAdviceOf，四模型分流；这里只负责「凑成人话」
+// 返回结构：
+//   { empty, emptyReason, asOf, groups: [{key,title,hint,rows,extra}], counts:{...}, totalSpend, totalItems }
+
+// 把「每月消耗速率」换成一句精确的人话
+//   count  → 「每月约 0.7 支（每 43 天一支）」
+//   spec   → 「每月约 2.1 份」
+//   combo  → 「每月约 0.8 套（每套 67 片）」
+//   instant→ 「每月约 12 片」+ 由调用方补「今年累计」
+// 有含量口径（ml/g）时优先给含量，并把件数口径放进括号，避免「用掉一kg」这类错话
+function rateSentenceOf(item, st) {
+  if (!st || !(st.rate > 0)) return '';
+  var ru = st.unit || rateUnitName(item);
+  var head = '每月约 ' + trimNum(round1(st.rate)) + ru;
+  if (st.model === 'combo') {
+    head += '（每套 ' + trimNum(round1(st.piecesPerSet)) + (st.unitSmall || '片') + '）';
+  }
+  if (st.contentRate > 0 && st.contentUnit) {
+    head = '每月约 ' + trimNum(round1(st.contentRate)) + st.contentUnit
+      + '（≈' + trimNum(round1(st.rate)) + ru + '）';
+  }
+  // 附加「每 N 天一个」——只有能落到「天数」的量才说，避免「每 0 天」
+  var days = st.rate > 0 ? Math.round(30 / st.rate) : 0;
+  if (days >= 2) {
+    var dUnit = st.model === 'combo' ? '套' : ru;
+    head += '，约 ' + days + ' 天用掉 1' + dUnit;
+  }
+  return head;
+}
+
+// 「现在还剩多少」——四模型口径各不同，统一在这里说清
+function restSentenceOf(item, st) {
+  if (!st) return '';
+  if (st.model === 'combo') {
+    var pieces = round1(st.restSmall || 0);
+    var sets = (st.piecesPerSet > 0) ? Math.floor((st.restSmall || 0) / st.piecesPerSet) : 0;
+    return '剩 ' + trimNum(pieces) + (st.unitSmall || '片') + '（≈' + sets + ' 套）';
+  }
+  if (st.model === 'instant') {
+    return '剩 ' + trimNum(getTotalStock(item)) + (st.unit || '份');
+  }
+  var tot = getTotalStock(item);
+  var txt = '剩 ' + trimNum(tot) + (st.unit || '个');
+  var sc = itemStockContent(item);
+  if (sc !== null && sc > 0) txt += '（≈' + trimNum(round1(sc)) + (mainPackUnit(item)) + '）';
+  return txt;
+}
+
+// 「还能用多久」——monthsLeft 是四模型统一口径，这里只做区间化措辞（避免「还能用 0.3 个月」）
+function monthsLeftSentenceOf(st) {
+  if (!st || st.monthsLeft === null || !(st.rate > 0)) return '';
+  var m = st.monthsLeft;
+  if (m < 0.5) return '按现在的速度撑不到半个月';
+  if (m < 1) return '按现在的速度还能用不到 1 个月';
+  if (m < 1.5) return '按现在的速度还能用约 1 个月';
+  if (m < 24) return '按现在的速度还能用约 ' + Math.round(m) + ' 个月';
+  return '按现在的速度能用 2 年以上';
+}
+
+// 建议采购的一句话依据（把 buyAdviceOf.main 的 HTML 洗成纯文本）
+function adviceMainText(item) {
+  var adv = buyAdviceOf(item);
+  if (!adv) return '';
+  return String(adv.main || '').replace(/<[^>]+>/g, '');
+}
+
+// 主入口：把 DB 里所有消耗品凑成年报
+function buildAnnualReport() {
+  var out = {
+    empty: true, emptyReason: '', asOf: new Date(),
+    groups: [], counts: { rate: 0, buy: 0, stop: 0, noData: 0 },
+    totalSpend: 0, totalItems: 0
+  };
+
+  // 1. 收集全部消耗品（含已归档：归档只是不再提醒，历史速率仍值得看）
+  var all = [];
+  DB.zones.forEach(function (zone) {
+    if (zone.type !== 'consumable') return;
+    var push = function (it, arch) {
+      all.push({ item: it, zone: zone, archived: !!arch });
+    };
+    visibleItems(zone).forEach(function (it) { push(it, false); });
+    archivedItemsOf(zone).forEach(function (it) { push(it, true); });
+  });
+  out.totalItems = all.length;
+
+  if (all.length === 0) {
+    out.emptyReason = '还没有消耗品。先在领地里加几件日用消耗品吧。';
+    return out;
+  }
+
+  // 2. 逐项算；分三组：该买 / 别买 / 数据不够
+  var gBuy = [], gStop = [], gNoData = [], gRate = [];
+  var thisYear = new Date().getFullYear();
+
+  all.forEach(function (row) {
+    var it = row.item, zone = row.zone;
+    var st = statsOf(it);
+    var status = getItemStatus(it);
+    var recs = (it.usageRecords || []).length;
+
+    var entry = {
+      itemId: it.id, zoneId: zone.id,
+      name: it.name, zoneName: zone.name, zoneIcon: zone.icon,
+      archived: row.archived,
+      model: st ? st.model : 'spec',
+      unit: st ? (st.unit || '') : '',
+      rate: st ? st.rate : 0,
+      rateText: rateSentenceOf(it, st),
+      restText: restSentenceOf(it, st),
+      leftText: monthsLeftSentenceOf(st),
+      monthsLeft: st ? st.monthsLeft : null,
+      advice: adviceMainText(it),
+      adviceDetail: (function () { var a = buyAdviceOf(it); return a ? a.detail : null; })(),
+      usedThisYear: st && st.usedThisYear ? st.usedThisYear : 0,
+      spendThisYear: 0,
+      lowStock: !!(status.lowStock || status.stockUpAlert),
+      noRestock: (it.variants || []).length > 0 && (it.variants || []).every(function (v) { return v.noRestock; }),
+      hasData: recs > 0 && st && st.rate > 0
+    };
+    // 「不再买」判定：整件物品所有品牌都标了 noRestock，或已归档
+    // —— 这类物品即便有速率也不该进「建议采购」，否则会一直催买用户明确不买的东西
+    entry.stopBuy = entry.archived || entry.noRestock;
+
+    // 今年花费（只算本物品自己的 priceHistory）
+    (it.priceHistory || []).forEach(function (p) {
+      if (!p.date) return;
+      var d = new Date(p.date);
+      if (d.getFullYear() === thisYear) {
+        entry.spendThisYear += (p.totalPrice || 0);
+        out.totalSpend += (p.totalPrice || 0);
+      }
+    });
+
+    if (entry.hasData) {
+      gRate.push(entry);
+      // 有速率但明确不再买 → 只进「不用再买」，不给采购建议
+      if (entry.stopBuy) gStop.push(entry);
+      else if (entry.advice) gBuy.push(entry);
+    } else {
+      // 没速率：不再买/已归档的进「不用再买」，其余进「还差数据」
+      if (entry.stopBuy) gStop.push(entry);
+      else gNoData.push(entry);
+    }
+  });
+
+  // 3. 排序：速率榜按月耗量降序（跨单位不可比，只是「记录最活跃的排前面」）
+  gRate.sort(function (a, b) { return b.rate - a.rate; });
+  // 该买的排前面：先告急，再按剩余月数升序（越紧越前）
+  gBuy.sort(function (a, b) {
+    if (a.lowStock !== b.lowStock) return a.lowStock ? -1 : 1;
+    var am = (a.monthsLeft === null) ? 999 : a.monthsLeft;
+    var bm = (b.monthsLeft === null) ? 999 : b.monthsLeft;
+    return am - bm;
+  });
+
+  // gNoData / gStop 去重（分组分支可能各 push 一次）
+  var seenNo = {}, seenStop = {};
+  gNoData = gNoData.filter(function (e) {
+    if (seenNo[e.itemId]) return false;
+    seenNo[e.itemId] = 1; return true;
+  });
+  gStop = gStop.filter(function (e) {
+    if (seenStop[e.itemId]) return false;
+    seenStop[e.itemId] = 1; return true;
+  });
+  // 已归档的不再重复出现在「数据不够」
+  gNoData = gNoData.filter(function (e) { return !e.archived; });
+
+  out.counts.rate = gRate.length;
+  out.counts.buy = gBuy.length;
+  out.counts.stop = gStop.length;
+  out.counts.noData = gNoData.length;
+
+  // 4. 组装分组
+  if (gBuy.length) {
+    out.groups.push({
+      key: 'buy', title: '建议采购', icon: '🛒',
+      hint: '按「一年只在双十一买一次」的节奏算：撑不到一年的才进这里。越紧的排越前。',
+      rows: gBuy
+    });
+  }
+  if (gRate.length) {
+    out.groups.push({
+      key: 'rate', title: '消耗速率', icon: '📈',
+      hint: '速率 = 已记录消耗量 ÷ 首末记录跨度。记录越多越准。',
+      rows: gRate
+    });
+  }
+  if (gStop.length) {
+    out.groups.push({
+      key: 'stop', title: '不用再买', icon: '⛔',
+      hint: '标记了「不再买」或已归档的品牌，不算进补货提醒。',
+      rows: gStop
+    });
+  }
+  if (gNoData.length) {
+    out.groups.push({
+      key: 'nodata', title: '还差数据', icon: '⏳',
+      hint: '还没有使用记录，先用几次、记一次消耗，这里就会出速率与建议。',
+      rows: gNoData
+    });
+  }
+
+  out.empty = (gBuy.length + gRate.length + gStop.length + gNoData.length) === 0;
+  if (out.empty) out.emptyReason = '还没有可统计的消耗品。';
+  return out;
 }
 
 // ========== 板块页渲染 ==========
@@ -3836,8 +4101,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791303720 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791303720';
+// deploy.py 部署时会把 1791304967 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791304967';
 
 function checkAppUpdate(manual) {
   try {
@@ -7832,6 +8097,100 @@ function taskFormSave(id) {
 }
 function taskEdit(id) { taskOpenForm(id); }
 
+// ========== 年报页渲染 ==========
+// 只做两件事：消耗速率 + 建议采购。不做导出、不做分享。
+var reportFoldState = {};   // 分组折叠：{ buy:true, rate:false, ... }
+
+function reportToggle(key) {
+  reportFoldState[key] = !reportFoldState[key];
+  renderReport();
+}
+
+// 单条：左侧名称/领地，右侧速率结论，下方依据行
+function renderReportRow(e) {
+  var html = '';
+  html += '<div class="report-row" onclick="openCardDetail(\'' + e.zoneId + '\',\'' + e.itemId + '\')">';
+  html += '<div class="report-row-head">';
+  html += '<div class="report-row-name">' + escapeHtml(e.name);
+  if (e.archived) html += '<span class="report-tag">已归档</span>';
+  if (e.noRestock) html += '<span class="report-tag">不再买</span>';
+  if (e.lowStock) html += '<span class="report-tag report-tag-warn">告急</span>';
+  html += '</div>';
+  html += '<div class="report-row-zone">' + e.zoneIcon + ' ' + escapeHtml(e.zoneName) + '</div>';
+  html += '</div>';
+
+  // 依据行（速率 / 余量 / 还能用多久 / 今年已用）
+  var facts = [];
+  if (e.rateText) facts.push(e.rateText);
+  if (e.restText && e.hasData) facts.push(e.restText);
+  if (e.usedThisYear > 0 && e.model === 'instant') facts.push('今年累计用掉 ' + trimNum(e.usedThisYear) + (e.unit || '份'));
+  if (facts.length) {
+    html += '<div class="report-facts">';
+    facts.forEach(function (f) { html += '<span class="report-fact">' + escapeHtml(f) + '</span>'; });
+    html += '</div>';
+  }
+  if (e.leftText) html += '<div class="report-left">' + escapeHtml(e.leftText) + '</div>';
+  if (e.advice) html += '<div class="report-advice">' + escapeHtml(e.advice) + '</div>';
+  if (e.adviceDetail) html += '<div class="report-detail">' + escapeHtml(e.adviceDetail) + '</div>';
+  if (!e.hasData) html += '<div class="report-detail">点开卡片记一次消耗，就能算出速率。</div>';
+  html += '</div>';
+  return html;
+}
+
+function renderReport() {
+  var r = buildAnnualReport();
+  var html = '';
+
+  if (r.empty) {
+    html += '<div class="empty-state"><div class="empty-icon">📊</div>';
+    html += '<div class="empty-text">' + escapeHtml(r.emptyReason || '还没有可统计的数据') + '</div></div>';
+    html += '<div style="padding:0 20px"><button class="btn btn-outline btn-full" onclick="showPage(\'home\')">回到总览</button></div>';
+    document.getElementById('report-content').innerHTML = html;
+    return;
+  }
+
+  // 概览
+  html += '<div class="report-hero">';
+  html += '<div class="report-hero-title">📊 ' + r.asOf.getFullYear() + ' 年报</div>';
+  html += '<div class="report-hero-sub">只看两件事：现在用得多快，这次该买多少。</div>';
+  html += '<div class="report-hero-grid">';
+  html += '<div class="report-stat"><div class="report-stat-num">' + r.counts.rate + '</div><div class="report-stat-label">有速率的物品</div></div>';
+  html += '<div class="report-stat"><div class="report-stat-num report-stat-warn">' + r.counts.buy + '</div><div class="report-stat-label">需要补货</div></div>';
+  html += '<div class="report-stat"><div class="report-stat-num">' + r.counts.stop + '</div><div class="report-stat-label">不用再买</div></div>';
+  html += '<div class="report-stat"><div class="report-stat-num">' + r.counts.noData + '</div><div class="report-stat-label">还差数据</div></div>';
+  html += '</div>';
+  if (r.totalSpend > 0) {
+    html += '<div class="report-hero-spend">今年已记录花费 <strong>¥' + r.totalSpend.toFixed(2) + '</strong></div>';
+  }
+  html += '</div>';
+
+  // 分组
+  r.groups.forEach(function (g) {
+    var folded = !!reportFoldState[g.key];
+    html += '<div class="report-group">';
+    html += '<div class="report-group-head" onclick="reportToggle(\'' + g.key + '\')">';
+    html += '<span class="report-group-icon">' + g.icon + '</span>';
+    html += '<span class="report-group-title">' + escapeHtml(g.title) + '</span>';
+    html += '<span class="report-group-count">' + g.rows.length + '</span>';
+    html += '<span class="report-group-arrow' + (folded ? ' folded' : '') + '">⌄</span>';
+    html += '</div>';
+    html += '<div class="report-group-hint">' + escapeHtml(g.hint) + '</div>';
+    if (!folded) {
+      html += '<div class="report-group-body">';
+      g.rows.forEach(function (e) { html += renderReportRow(e); });
+      html += '</div>';
+    }
+    html += '</div>';
+  });
+
+  html += '<div class="report-foot">';
+  html += '<div>数据来自你的使用记录与库存，完全本地计算，不上传。</div>';
+  html += '<button class="btn btn-outline btn-full" style="margin-top:12px" onclick="showPage(\'home\')">回到总览</button>';
+  html += '</div>';
+
+  document.getElementById('report-content').innerHTML = html;
+}
+
 function renderSettings() {
   var html = '';
 
@@ -7885,6 +8244,7 @@ function renderSettings() {
   html += '<div class="setting-row"><div class="setting-label">凯旋/搁置</div><div class="setting-value">' + DB.tasks.filter(function(t){return t.status==='凯旋'||t.status==='搁置';}).length + '件</div></div>';
   var years = Object.keys(DB.yearStats || {});
   html += '<div class="setting-row" onclick="openYearReview()"><div class="setting-label">📅 年度回顾</div><div class="setting-value">' + (years.length ? years.length + ' 年档案' : '按年看消耗与花费') + '</div></div>';
+  html += '<div class="setting-row" onclick="showPage(\'report\')"><div class="setting-label">📊 年报</div><div class="setting-value">消耗速率 · 采购建议</div></div>';
   html += '</div>';
 
   // 版本与更新
