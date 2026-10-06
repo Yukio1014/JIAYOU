@@ -1511,9 +1511,13 @@ function stockSummaryOf(item) {
   var packs = 0, hasPacks = false;
   vs.forEach(function(v) { if (v.packCount) { packs += v.packCount; hasPacks = true; } });
   var st = getTotalStock(item) || 0;
-  var unit = item.unit || '';
+  var unit = mainPackUnit(item);
   var capTxt = st > 0 ? (round1(st) + unit) : '';
-  if (hasPacks && packs > 0) return capTxt ? (packs + '套 · ≈' + capTxt) : (packs + '套');
+  if (hasPacks && packs > 0) {
+    // 每套=1 时容量数和套数是同一个数，说了等于没说 → 只显示套数
+    if (capTxt && Math.round(st) !== packs) return packs + '套 · ≈' + capTxt;
+    return packs + '套';
+  }
   return round1(st) + unit;
 }
 
@@ -2131,7 +2135,7 @@ function renderAIAnalysis() {
             var apq = it.variants[0].packQty;
             reason += '（约 ' + Math.ceil(suggestQty / Math.max(1, apq)) + ' 套）';
           }
-          buySuggestions.push({ name: it.name, qty: suggestQty, unit: it.unit || '个', reason: reason });
+          buySuggestions.push({ name: it.name, qty: suggestQty, unit: rateUnitName(it), reason: reason });
         }
       }
     });
@@ -2399,8 +2403,8 @@ function openUsageEdit(itemId, idx) {
   var r = item.usageRecords[idx];
   var fmt = function(s) { return s ? String(s).slice(0, 10) : ''; };
   var html = '<div class="modal-handle"></div><div class="modal-title">✏️ 编辑使用记录</div>';
-  html += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px">' + escapeHtml(item.name) + ' · 可修正数量与日期（历史记录若按套餐误记，请按实际' + (item.unit || '个') + '数修正）</div>';
-  html += '<div class="form-group"><label class="form-label">消耗数量（' + (item.unit || '个') + '）</label><input type="number" class="form-input" id="ur-qty" step="0.01" min="0" value="' + (r.qty || 1) + '"></div>';
+  html += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px">' + escapeHtml(item.name) + ' · 可修正数量与日期（历史记录若按套餐误记，请按实际' + rateUnitName(item) + '数修正）</div>';
+  html += '<div class="form-group"><label class="form-label">消耗数量（' + rateUnitName(item) + '）</label><input type="number" class="form-input" id="ur-qty" step="0.01" min="0" value="' + (r.qty || 1) + '"></div>';
   html += '<div class="form-group"><label class="form-label">开始日期</label><input type="date" class="form-input" id="ur-start" value="' + fmt(r.startDate) + '"></div>';
   html += '<div class="form-group"><label class="form-label">结束日期（留空 = 使用中）</label><input type="date" class="form-input" id="ur-end" value="' + fmt(r.endDate) + '"></div>';
   html += '<div style="display:flex;gap:10px;margin-top:14px">';
@@ -2483,7 +2487,7 @@ function renderCardFront(item, zone) {
         var avgPqF = item.variants.reduce(function(s, v) { return s + (v.packQty || 1); }, 0) / item.variants.length;
         packHintF = '（约 ' + Math.floor(totalStock / avgPqF) + ' 套）';
       }
-      html += '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:13px;color:var(--text-secondary)">库存</span><span style="font-weight:700">' + totalStock + (item.unit||'') + packHintF + '</span></div>';
+      html += '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:13px;color:var(--text-secondary)">库存</span><span style="font-weight:700">' + totalStock + mainPackUnit(item) + packHintF + '</span></div>';
       html += '<div class="stock-bar ' + barClass + '"><div class="stock-fill" style="width:' + pct + '%"></div></div>';
       html += '</div>';
     }
@@ -2559,7 +2563,7 @@ function renderCardBack(item, zone) {
     html += '<div class="back-section-title">库存与价格</div>';
     var totalStock = getTotalStock(item);
     if (totalStock !== undefined) html += '<div class="back-row"><span class="back-label">总库存</span><span class="back-value">' + stockSummaryOf(item) + '</span></div>';
-    if (item.stockThreshold) html += '<div class="back-row"><span class="back-label">告急阈值</span><span class="back-value">' + item.stockThreshold + (item.unit||'') + '</span></div>';
+    if (item.stockThreshold) html += '<div class="back-row"><span class="back-label">告急阈值</span><span class="back-value">' + item.stockThreshold + mainPackUnit(item) + '</span></div>';
     html += '</div>';
 
     // === 品牌变体（已用完/不再买的默认折叠，保持面板清爽）===
@@ -2785,7 +2789,7 @@ function renderCardBack(item, zone) {
       html += '<div class="back-row"><span class="back-label">均价</span><span class="back-value">¥' + avgPrice.toFixed(2) + '</span></div>';
       html += '<div style="margin-top:8px">';
       item.priceHistory.slice().reverse().slice(0, 5).forEach(function(p) {
-        html += '<div class="open-record">📅 ' + formatDate(p.date) + ' · ' + escapeHtml(p.channel||'') + ' · ¥' + parseFloat((p.unitPrice||0)).toFixed(2) + '/' + (item.unit||'个');
+        html += '<div class="open-record">📅 ' + formatDate(p.date) + ' · ' + escapeHtml(p.channel||'') + ' · ¥' + parseFloat((p.unitPrice||0)).toFixed(2) + '/' + mainPackUnit(item);
         if (p.notes) html += ' · ' + escapeHtml(p.notes);
         html += '</div>';
       });
@@ -3099,8 +3103,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791263748 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791263748';
+// deploy.py 部署时会把 1791265945 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791265945';
 
 function checkAppUpdate(manual) {
   try {
@@ -3178,7 +3182,7 @@ function openItem(itemId) {
       if (v.opened && !v.usedUp) statusBadge = ' <span style="color:var(--orange);font-size:11px">· 使用中</span>';
       html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px;border-radius:10px;background:#F8F8FA;margin-bottom:8px;cursor:pointer" onclick="openVariantItem(\'' + itemId + '\',\'' + v.id + '\')">';
       html += '<div style="font-weight:600">' + escapeHtml(v.brand || '未命名') + statusBadge + '</div>';
-      html += '<div style="color:var(--text-secondary);font-size:13px">库存 ' + (v.stock||0) + (item.unit||'') + ' →</div>';
+      html += '<div style="color:var(--text-secondary);font-size:13px">库存 ' + (v.stock||0) + (v.packUnit || mainPackUnit(item)) + ' →</div>';
       html += '</div>';
     });
     html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">取消</button>';
@@ -3205,7 +3209,7 @@ function openVariantItem(itemId, variantId) {
     html += '<div style="text-align:center;margin-bottom:16px">';
     html += '<div style="font-size:16px;font-weight:700">' + escapeHtml(item.name) + '</div>';
     html += '<div style="font-size:14px;color:var(--accent)">' + escapeHtml(v.brand) + '</div>';
-    html += '<div style="font-size:13px;color:var(--text-secondary)">库存：' + v.stock + (item.unit||'') + '</div>';
+    html += '<div style="font-size:13px;color:var(--text-secondary)">库存：' + v.stock + (v.packUnit || mainPackUnit(item)) + '</div>';
     html += '</div>';
     html += '<div class="form-group"><label class="form-label">本次用几个</label>';
     html += '<div class="stepper" style="justify-content:center">';
@@ -3231,7 +3235,7 @@ function openVariantItem(itemId, variantId) {
     html += '<div style="text-align:center;margin-bottom:16px">';
     html += '<div style="font-size:16px;font-weight:700">' + escapeHtml(item.name) + '</div>';
     html += '<div style="font-size:14px;color:var(--accent)">' + escapeHtml(v.brand) + '</div>';
-    html += '<div style="font-size:13px;color:var(--text-secondary)">库存：' + v.stock + (item.unit||'') + '（每套 ' + (v.packQty||1) + (v.packUnit||'个') + '）</div>';
+    html += '<div style="font-size:13px;color:var(--text-secondary)">库存：' + v.stock + (v.packUnit || mainPackUnit(item)) + '（每套 ' + (v.packQty||1) + (v.packUnit||'个') + '）</div>';
     html += '</div>';
     html += '<div style="text-align:center;padding:14px;background:var(--bg);border-radius:10px;margin-bottom:16px;font-size:14px">';
     html += '将开一整套：<strong>' + pq + ' ' + (v.packUnit||'个') + '</strong><br><span style="font-size:12px;color:var(--text-secondary)">用完这一整套后再开下一整套</span></div>';
@@ -3255,7 +3259,7 @@ function openVariantItem(itemId, variantId) {
   html += '<div style="text-align:center;margin-bottom:16px">';
   html += '<div style="font-size:16px;font-weight:700">' + escapeHtml(item.name) + '</div>';
   html += '<div style="font-size:14px;color:var(--accent)">' + escapeHtml(v.brand) + '</div>';
-  html += '<div style="font-size:13px;color:var(--text-secondary)">库存：' + v.stock + (item.unit||'') + '</div>';
+  html += '<div style="font-size:13px;color:var(--text-secondary)">库存：' + v.stock + (v.packUnit || mainPackUnit(item)) + '</div>';
   html += '</div>';
   html += '<div class="stepper" style="margin-bottom:16px">';
   html += '<button onclick="adjustOpenQty(-1)">−</button>';
@@ -3406,7 +3410,7 @@ function openRestockForm(itemId) {
   html += '<div class="modal-title">📦 补货</div>';
   html += '<div style="text-align:center;margin-bottom:16px">';
   html += '<div style="font-size:16px;font-weight:700">' + escapeHtml(item.name) + '</div>';
-  html += '<div style="font-size:13px;color:var(--text-secondary)">总库存：' + getTotalStock(item) + (item.unit||'') + '</div>';
+  html += '<div style="font-size:13px;color:var(--text-secondary)">总库存：' + stockSummaryOf(item) + '</div>';
   html += '</div>';
 
   // 品牌选择
@@ -4876,7 +4880,7 @@ function openStockAuditForm(itemId) {
   } else {
     currentStock = getTotalStock(item);
   }
-  var unit = item.unit || '个';
+  var unit = mainPackUnit(item);
   var html = '<div class="modal-handle"></div>';
   html += '<div class="modal-title">📦 库存盘点</div>';
   html += '<div style="text-align:center;margin-bottom:16px">';
@@ -5012,9 +5016,9 @@ function saveStockAudit(itemId) {
   if (diff === 0) {
     toast('盘点完成，数量一致');
   } else if (diff > 0) {
-    toast('盘点完成，差异 ' + diff + (item.unit||'个') + '（实际用得更快）已校正');
+    toast('盘点完成，差异 ' + diff + mainPackUnit(item) + '（实际用得更快）已校正');
   } else {
-    toast('盘点完成，实际比记录多 ' + Math.abs(diff) + (item.unit||'个'));
+    toast('盘点完成，实际比记录多 ' + Math.abs(diff) + mainPackUnit(item));
   }
 }
 
@@ -6368,7 +6372,7 @@ function showAlertDetail(type) {
           var totS = getTotalStock(it);
           lowPack = '（约 ' + Math.floor(totS / Math.max(1, it.variants[0].packQty)) + ' 套）';
         }
-        html += '<div style="font-size:13px;color:var(--orange);font-weight:600;margin-top:2px">📦 库存仅剩 ' + getTotalStock(it) + (it.unit||'') + lowPack + '（告急阈值' + (it.stockThreshold||1) + '）</div>';
+        html += '<div style="font-size:13px;color:var(--orange);font-weight:600;margin-top:2px">📦 库存仅剩 ' + getTotalStock(it) + mainPackUnit(it) + lowPack + '（告急阈值' + (it.stockThreshold||1) + '）</div>';
       } else if (type === 'lowStockSoft') {
         var est = status.estDaysLeft;
         html += '<div style="font-size:13px;color:var(--blue);font-weight:600;margin-top:2px">⏳ 预计 ' + (est!==null?est:'?') + ' 天内用完</div>';
@@ -6377,7 +6381,7 @@ function showAlertDetail(type) {
         html += '<div style="font-size:13px;color:var(--green);font-weight:600;margin-top:2px">🔓 使用中：' + (activeBrands.join('、') || '—') + '</div>';
       } else if (type === 'stockpile') {
         var totalS = getTotalStock(it);
-        html += '<div style="font-size:13px;color:var(--text-secondary);font-weight:600;margin-top:2px">📦 库存 ' + (totalS||0) + (it.unit||'') + ' · 未开封</div>';
+        html += '<div style="font-size:13px;color:var(--text-secondary);font-weight:600;margin-top:2px">📦 库存 ' + (totalS||0) + mainPackUnit(it) + ' · 未开封</div>';
       }
       html += '</div>';
       html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0;align-self:center;font-size:12px;padding:6px 10px" onclick="event.stopPropagation();taskFromItem(\'' + zone.id + '\',\'' + it.id + '\')">📋 委托</button>';
