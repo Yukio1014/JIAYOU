@@ -1620,6 +1620,39 @@ function getActiveStock(item) {
   return item.stock || 0;
 }
 
+// ===== 「已用完」的统一判断 + 历史脏数据自愈 =====
+// 正常流程下 usedUp=true 时库存必为 0。但旧版本点「用完了」只写 usedUp=true、
+// 不清库存（如牙膏剩 3 支却被折叠进已用完区），留下矛盾状态。
+// 判断规则：usedUp 且确实没有剩余库存才算「已用完」；
+// 「开封即用完」的一次性物品（oneShot）开封后即使还有库存也算用完（其本身语义如此）。
+function isVariantDone(v, item) {
+  if (!v.usedUp) return false;
+  if ((parseFloat(v.stock) || 0) > 0 && !(item && isOneShotItem(item))) return false;
+  return true;
+}
+// 数据自愈：启动/云端同步后，把「标记了用完但仍有库存」的普通变体恢复为待开封
+function migrateDirtyUsedUp() {
+  var fixed = 0;
+  DB.zones.forEach(function(zone) {
+    (zone.items || []).forEach(function(item) {
+      if (!item.variants || !item.variants.length) return;
+      var touched = false;
+      item.variants.forEach(function(v) {
+        if (v.usedUp && (parseFloat(v.stock) || 0) > 0 && !v.noRestock && !isOneShotItem(item)) {
+          v.usedUp = false; v.finishDate = null; v.opened = false;
+          touched = true; fixed++;
+        }
+      });
+      if (touched) syncItemFromVariants(item);
+    });
+  });
+  if (fixed) {
+    saveDB();
+    console.log('[自愈] 修复了 ' + fixed + ' 个「已用完但仍有库存」的变体 → 待开封');
+  }
+  return fixed;
+}
+
 // ===== 套餐模型展示辅助 =====
 // 变体总含量：套数 × 每套含 × 每小单位含量（packWeight=每个小单位的含量，单位见 packWeightUnit）
 function variantTotalWeight(v) {
@@ -2840,15 +2873,15 @@ function renderCardBack(item, zone) {
 
     // === 品牌变体（已用完/不再买的默认折叠，保持面板清爽）===
     if (item.variants && item.variants.length > 0) {
-      var doneVs = item.variants.filter(function(v) { return v.usedUp || v.noRestock; });
-      var liveVs = item.variants.filter(function(v) { return !(v.usedUp || v.noRestock); });
+      var doneVs = item.variants.filter(function(v) { return isVariantDone(v, item) || v.noRestock; });
+      var liveVs = item.variants.filter(function(v) { return !(isVariantDone(v, item) || v.noRestock); });
       var showDone = !!(window._showDoneVariants && window._showDoneVariants[item.id]);
       var listVs = showDone ? item.variants : liveVs;
       html += '<div class="back-section">';
       html += '<div class="back-section-title">品牌变体 (' + liveVs.length + '个在用' + (doneVs.length ? ' · 已藏' + doneVs.length + '个' : '') + ')</div>';
       listVs.forEach(function(v, vi) {
         var isUsing = v.opened && !v.usedUp;
-        var isDone = !!v.usedUp;
+        var isDone = isVariantDone(v, item);
         var cardCls = 'variant-card' + (isUsing ? ' vc-using' : (isDone ? ' vc-done' : '')) + (v.noRestock ? ' vc-norestock' : '');
         html += '<div class="' + cardCls + '">';
         // 头部：品牌名 + 状态徽章 + 不再买标记
@@ -2946,11 +2979,11 @@ function renderCardBack(item, zone) {
     if (hasMany) {
       // 多变体：分别列出每个变体的状态
       var hasAnyActive = item.variants.some(function(v) { return v.opened && !v.usedUp; });
-      var hasAnyFinished = item.variants.some(function(v) { return v.usedUp; });
+      var hasAnyFinished = item.variants.some(function(v) { return isVariantDone(v, item); });
       var allUnused = !hasAnyActive && !hasAnyFinished;
       // 每个变体的状态/日期/操作已集中在「品牌变体」卡片里，这里只留一句汇总，避免重复堆砌
       var cntUsing = item.variants.filter(function(v) { return v.opened && !v.usedUp; }).length;
-      var cntDone = item.variants.filter(function(v) { return v.usedUp; }).length;
+      var cntDone = item.variants.filter(function(v) { return isVariantDone(v, item); }).length;
       if (allUnused) {
         html += '<div class="back-row"><span class="back-label" style="color:var(--text-tertiary)">全部未开封</span></div>';
       } else {
@@ -3385,6 +3418,8 @@ function deleteVariant(itemId, variantId) {
 // 点击正面翻面
 document.addEventListener('DOMContentLoaded', async function() {
   await loadDB();
+  // 自愈历史脏数据（旧版本「用完了」不清库存导致的假折叠）
+  migrateDirtyUsedUp();
   // 立即用本地数据渲染首页（不等待网络，秒开）
   showPage('home');
   // 立即更新云端状态 UI（避免卡在静态"初始化..."文字）
@@ -3400,6 +3435,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (currentUser) {
         var cloudChanged = await syncFromCloud();
         if (cloudChanged) {
+          migrateDirtyUsedUp();
           renderAll();
         }
       }
@@ -3444,8 +3480,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791293532 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791293532';
+// deploy.py 部署时会把 1791298049 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791298049';
 
 function checkAppUpdate(manual) {
   try {
@@ -5239,8 +5275,8 @@ function cleanupFinishedVariants(year) {
   DB.zones.forEach(function(z) {
     (z.items || []).forEach(function(it) {
       if (!it.variants || !it.variants.length) return;
-      var keep = it.variants.filter(function(v) { return !(v.usedUp || v.noRestock); });
-      var drop = it.variants.filter(function(v) { return v.usedUp || v.noRestock; });
+      var keep = it.variants.filter(function(v) { return !(isVariantDone(v, it) || v.noRestock); });
+      var drop = it.variants.filter(function(v) { return isVariantDone(v, it) || v.noRestock; });
       if (drop.length === 0) return;
       drop.forEach(function(v) { photoCnt += ((v.photos || []).length); });
       vCnt += drop.length;
@@ -5477,7 +5513,7 @@ function undoFinish(itemId) {
   var lastFinished = null;
   for (var i = item.variants.length - 1; i >= 0; i--) {
     var v = item.variants[i];
-    if (v.usedUp) { lastFinished = v; break; }
+    if (isVariantDone(v, item)) { lastFinished = v; break; }
   }
   if (!lastFinished) {
     toast('没有可撤销的用完记录');
