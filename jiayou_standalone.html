@@ -1505,6 +1505,18 @@ function genId() {
 }
 
 // ========== 子物品（品牌变体）辅助 ==========
+// 库存摘要（人话版）：套餐数 + 容量，如「4套 · ≈200ml」；没有套餐数据则退回「200ml」
+function stockSummaryOf(item) {
+  var vs = (item.variants && item.variants.length) ? item.variants : [];
+  var packs = 0, hasPacks = false;
+  vs.forEach(function(v) { if (v.packCount) { packs += v.packCount; hasPacks = true; } });
+  var st = getTotalStock(item) || 0;
+  var unit = item.unit || '';
+  var capTxt = st > 0 ? (round1(st) + unit) : '';
+  if (hasPacks && packs > 0) return capTxt ? (packs + '套 · ≈' + capTxt) : (packs + '套');
+  return round1(st) + unit;
+}
+
 function getTotalStock(item) {
   if (item.variants && item.variants.length > 0) {
     return item.variants.reduce(function(s, v) { return s + (v.stock || 0); }, 0);
@@ -2367,7 +2379,7 @@ function renderItemCard(item, zone) {
       var barClass = 'low';
       if (pct > 60) barClass = 'high';
       else if (pct > 30) barClass = 'mid';
-      html += '<div class="card-info">' + totalStock + (item.unit || '') + ' · ¥' + parseFloat((item.currentPrice || 0)).toFixed(2) + '</div>';
+      html += '<div class="card-info">' + stockSummaryOf(item) + ' · ¥' + parseFloat((item.currentPrice || 0)).toFixed(2) + '</div>';
       html += '<div class="stock-bar ' + barClass + ' card-mini-bar"><div class="stock-fill" style="width:' + pct + '%"></div></div>';
     }
     if (status.daysLeft !== null && !status.expired) {
@@ -2546,7 +2558,7 @@ function renderCardBack(item, zone) {
     html += '<div class="back-section">';
     html += '<div class="back-section-title">库存与价格</div>';
     var totalStock = getTotalStock(item);
-    if (totalStock !== undefined) html += '<div class="back-row"><span class="back-label">总库存</span><span class="back-value">' + totalStock + (item.unit||'') + '</span></div>';
+    if (totalStock !== undefined) html += '<div class="back-row"><span class="back-label">总库存</span><span class="back-value">' + stockSummaryOf(item) + '</span></div>';
     if (item.stockThreshold) html += '<div class="back-row"><span class="back-label">告急阈值</span><span class="back-value">' + item.stockThreshold + (item.unit||'') + '</span></div>';
     html += '</div>';
 
@@ -3087,8 +3099,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791262508 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791262508';
+// deploy.py 部署时会把 1791263748 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791263748';
 
 function checkAppUpdate(manual) {
   try {
