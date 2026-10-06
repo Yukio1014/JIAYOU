@@ -2782,6 +2782,11 @@ function renderCardBack(item, zone) {
             dateTxt = formatDate(v.openDate) + ' → ' + formatDate(v.finishDate) + '（' + daysBetween(new Date(v.openDate), new Date(v.finishDate)) + '天）';
           } else if (isDone) {
             dateTxt = formatDate(v.openDate) + ' 起';
+          } else if (!isUsing && variantSpecsOf(v).length) {
+            // 多规格：上一批已用完、还有剩余待开封 → 显示上批起止
+            var lastEndD = null;
+            (item.usageRecords || []).forEach(function(r) { if (r.variantId === v.id && r.endDate) lastEndD = r.endDate; });
+            dateTxt = lastEndD ? ('上批 ' + formatDate(v.openDate) + ' → ' + formatDate(lastEndD)) : (formatDate(v.openDate) + ' 起');
           } else {
             dateTxt = formatDate(v.openDate) + ' 起 · 已用 ' + daysBetween(new Date(v.openDate), new Date()) + ' 天';
           }
@@ -2815,6 +2820,10 @@ function renderCardBack(item, zone) {
           html += '<button class="btn btn-outline btn-sm" onclick="finishVariant(\'' + item.id + '\',\'' + v.id + '\')">✅ 用完了</button>';
         } else if (isDone) {
           html += '<button class="btn btn-outline btn-sm" onclick="undoFinishVariant(\'' + item.id + '\',\'' + v.id + '\')">↩️ 撤销</button>';
+        } else if (variantSpecsOf(v).length) {
+          // 多规格「本批用完」但还有剩余库存 → 可撤销回到使用中
+          var hasEndedRec = (item.usageRecords || []).some(function(r) { return r.variantId === v.id && r.endDate; });
+          if (hasEndedRec) html += '<button class="btn btn-outline btn-sm" onclick="undoFinishVariant(\'' + item.id + '\',\'' + v.id + '\')">↩️ 撤销</button>';
         }
         html += '<button class="btn btn-outline btn-sm" onclick="openVariantFeelingForm(\'' + item.id + '\',\'' + v.id + '\')">✏️ 感受</button>';
         html += '</div>';
@@ -2874,7 +2883,12 @@ function renderCardBack(item, zone) {
       }
     } else {
       var foodBtnText = isOneShotItem(item) ? '⚡ 开封即用完' : '🔓 点击开封';
-      html += '<div class="back-row"><span class="back-label">状态</span><span class="back-value">未开封</span></div>';
+      // 多规格还有剩余（上一批已用完）→ 显示待开封而非未开封
+      var pendV = null;
+      (item.variants || []).forEach(function(v) { if (!pendV && variantSpecsOf(v).length) pendV = v; });
+      var statusTxt = '未开封';
+      if (pendV) statusTxt = '待开封 · 剩 ' + trimNum(variantSpecContent(pendV)) + variantSpecUnit(pendV) + '（' + trimNum(variantSpecPieces(pendV)) + ' 件）';
+      html += '<div class="back-row"><span class="back-label">状态</span><span class="back-value">' + statusTxt + '</span></div>';
       html += '<button class="open-btn" onclick="openItem(\'' + item.id + '\')">' + foodBtnText + '</button>';
     }
     html += '</div>';
@@ -3295,8 +3309,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791282967 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791282967';
+// deploy.py 部署时会把 1791284588 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791284588';
 
 function checkAppUpdate(manual) {
   try {
@@ -3638,13 +3652,32 @@ function finishVariant(itemId, variantId) {
   var v = item.variants.find(function(vv) { return vv.id === variantId; });
   if (!v) return;
 
+  // 多规格：开封那一刻已按「规格×份数」扣过库存，
+  // 这里的「用完了」= 手头开的这一批用完 → 只结束本次使用记录，剩余规格照常待开封
+  if (variantSpecsOf(v).length) {
+    var recF = null;
+    if (item.usageRecords) {
+      for (var fi = item.usageRecords.length - 1; fi >= 0; fi--) {
+        if (item.usageRecords[fi].variantId === variantId && !item.usageRecords[fi].endDate) { recF = item.usageRecords[fi]; break; }
+      }
+    }
+    var nowF = new Date().toISOString();
+    if (recF) recF.endDate = nowF;
+    v.usedUp = false;
+    v.finishDate = null;
+    v.opened = false; // 本批结束，剩余库存等下次开封
+    var usedC = (recF && recF.contentUsed > 0) ? recF.contentUsed : 0;
+    var remainC = variantSpecContent(v), remainP = variantSpecPieces(v), spU = variantSpecUnit(v);
+    syncItemFromVariants(item);
+    saveDB();
+    openCardDetail(currentZoneId, itemId);
+    toast('本批已记用完' + (usedC > 0 ? '（≈' + trimNum(usedC) + spU + '）' : '') + '，剩 ' + trimNum(remainC) + spU + '（' + trimNum(remainP) + ' 件）待开封');
+    return;
+  }
+
   v.usedUp = true;
   v.finishDate = v.finishDate || new Date().toISOString();
-  // 混合规格：整变体用完 → 各规格剩余清零
-  if (variantSpecsOf(v).length) {
-    v.specs.forEach(function (s) { s.qty = 0; });
-    v.stock = 0;
-  }
+  // 走到这里说明已无剩余规格（有剩余的多规格分支在上面已返回）
 
   if (item.usageRecords && item.usageRecords.length > 0) {
     var lastRecord = item.usageRecords[item.usageRecords.length - 1];
@@ -5316,8 +5349,23 @@ function undoFinishVariant(itemId, variantId) {
   var item = getItem(currentZoneId, itemId);
   if (!item) return;
   var v = item.variants.find(function(vv) { return vv.id === variantId; });
-  if (!v || !v.usedUp) {
-    toast('该变体未标记用完');
+  if (!v) { toast('该变体不存在'); return; }
+  if (!v.usedUp) {
+    // 多规格「本批用完」后的撤销：库存还剩着，只是把最近一次记录恢复为使用中
+    var reopened = false;
+    if (item.usageRecords) {
+      for (var i = item.usageRecords.length - 1; i >= 0; i--) {
+        var r0 = item.usageRecords[i];
+        if (r0.variantId === variantId && r0.endDate) { r0.endDate = null; reopened = true; break; }
+      }
+    }
+    if (!reopened) { toast('该变体未标记用完'); return; }
+    v.opened = true;
+    v.finishDate = null;
+    syncItemFromVariants(item);
+    saveDB();
+    openCardDetail(currentZoneId, itemId);
+    toast('已撤销：该批继续使用中');
     return;
   }
   v.usedUp = false;
@@ -5372,19 +5420,34 @@ function openStockAuditForm(itemId) {
     html += '<div style="max-height:360px;overflow-y:auto;margin-bottom:12px" id="audit-variant-list">';
     variants.forEach(function(v, i) {
       var isInUse = (item.consumeMode === 'pack' && v.opened && !v.usedUp);
-      var pq = v.packQty || 1;
-      var packHint = pq > 1 ? '（约 ' + Math.floor((v.stock||0)/pq) + ' 套）' : '';
+      var spA = (v.specs && v.specs.length) ? v.specs : null;
       html += '<div style="display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--separator)">';
       html += '<div style="flex:1;min-width:0">';
       html += '<div style="font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(v.brand || ('品牌' + (i+1))) + '</div>';
       if (isInUse) {
-        html += '<div style="font-size:12px;color:var(--orange)">使用中 · 跳过盘点 ' + packHint + '</div>';
+        var pq0 = v.packQty || 1;
+        html += '<div style="font-size:12px;color:var(--orange)">使用中 · 跳过盘点' + (pq0 > 1 ? '（约 ' + Math.floor((v.stock||0)/pq0) + ' 套）' : '') + '</div>';
+      } else if (spA) {
+        // 多规格：按规格清点份数
+        html += '<div style="font-size:12px;color:var(--text-secondary)">当前 ' + trimNum(variantSpecContent(v)) + variantSpecUnit(v) + '（' + trimNum(variantSpecPieces(v)) + ' 件）</div>';
       } else {
+        var pq = v.packQty || 1;
+        var packHint = pq > 1 ? '（约 ' + Math.floor((v.stock||0)/pq) + ' 套）' : '';
         html += '<div style="font-size:12px;color:var(--text-secondary)">当前 ' + (v.stock || 0) + unit + ' ' + packHint + '</div>';
       }
       html += '</div>';
       if (isInUse) {
         html += '<div style="font-size:12px;color:var(--text-tertiary);flex-shrink:0">—</div>';
+      } else if (spA) {
+        html += '<div style="flex-shrink:0;width:170px">';
+        spA.forEach(function (s, si) {
+          html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">';
+          html += '<span style="font-size:12px;color:var(--text-secondary);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(s.name || ('规格' + (si + 1))) + '</span>';
+          html += '<input type="number" class="form-input audit-spec-input" data-vi="' + i + '" data-si="' + si + '" data-content="' + (+s.content || 0) + '" data-recorded-qty="' + (+s.qty || 0) + '" value="' + (+s.qty || 0) + '" min="0" step="1" style="width:64px;text-align:center;font-weight:600" oninput="updateAuditTotal()">';
+          html += '<span style="font-size:11px;color:var(--text-tertiary)">份</span>';
+          html += '</div>';
+        });
+        html += '</div>';
       } else {
         html += '<input type="number" class="form-input audit-variant-stock" data-idx="' + i + '" data-recorded="' + (v.stock || 0) + '" value="' + (v.stock || 0) + '" min="0" step="0.5" style="width:90px;text-align:center;font-size:16px;font-weight:600;flex-shrink:0" oninput="updateAuditTotal()">';
       }
@@ -5409,12 +5472,19 @@ function openStockAuditForm(itemId) {
 }
 
 function updateAuditTotal() {
-  var inputs = document.querySelectorAll('.audit-variant-stock');
   var total = 0, recorded = 0;
-  inputs.forEach(function(el) {
+  document.querySelectorAll('.audit-variant-stock').forEach(function(el) {
     total += parseFloat(el.value) || 0;
     recorded += parseFloat(el.getAttribute('data-recorded')) || 0;
   });
+  // 多规格：份数 × 每份含量
+  document.querySelectorAll('.audit-spec-input').forEach(function(el) {
+    var c = parseFloat(el.getAttribute('data-content')) || 0;
+    total += (parseFloat(el.value) || 0) * c;
+    recorded += (parseFloat(el.getAttribute('data-recorded-qty')) || 0) * c;
+  });
+  total = Math.round(total * 100) / 100;
+  recorded = Math.round(recorded * 100) / 100;
   var totalEl = document.getElementById('audit-total');
   if (totalEl) {
     var unit = totalEl.getAttribute('data-unit') || '个';
@@ -5444,6 +5514,32 @@ function saveStockAudit(itemId) {
   if (variants.length > 0) {
     var ok = true;
     variants.forEach(function(v, i) {
+      var spS = (v.specs && v.specs.length) ? v.specs : null;
+      if (spS) {
+        // 多规格：按规格份数落账，库存由明细重算；盘出库存后自动解除「用完」
+        var touched = false;
+        spS.forEach(function (s, si) {
+          var el = document.querySelector('.audit-spec-input[data-vi="' + i + '"][data-si="' + si + '"]');
+          if (!el) return;
+          var n = parseFloat(el.value);
+          if (isNaN(n) || n < 0) { toast('请输入有效份数'); ok = false; return; }
+          s.qty = n;
+          touched = true;
+        });
+        if (touched) {
+          v.stock = variantSpecContent(v);
+          v.packCount = variantSpecPieces(v);
+          v.packQty = 1;
+          if (v.stock > 0) {
+            v.usedUp = false; v.finishDate = null;
+            // 使用中与否以「有没有未结束的开封记录」为准
+            v.opened = (item.usageRecords || []).some(function(r) { return r.variantId === v.id && !r.endDate; });
+          }
+          else { v.usedUp = true; v.opened = false; if (!v.finishDate) v.finishDate = new Date().toISOString(); }
+        }
+        actual += v.stock || 0;
+        return;
+      }
       var input = document.querySelector('.audit-variant-stock[data-idx="' + i + '"]');
       if (!input) return; // 使用中跳过盘点，保留原 stock
       var val = parseFloat(input.value);
