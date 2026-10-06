@@ -2072,16 +2072,18 @@ function getItemStatus(item) {
   if (variants.length === 0) return status;
 
   // === 库存告急判断（基于消耗速率预估） ===
+  var threshold = item.stockThreshold || 1;
   if (totalStock > 0) {
     // 有库存：基于历史消耗速率预估剩余可用天数
     var estDays = estimateStockDaysLeft(item, totalStock, variants);
     status.estDaysLeft = estDays;
-    var threshold = item.stockThreshold || 1;
     if (estDays !== null) {
-      // 有历史数据：预估 ≤ 30 天才真正告急（黄色）
+      // 有历史数据：以「预估剩余天数」为主判据，不再额外要求库存数 ≤ 阈值
+      // （抽纸剩 3 包、月耗 1.9 包 → 约 47 天，虽然件数 > 阈值也必须提示）
       if (estDays <= 30) status.lowStock = true;
-      // 预估 ≤ 90 天但 > 30 天：温和提示（浅蓝色）
-      else if (estDays <= 90 && totalStock <= threshold) status.lowStockSoft = true;
+      else if (estDays <= 90) status.lowStockSoft = true;
+      // 预估天数还够，但库存已经降到阈值以内 → 温和提示
+      else if (totalStock <= threshold) status.lowStockSoft = true;
     } else {
       // 没有历史数据：库存 ≤ 阈值，用温和提示（浅蓝色），不显示黄色告急
       if (totalStock <= threshold) status.lowStockSoft = true;
@@ -2106,10 +2108,34 @@ function getItemStatus(item) {
     }
   }
 
-  // 余量较少只对"使用中"的物品生效（未开封的物品无论余量多少都不提示）
-  if (!status.hasInUse) status.lowStockSoft = false;
+  // 余量较少/告急：够用天数少或余量低都要提示，未开封也提示（抽纸未开封但只剩 3 包）
+  var hasAnyStock = (item.variants && item.variants.length ? item.variants : [item]).some(function (v) { return (v.stock || 0) > 0; });
+  if (!status.hasInUse && !hasAnyStock) status.lowStockSoft = false;
 
   return status;
+}
+
+// 短卡片库存线条颜色：以「预估剩余天数」为主，件数占比为辅
+// 返回 'high'(绿) / 'mid'(黄) / 'low'(红)
+function stockBarClass(item, status) {
+  status = status || getItemStatus(item);
+  var totalStock = getTotalStock(item);
+  if (!totalStock) return 'low';
+  var threshold = item.stockThreshold || 1;
+  var pct = (totalStock / Math.max(totalStock, threshold * 3)) * 100;
+  var barClass = 'low';
+  if (pct > 60) barClass = 'high';
+  else if (pct > 30) barClass = 'mid';
+  // 有速率预估：按剩余天数覆盖（>180 天绿 / 90~180 黄 / ≤90 红）
+  if (status.estDaysLeft !== null && status.estDaysLeft !== undefined) {
+    if (status.estDaysLeft > 180) barClass = 'high';
+    else if (status.estDaysLeft > 90) barClass = 'mid';
+    else barClass = 'low';
+  }
+  // 真正告急 → 至少是红；温和提示 → 至多是黄
+  if (status.lowStock) barClass = 'low';
+  else if (status.lowStockSoft && barClass === 'high') barClass = 'mid';
+  return barClass;
 }
 
 // 预估当前总库存还能用多少天（基于历史消耗速率）
@@ -2344,7 +2370,8 @@ function renderAIAnalysis() {
         var monthsLeft = (crAI && crAI.perMonth > 0 && scAI !== null) ? scAI / crAI.perMonth
                         : ((crAI && crAI.perMonth > 0 && (it.usageRecords || []).some(function (r) { return r.specText; })) ? null
                         : totS / rate);
-        if (monthsLeft !== null && (status.lowStock || monthsLeft < 1)) {
+        // 只要够用月数 < 2（含余量较少/未开封快用完）就进采购建议，不再只看「告急」
+        if (monthsLeft !== null && (status.lowStock || monthsLeft < 2)) {
           var hasSpecAI = (it.usageRecords || []).some(function (r) { return r.specText; });
           var suggestQty = Math.ceil(rate * 6); // 建议买半年量（记录口径：份/套/小单位）
           var reason = '库存仅够' + monthsLeft.toFixed(1) + '月';
@@ -2597,9 +2624,7 @@ function renderItemCard(item, zone) {
       var threshold = item.stockThreshold || 1;
       var maxBar = Math.max(totalStock, threshold * 3);
       var pct = maxBar > 0 ? (totalStock / maxBar * 100) : 0;
-      var barClass = 'low';
-      if (pct > 60) barClass = 'high';
-      else if (pct > 30) barClass = 'mid';
+      var barClass = stockBarClass(item, status);
       html += '<div class="card-info">' + stockSummaryOf(item) + ' · ¥' + parseFloat((item.currentPrice || 0)).toFixed(2) + '</div>';
       html += '<div class="stock-bar ' + barClass + ' card-mini-bar"><div class="stock-fill" style="width:' + pct + '%"></div></div>';
     }
@@ -2695,9 +2720,7 @@ function renderCardFront(item, zone) {
       var threshold = item.stockThreshold || 1;
       var maxBar = Math.max(totalStock, threshold * 3);
       var pct = maxBar > 0 ? (totalStock / maxBar * 100) : 0;
-      var barClass = 'low';
-      if (pct > 60) barClass = 'high';
-      else if (pct > 30) barClass = 'mid';
+      var barClass = stockBarClass(item, status);
       html += '<div style="margin-top:14px">';
       var packHintF = '';
       if (item.consumeMode === 'pack' && item.variants && item.variants.length && (item.variants[0].packQty || 1) > 1) {
@@ -3384,8 +3407,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791291737 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791291737';
+// deploy.py 部署时会把 1791292877 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791292877';
 
 function checkAppUpdate(manual) {
   try {
