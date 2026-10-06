@@ -1478,7 +1478,7 @@ function legacyPoolToTask(p, isHistory, nid, npid) {
 // 补给品套餐模型迁移：只增字段，零破坏旧数据
 // 字段约定：stock = 小单位总数（不变）；packQty=每套餐内含小单位数(默认1)；
 // packCount=套餐数(默认=stock，packQty=1时等价)；packPrice=每套餐价(默认=totalPrice)；
-// packUnit=小单位名；packWeight=每套餐重量KG(默认0)；consumeMode=物品级消耗模式
+// packUnit=小单位名；packWeight=每个小单位的重量KG(默认0，如每包1kg填1)；consumeMode=物品级消耗模式
 function migrateConsumablePackages(db) {
   if (!db.zones) return;
   db.zones.forEach(function(zone) {
@@ -1508,17 +1508,18 @@ function genId() {
 // 库存摘要（人话版）：套餐数 + 容量，如「4套 · ≈200ml」；没有套餐数据则退回「200ml」
 function stockSummaryOf(item) {
   var vs = (item.variants && item.variants.length) ? item.variants : [];
-  var packs = 0, hasPacks = false;
-  vs.forEach(function(v) { if (v.packCount) { packs += v.packCount; hasPacks = true; } });
+  var packs = 0, hasPacks = false, totalW = 0;
+  vs.forEach(function(v) { if (v.packCount) { packs += v.packCount; hasPacks = true; } totalW += variantTotalWeight(v); });
   var st = getTotalStock(item) || 0;
   var unit = mainPackUnit(item);
   var capTxt = st > 0 ? (round1(st) + unit) : '';
+  var wTxt = totalW > 0 ? (' · ≈' + round1(totalW) + 'kg') : '';
   if (hasPacks && packs > 0) {
     // 每套=1 时容量数和套数是同一个数，说了等于没说 → 只显示套数
-    if (capTxt && Math.round(st) !== packs) return packs + '套 · ≈' + capTxt;
-    return packs + '套';
+    if (capTxt && Math.round(st) !== packs) return packs + '套 · ≈' + capTxt + wTxt;
+    return packs + '套' + wTxt;
   }
-  return round1(st) + unit;
+  return round1(st) + unit + wTxt;
 }
 
 function getTotalStock(item) {
@@ -1536,10 +1537,21 @@ function getActiveStock(item) {
 }
 
 // ===== 套餐模型展示辅助 =====
+// 变体总重量kg：套数 × 每套含 × 每包重量（packWeight=每个小单位的重量kg）
+function variantTotalWeight(v) {
+  var w = parseFloat(v.packWeight) || 0;
+  if (w <= 0) return 0;
+  var pc = parseFloat(v.packCount) || 0;
+  var pq = parseFloat(v.packQty) || 1;
+  return pc * pq * w;
+}
 // 折算单价：有重量→每KG单价，否则→每小单位单价
 function variantUnitPrice(v) {
   var tp = v.totalPrice || 0;
-  if (v.packWeight && v.packWeight > 0) return tp / v.packWeight;
+  if (v.packWeight && v.packWeight > 0) {
+    var tw = variantTotalWeight(v);
+    if (tw > 0) return tp / tw;
+  }
   var stock = v.stock || 0;
   if (stock > 0) return tp / stock;
   return v.price || 0;
@@ -2601,7 +2613,7 @@ function renderCardBack(item, zone) {
         html += '<div class="vc-meta-item wide"><div class="vc-meta-label">库存构成</div><div class="vc-meta-value">' + escapeHtml(packHintOf(v)) + '</div></div>';
         var hasWeight = v.packWeight && v.packWeight > 0;
         if (hasWeight) {
-          html += '<div class="vc-meta-item"><div class="vc-meta-label">每套重量</div><div class="vc-meta-value">' + round1(v.packWeight) + ' kg</div></div>';
+          html += '<div class="vc-meta-item"><div class="vc-meta-label">每包重量</div><div class="vc-meta-value">' + round1(v.packWeight) + ' kg</div></div>';
         }
         if (v.openDate) {
           var dateTxt;
@@ -3103,8 +3115,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791265945 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791265945';
+// deploy.py 部署时会把 1791266572 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791266572';
 
 function checkAppUpdate(manual) {
   try {
@@ -3822,11 +3834,11 @@ function renderConsumableVariantRows() {
     html += '<span style="font-size:12px;color:var(--text-tertiary)">=</span>';
     html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="总价" value="' + (cTotal||'') + '" oninput="onConsumablePriceInput(' + i + ',\'total\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'total\',this.value)" step="0.01">';
     html += '</div>';
-    // 每套含数 + 每套单位 + 每套重量（用于折算单价比价）
+    // 每套含数 + 每套单位 + 每包重量（用于公斤比价 + 库存重量显示）
     html += '<div style="display:flex;gap:6px;align-items:center">';
     html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="每套含多少(如30ml填30)" value="' + (cPackQty||'') + '" oninput="onConsumablePriceInput(' + i + ',\'packqty\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'packqty\',this.value)" step="1" title="一套里含多少个小单位；混合套餐可直接写算式，如 3*77+2*45">';
     html += '<input type="text" class="form-input" style="font-size:12px;width:76px;flex-shrink:0" placeholder="单位:ml/颗/片" value="' + escapeHtml(v.packUnit || '') + '" oninput="onConsumableUnitInput(' + i + ',this.value)" title="每套含数的单位，任意填写：ml、毫升、L、颗、片、包…">';
-    html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="重量kg选填" value="' + (cWeight||'') + '" oninput="onConsumablePriceInput(' + i + ',\'weight\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'weight\',this.value)" step="0.01" title="仅按公斤比价时填（如猫粮每袋6kg填6）；容量请填在左边的每套含">';
+    html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="每包kg选填" value="' + (cWeight||'') + '" oninput="onConsumablePriceInput(' + i + ',\'weight\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'weight\',this.value)" step="0.01" title="填每个小单位的重量kg（如猫粮一袋1kg填1）；一套有几包填左边的每套含。填了就按元/kg比价，库存也会显示总重量">';
     html += '</div>';
     // 库存提示（衍生，非编辑）：带计算过程，一眼看懂"每套含"该填什么
     html += '<div id="packstock-' + i + '" style="font-size:12px;color:var(--text-secondary);line-height:1.5">' + packHintOf(v) + '</div>';
@@ -3942,8 +3954,12 @@ function packHintOf(v) {
   var pq = parseFloat(v.packQty) || 1;
   var st = Math.max(0, Math.round(pc * pq));
   var u = v.packUnit || '个';
-  if (pq > 1) return '📦 库存 = ' + pc + ' 套 × ' + pq + u + '/套 = ' + st + u;
-  return '📦 库存 = ' + st + ' ' + u;
+  var w = parseFloat(v.packWeight) || 0;
+  var txt;
+  if (pq > 1) txt = pc + ' 套 × ' + pq + u + '/套 = ' + st + u;
+  else txt = st + ' ' + u;
+  if (w > 0) txt += ' × ' + w + 'kg ≈ ' + round1(st * w) + 'kg（' + st + ' × ' + w + 'kg/包）';
+  return '📦 库存 = ' + txt;
 }
 // 每套单位：任意文本（ml / 毫升 / L / 颗 / 片 / 包…），不限制
 function onConsumableUnitInput(idx, val) {
@@ -5574,7 +5590,8 @@ function doWin(t) {
           var isWV = /kg|公斤|千克/i.test(plan.unit || '');
           var vPackQty = (+plan.spec > 0) ? +plan.spec : (v.packQty || 1);
           v.packQty = vPackQty;
-          if (isWV && +plan.spec > 0) v.packWeight = +plan.spec;
+          // 单位是 kg：每套含 spec 就是 spec 个 1kg 小单位 → 每包重量记 1kg
+          if (isWV && +plan.spec > 0) v.packWeight = 1;
           if (plan.unit) v.packUnit = plan.unit;
           delete v.noRestock; // 又买回来了 → 自动恢复计入补货提醒
           v.packCount = (v.packCount || 0) + qty;
@@ -5596,12 +5613,12 @@ function doWin(t) {
         if (!item2.variants) item2.variants = [];
         var isW = /kg|公斤|千克|千克/i.test(plan.unit || '');
         var nvSpec = plan.spec || 1;
-        var nvPackQty = isW ? 1 : nvSpec;
-        var nvPackWeight = isW ? (nvSpec || 0) : 0;
+        var nvPackQty = nvSpec;
+        var nvPackWeight = isW ? 1 : 0;
         var nvStock = qty * nvPackQty;
         var nv = {
           id: genId(), brand: plan.name || '新品牌',
-          packCount: qty, packPrice: plan.comboPrice || 0, packQty: nvPackQty, packUnit: (isW ? '份' : (plan.unit || '个')), packWeight: nvPackWeight,
+          packCount: qty, packPrice: plan.comboPrice || 0, packQty: nvPackQty, packUnit: (plan.unit || '个'), packWeight: nvPackWeight,
           stock: nvStock, price: nvStock > 0 ? Math.round((totalPrice / nvStock) * 100) / 100 : (plan.amount || 0), totalPrice: totalPrice,
           photos: (plan.photos || []).slice(), notes: (plan.note || ''), opened: false, usedUp: false, openQty: 0, feeling: null, shelfLife: null, productionDate: null
         };
@@ -5620,12 +5637,12 @@ function doWin(t) {
       if (d.totalSpec > 0) note3 += (note3 ? '\n' : '') + '规格总量：' + trimNum(d.totalSpec) + ' ' + unit;
       var isW3 = /kg|公斤|千克|千克/i.test(unit || '');
       var spec3 = plan.spec || 1;
-      var packQty3 = isW3 ? 1 : spec3;
-      var packWeight3 = isW3 ? (spec3 || 0) : 0;
+      var packQty3 = spec3;
+      var packWeight3 = isW3 ? 1 : 0;
       var stock3 = qty * packQty3;
       var newItem = {
         id: genId(), name: plan.name || t.name, categoryId: t.categoryId || null,
-        consumeMode: 'pack', packCount: qty, packPrice: plan.comboPrice || 0, packQty: packQty3, packUnit: (isW3 ? '份' : unit), packWeight: packWeight3,
+        consumeMode: 'pack', packCount: qty, packPrice: plan.comboPrice || 0, packQty: packQty3, packUnit: unit, packWeight: packWeight3,
         stock: stock3, unit: unit, currentPrice: plan.amount || 0,
         channel: '', location: '', notes: note3,
         photos: (plan.photos ? plan.photos.slice() : []),
