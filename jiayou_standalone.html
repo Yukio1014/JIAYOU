@@ -3199,8 +3199,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791272543 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791272543';
+// deploy.py 部署时会把 1791272992 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791272992';
 
 function checkAppUpdate(manual) {
   try {
@@ -5615,20 +5615,32 @@ function taskCard(t) {
 }
 
 function taskStockWarn(t) {
-  if (!t.zoneId || !t.categoryId) return '';
+  if (!t.zoneId) return '';
   var zone = getZone(t.zoneId); if (!zone) return '';
-  var existing = zone.items.filter(function (it) { return it.categoryId === t.categoryId; });
+  var tName = String(t.name || '').trim().toLowerCase();
+  if (!tName) return '';
+  // 「同类」以产品本身为准：任务方案关联的物品，或物品名与任务名一致。
+  // 不按分类聚合——宠物王国里的猫砂/零食/保健品替代不了猫粮，混在一起提示毫无意义
+  var linkedItemIds = {};
+  (t.plans || []).forEach(function (p) {
+    if (p.sourceItemId) linkedItemIds[p.sourceItemId] = true;
+    if (p.sourceVariantId) {
+      zone.items.forEach(function (it) {
+        if ((it.variants || []).some(function (v) { return v.id === p.sourceVariantId; })) linkedItemIds[it.id] = true;
+      });
+    }
+  });
+  var existing = zone.items.filter(function (it) {
+    if (it.archived) return false;
+    return linkedItemIds[it.id] || String(it.name || '').trim().toLowerCase() === tName;
+  });
   if (existing.length > 0) {
-    if (zone.type === 'durable') return '<div class="pool-warn">⚠️ 你已经有 ' + existing.length + ' 件同类物品了，确定要买吗？</div>';
-    // 补给品：各物品按自身口径显示（套数/小单位/含量），不跨单位相加（颗+包+ml 求和毫无意义）
-    var linked = {};
-    (t.plans || []).forEach(function (p) { if (p.sourceItemId) linked[p.sourceItemId] = true; });
-    existing.sort(function (a, b) { return (linked[b.id] ? 1 : 0) - (linked[a.id] ? 1 : 0); });
+    if (zone.type === 'durable') return '<div class="pool-warn">⚠️ 你已经有 ' + existing.length + ' 件「' + escTask(t.name) + '」了，确定要买吗？</div>';
     var parts = existing.slice(0, 3).map(function (it) { return it.name + ' ' + stockSummaryOf(it); });
     var more = existing.length > 3 ? ' 等 ' + existing.length + ' 种' : '';
-    return '<div class="pool-warn">⚠️ 同类已有库存：' + escTask(parts.join('、')) + more + '</div>';
+    return '<div class="pool-warn">⚠️ 已有库存：' + escTask(parts.join('、')) + more + '</div>';
   }
-  return '<div class="pool-ok">✓ 同类暂无库存，可以买</div>';
+  return '<div class="pool-ok">✓ 该产品暂无库存，可以买</div>';
 }
 
 function taskActionButtons(t) {
