@@ -3836,8 +3836,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791303588 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791303588';
+// deploy.py 部署时会把 1791303720 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791303720';
 
 function checkAppUpdate(manual) {
   try {
@@ -5801,19 +5801,45 @@ function buildYearStats(year) {
         estimated = true;
       }
       if (yq <= 0 && spend <= 0) return; // 这一年没有任何动静，不进档案
-      var isPack = isSetPackMode(it);
-      var unitName = isPack ? '套' : (it.unit || '个');
-      var aq = avgPackQtyOf(it);
+      // 年报表展示口径：记录里的 qty 是「用户开/用的件·份数」（步进器选的数），
+      // 不是「套」——套只是展示层的折算说法。所以主口径一律用件/份/片，
+      // 有含量（每个多重/多少）时再补一个含量口径。
+      var model = consumeModelOf(it);
       var capUnit = mainPackUnit(it);
+      var unitName = it.unit || capUnit || '个';
+      var mainQty = Math.round(yq * 10) / 10;
+      var capQty = 0, showCapUnit = capUnit;
+      if (model === 'combo') {
+        unitName = (it.variants && it.variants[0] ? variantSpecUnit(it.variants[0]) : '') || it.unit || '件';
+        capQty = 0;                     // combo 的 qty 已是片/件，不再折算
+      } else {
+        // 周期型：qty = 开了几件/几份；用「每件含量」补一个含量口径（如 3件 → ≈27kg）
+        var wAvg = 0, wAvgUnit = '';
+        (it.variants || []).forEach(function (v) {
+          var w = parseFloat(v.packWeight) || 0;
+          if (w > 0) { wAvg = w; wAvgUnit = weightUnitOf(v); }
+        });
+        if (wAvg > 0) {
+          // 若这一年的记录带 contentUsed（规格开封时算过含量），优先用它
+          var contentSum = 0, hasContent = false;
+          (it.usageRecords || []).forEach(function (r) {
+            var d = r.endDate || r.startDate || r.date;
+            if (!d || new Date(d).getFullYear() !== year) return;
+            if (r.contentUsed > 0) { contentSum += r.contentUsed; hasContent = true; }
+          });
+          capQty = hasContent ? round1(contentSum) : round1(yq * wAvg);
+          showCapUnit = wAvgUnit;
+        }
+      }
       var brands = Object.keys(brandMap).map(function(k) { return brandMap[k]; });
       totalSpend += spend;
       items.push({
         zoneId: z.id, zoneName: z.name, zoneIcon: z.icon || '📦',
         categoryPath: getCategoryPath(z.id, it.categoryId) || '未分类',
         name: it.name, unit: unitName,
-        qty: Math.round(yq * 10) / 10,
-        capQty: (isPack && aq > 1) ? round1(yq * aq) : 0,
-        capUnit: capUnit,
+        qty: mainQty,
+        capQty: capQty,
+        capUnit: showCapUnit,
         spend: Math.round(spend * 100) / 100,
         unitPrice: yq > 0 ? Math.round((spend / yq) * 100) / 100 : 0,
         times: times,
