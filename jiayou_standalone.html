@@ -414,6 +414,41 @@ body {
 .back-row .back-label { color: var(--text-secondary); }
 .back-row .back-value { font-weight: 600; }
 
+/* ========== 品牌变体卡片（统一规格）========== */
+.variant-card {
+  background: var(--card-bg);
+  border: 0.5px solid var(--separator);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  margin-bottom: 12px;
+}
+.variant-card:last-child { margin-bottom: 0; }
+.variant-card.vc-using { border-color: var(--orange); box-shadow: inset 3px 0 0 var(--orange); }
+.variant-card.vc-done { opacity: 0.72; }
+.vc-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.vc-brand { font-size: 16px; font-weight: 700; letter-spacing: -0.2px; line-height: 1.3; }
+.vc-badge { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px; flex-shrink: 0; }
+.vc-badge.using { background: rgba(255,149,0,0.14); color: var(--orange); }
+.vc-badge.done { background: rgba(52,199,89,0.14); color: var(--green); }
+.vc-price-line { display: flex; align-items: baseline; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.vc-price { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
+.vc-price-note { font-size: 12px; color: var(--text-secondary); }
+.vc-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; padding-top: 12px; border-top: 0.5px dashed var(--separator); }
+.vc-meta-item { min-width: 0; }
+.vc-meta-label { font-size: 11px; color: var(--text-secondary); margin-bottom: 2px; }
+.vc-meta-value { font-size: 13px; font-weight: 600; line-height: 1.4; word-break: break-all; }
+.vc-meta-item.wide { grid-column: 1 / -1; }
+.vc-meta-item.wide .vc-meta-value { color: var(--text-secondary); font-weight: 500; font-size: 12px; }
+.vc-feel { margin-top: 12px; padding-top: 12px; border-top: 0.5px dashed var(--separator); }
+.vc-stars { font-size: 14px; line-height: 1.2; }
+.vc-tags { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+.vc-note { font-size: 12px; color: var(--text-secondary); margin-top: 4px; font-style: italic; line-height: 1.5; }
+.vc-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+
+@media (prefers-color-scheme: dark) {
+  .variant-card.vc-using { border-color: var(--orange); }
+}
+
 /* ========== 表单 ========== */
 .form-group { margin-bottom: 14px; }
 .form-label { font-size: 13px; color: var(--text-secondary); font-weight: 600; margin-bottom: 6px; display: block; }
@@ -2482,45 +2517,70 @@ function renderCardBack(item, zone) {
       html += '<div class="back-section">';
       html += '<div class="back-section-title">品牌变体 (' + item.variants.length + '个)</div>';
       item.variants.forEach(function(v, vi) {
-        var vBg = vi % 2 === 0 ? 'background:#F8F8FA' : '';
-        html += '<div style="padding:8px;border-radius:8px;margin-bottom:6px;' + vBg + '">';
-        html += '<div style="display:flex;justify-content:space-between;align-items:center">';
-        html += '<div><strong>' + escapeHtml(v.brand || '未命名') + '</strong>';
-        if (v.opened && !v.usedUp) {
-          html += ' <span style="color:var(--orange);font-size:11px;font-weight:600">使用中</span>';
-        } else if (v.usedUp) {
-          html += ' <span style="color:var(--green);font-size:11px;font-weight:600">已用完</span>';
+        var isUsing = v.opened && !v.usedUp;
+        var isDone = !!v.usedUp;
+        var cardCls = 'variant-card' + (isUsing ? ' vc-using' : (isDone ? ' vc-done' : ''));
+        html += '<div class="' + cardCls + '">';
+        // 头部：品牌名 + 状态徽章
+        html += '<div class="vc-head">';
+        html += '<div class="vc-brand">' + escapeHtml(v.brand || '未命名') + '</div>';
+        if (isUsing) html += '<span class="vc-badge using">使用中</span>';
+        else if (isDone) html += '<span class="vc-badge done">已用完</span>';
+        html += '</div>';
+        // 价格：总价为主数字，套餐构成作为副说明
+        var cVTotal = v.totalPrice || 0;
+        html += '<div class="vc-price-line">';
+        html += '<span class="vc-price">¥' + cVTotal.toFixed(2) + '</span>';
+        if (v.packCount) {
+          html += '<span class="vc-price-note">' + v.packCount + ' 套 × ¥' + (v.packPrice || 0).toFixed(2) + '</span>';
         }
         html += '</div>';
-        // 套餐价格展示：套餐数×套餐价=总价 + 折算单价比价
-        var cVTotal = v.totalPrice || 0;
-        var pq = v.packQty || 1;
-        var priceText;
-        if (pq > 1) {
-          priceText = v.packCount + '套 × ¥' + (v.packPrice||0).toFixed(2) + ' = ¥' + cVTotal.toFixed(2);
-        } else {
-          priceText = '¥' + cVTotal.toFixed(2);
+        // 信息网格：折算单价 / 库存 / 库存构成 / 开封时间
+        html += '<div class="vc-meta">';
+        html += '<div class="vc-meta-item"><div class="vc-meta-label">折算单价</div><div class="vc-meta-value">' + variantPriceCompareText(v) + '</div></div>';
+        html += '<div class="vc-meta-item"><div class="vc-meta-label">当前库存</div><div class="vc-meta-value">' + variantPackText(v, item) + '</div></div>';
+        html += '<div class="vc-meta-item wide"><div class="vc-meta-label">库存构成</div><div class="vc-meta-value">' + escapeHtml(packHintOf(v)) + '</div></div>';
+        var hasWeight = v.packWeight && v.packWeight > 0;
+        if (hasWeight) {
+          html += '<div class="vc-meta-item"><div class="vc-meta-label">每套重量</div><div class="vc-meta-value">' + round1(v.packWeight) + ' kg</div></div>';
         }
-        html += '<div style="font-weight:700">' + priceText + '</div>';
-        html += '<div style="font-size:11px;color:var(--text-secondary)">' + variantPriceCompareText(v) + ' · 库存 ' + variantPackText(v, item) + '</div>';
+        if (v.openDate) {
+          var dateTxt;
+          if (isDone && v.finishDate) {
+            dateTxt = formatDate(v.openDate) + ' → ' + formatDate(v.finishDate) + '（' + daysBetween(new Date(v.openDate), new Date(v.finishDate)) + '天）';
+          } else if (isDone) {
+            dateTxt = formatDate(v.openDate) + ' 起';
+          } else {
+            dateTxt = formatDate(v.openDate) + ' 起 · 已用 ' + daysBetween(new Date(v.openDate), new Date()) + ' 天';
+          }
+          html += '<div class="vc-meta-item' + (hasWeight ? '' : ' wide') + '"><div class="vc-meta-label">开封时间</div><div class="vc-meta-value">' + dateTxt + '</div></div>';
+        }
         html += '</div>';
         // 使用感受：有任意内容就显示
         if (v.feeling && (v.feeling.rating || (v.feeling.tags && v.feeling.tags.length > 0) || v.feeling.notes)) {
-          html += '<div style="margin-top:6px;padding-top:6px;border-top:1px dashed #E5E5EA">';
+          html += '<div class="vc-feel">';
           if (v.feeling.rating) {
-            html += '<div style="font-size:14px;line-height:1.2">';
+            html += '<div class="vc-stars">';
             for (var fi = 1; fi <= 5; fi++) html += fi <= v.feeling.rating ? '⭐' : '☆';
             html += '</div>';
           }
           if (v.feeling.tags && v.feeling.tags.length > 0) {
-            html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:3px">' + v.feeling.tags.map(escapeHtml).join(' · ') + '</div>';
+            html += '<div class="vc-tags">' + v.feeling.tags.map(escapeHtml).join(' · ') + '</div>';
           }
           if (v.feeling.notes) {
-            html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:3px;font-style:italic">💬 ' + escapeHtml(v.feeling.notes) + '</div>';
+            html += '<div class="vc-note">💬 ' + escapeHtml(v.feeling.notes) + '</div>';
           }
           html += '</div>';
         }
-        html += '<button class="btn btn-outline btn-sm" style="margin-top:4px;font-size:11px" onclick="openVariantFeelingForm(\'' + item.id + '\',\'' + v.id + '\')">✏ 感受</button>';
+        // 操作：用完了/撤销 + 感受
+        html += '<div class="vc-foot">';
+        if (isUsing) {
+          html += '<button class="btn btn-outline btn-sm" onclick="finishVariant(\'' + item.id + '\',\'' + v.id + '\')">✅ 用完了</button>';
+        } else if (isDone) {
+          html += '<button class="btn btn-outline btn-sm" onclick="undoFinishVariant(\'' + item.id + '\',\'' + v.id + '\')">↩️ 撤销</button>';
+        }
+        html += '<button class="btn btn-outline btn-sm" onclick="openVariantFeelingForm(\'' + item.id + '\',\'' + v.id + '\')">✏️ 感受</button>';
+        html += '</div>';
         html += '</div>';
       });
       html += '</div>';
@@ -2535,23 +2595,17 @@ function renderCardBack(item, zone) {
       var hasAnyActive = item.variants.some(function(v) { return v.opened && !v.usedUp; });
       var hasAnyFinished = item.variants.some(function(v) { return v.usedUp; });
       var allUnused = !hasAnyActive && !hasAnyFinished;
+      // 每个变体的状态/日期/操作已集中在「品牌变体」卡片里，这里只留一句汇总，避免重复堆砌
+      var cntUsing = item.variants.filter(function(v) { return v.opened && !v.usedUp; }).length;
+      var cntDone = item.variants.filter(function(v) { return v.usedUp; }).length;
       if (allUnused) {
         html += '<div class="back-row"><span class="back-label" style="color:var(--text-tertiary)">全部未开封</span></div>';
+      } else {
+        var sumTxt = [];
+        if (cntUsing > 0) sumTxt.push('<span style="color:var(--orange);font-weight:600">使用中 ' + cntUsing + ' 个</span>');
+        if (cntDone > 0) sumTxt.push('<span style="color:var(--green);font-weight:600">已用完 ' + cntDone + ' 个</span>');
+        html += '<div class="back-row"><span class="back-label">当前状态</span><span class="back-value" style="font-size:13px">' + sumTxt.join(' · ') + '</span></div>';
       }
-      item.variants.forEach(function(v) {
-        if (!v.opened && !v.usedUp) return;
-        var statusText = v.usedUp ? '✓ 已用完' : '🔵 使用中';
-        var statusColor = v.usedUp ? 'var(--green)' : 'var(--orange)';
-        html += '<div style="padding:8px;border-radius:8px;background:#F8F8FA;margin-bottom:6px">';
-        html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><strong style="font-size:13px">' + escapeHtml(v.brand || '未命名') + '</strong><span style="color:' + statusColor + ';font-size:12px;font-weight:600">' + statusText + '</span></div>';
-        if (v.openDate) html += '<div style="font-size:12px;color:var(--text-secondary)">📅 ' + formatDate(v.openDate) + (v.usedUp && v.finishDate ? ' → ' + formatDate(v.finishDate) : ' · ' + daysBetween(new Date(v.openDate), new Date()) + '天') + '</div>';
-        if (!v.usedUp) {
-          html += '<button class="btn btn-outline btn-sm" style="margin-top:4px;font-size:11px" onclick="finishVariant(\'' + item.id + '\',\'' + v.id + '\')">✅ 用完了</button>';
-        } else {
-          html += '<button class="btn btn-outline btn-sm" style="margin-top:4px;font-size:11px" onclick="undoFinishVariant(\'' + item.id + '\',\'' + v.id + '\')">↩️ 撤销</button>';
-        }
-        html += '</div>';
-      });
     } else if (item.opened) {
       if (item.usedUp) {
         // 已用完
@@ -2979,8 +3033,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791256717 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791256717';
+// deploy.py 部署时会把 1791258510 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791258510';
 
 function checkAppUpdate(manual) {
   try {
@@ -3651,8 +3705,8 @@ function renderConsumableVariantRows() {
   var variants = window._editVariants || [];
   var photos = window._editVariantPhotos || [];
   variants.forEach(function(v, i) {
-    html += '<div class="consumable-variant-row" style="border:1px solid var(--separator);border-radius:10px;padding:10px;margin-bottom:8px">';
-    html += '<div style="display:flex;gap:8px;align-items:flex-start">';
+    html += '<div class="consumable-variant-row" style="border:1px solid var(--separator);border-radius:12px;padding:12px;margin-bottom:12px">';
+    html += '<div style="display:flex;gap:10px;align-items:flex-start">';
     // 照片上传区
     html += '<div class="consumable-photo-slot" onclick="uploadConsumableVariantPhoto(' + i + ')" style="width:56px;height:56px;border-radius:8px;background:var(--bg);display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden;cursor:pointer;position:relative">';
     if (photos[i] && photos[i].length > 0) {
@@ -3663,7 +3717,7 @@ function renderConsumableVariantRows() {
     }
     html += '</div>';
     // 品牌名 + 套餐数 × 套餐价 = 总价（套餐模型）
-    html += '<div style="flex:1;display:flex;flex-direction:column;gap:4px">';
+    html += '<div style="flex:1;display:flex;flex-direction:column;gap:8px">';
     html += '<input type="text" class="form-input" style="font-size:14px" placeholder="品牌名" value="' + escapeHtml(v.brand) + '" onchange="updateConsumableVariantField(' + i + ',\'brand\',this.value)">';
     // 套餐数 × 套餐价 = 总价（单行紧凑）
     var cPack = v.packCount || 0;
@@ -3672,7 +3726,7 @@ function renderConsumableVariantRows() {
     var cWeight = v.packWeight || 0;
     var cStock = v.stock || 0;
     var cTotal = v.totalPrice || (cPackPrice * cPack);
-    html += '<div style="display:flex;gap:4px;align-items:center">';
+    html += '<div style="display:flex;gap:6px;align-items:center">';
     html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="套餐数" value="' + (cPack||'') + '" oninput="onConsumablePriceInput(' + i + ',\'pack\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'pack\',this.value)" step="1">';
     html += '<span style="font-size:12px;color:var(--text-tertiary)">×</span>';
     html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="套餐价" value="' + (cPackPrice||'') + '" oninput="onConsumablePriceInput(' + i + ',\'packprice\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'packprice\',this.value)" step="0.01">';
@@ -3680,13 +3734,13 @@ function renderConsumableVariantRows() {
     html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="总价" value="' + (cTotal||'') + '" oninput="onConsumablePriceInput(' + i + ',\'total\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'total\',this.value)" step="0.01">';
     html += '</div>';
     // 每套含数 + 每套单位 + 每套重量（用于折算单价比价）
-    html += '<div style="display:flex;gap:4px;align-items:center;margin-top:2px">';
+    html += '<div style="display:flex;gap:6px;align-items:center">';
     html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="每套含多少(如30ml填30)" value="' + (cPackQty||'') + '" oninput="onConsumablePriceInput(' + i + ',\'packqty\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'packqty\',this.value)" step="1" title="一套里含多少个小单位；混合套餐可直接写算式，如 3*77+2*45">';
     html += '<input type="text" class="form-input" style="font-size:12px;width:76px;flex-shrink:0" placeholder="单位:ml/颗/片" value="' + escapeHtml(v.packUnit || '') + '" oninput="onConsumableUnitInput(' + i + ',this.value)" title="每套含数的单位，任意填写：ml、毫升、L、颗、片、包…">';
     html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="重量kg选填" value="' + (cWeight||'') + '" oninput="onConsumablePriceInput(' + i + ',\'weight\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'weight\',this.value)" step="0.01" title="仅按公斤比价时填（如猫粮每袋6kg填6）；容量请填在左边的每套含">';
     html += '</div>';
     // 库存提示（衍生，非编辑）：带计算过程，一眼看懂"每套含"该填什么
-    html += '<div id="packstock-' + i + '" style="font-size:11px;color:var(--text-secondary);margin-top:2px">' + packHintOf(v) + '</div>';
+    html += '<div id="packstock-' + i + '" style="font-size:12px;color:var(--text-secondary);line-height:1.5">' + packHintOf(v) + '</div>';
     html += '</div>';
     // 删除按钮
     if (variants.length > 1) {
