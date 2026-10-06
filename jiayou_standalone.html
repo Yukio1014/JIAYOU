@@ -1653,6 +1653,39 @@ function migrateDirtyUsedUp() {
   return fixed;
 }
 
+// 数据自愈②：多规格变体的「套数」口径统一
+// 旧版落账把规格份数和写进 packCount（如姨妈巾显示成「67套 × ¥45.34」、库存只算一套 67片）
+// 存量明细无法可靠判断是「单套构成」还是「全部总量」（反推套数有误折洗衣凝珠等数据的风险）
+// → 一律保守处理：packCount 归 1 批（价格行显示 1套 × 总价，自洽不再误导），明细与库存不动，
+//   并标记 specsFolded=true 永不自动折算；用户重新编辑时勾选「明细是一套的量（×套餐数）」保存即可修正
+function migrateSpecPacks() {
+  var marked = 0;
+  DB.zones.forEach(function(zone) {
+    (zone.items || []).forEach(function(item) {
+      if (!item.variants || !item.variants.length) return;
+      var touched = false;
+      item.variants.forEach(function(v) {
+        var sp = variantSpecsOf(v);
+        if (!sp.length || v.specsFolded) return;
+        v.packCount = 1;
+        v.packQty = Math.round(variantSpecPieces(v) * 100) / 100;
+        v.packWeight = 1;
+        v.packUnit = sp[0].unit || v.packUnit;
+        v.packWeightUnit = sp[0].unit || v.packWeightUnit;
+        v.specsFolded = true;
+        marked++;
+        touched = true;
+      });
+      if (touched) syncItemFromVariants(item);
+    });
+  });
+  if (marked) {
+    saveDB();
+    console.log('[自愈] 多规格套数口径：统一标记 ' + marked + ' 个变体为全量明细（1批 × 总价）');
+  }
+  return marked;
+}
+
 // ===== 套餐模型展示辅助 =====
 // 变体总含量：套数 × 每套含 × 每小单位含量（packWeight=每个小单位的含量，单位见 packWeightUnit）
 function variantTotalWeight(v) {
@@ -3418,8 +3451,9 @@ function deleteVariant(itemId, variantId) {
 // 点击正面翻面
 document.addEventListener('DOMContentLoaded', async function() {
   await loadDB();
-  // 自愈历史脏数据（旧版本「用完了」不清库存导致的假折叠）
+  // 自愈历史脏数据（旧版本「用完了」不清库存导致的假折叠 + 多规格套数口径）
   migrateDirtyUsedUp();
+  migrateSpecPacks();
   // 立即用本地数据渲染首页（不等待网络，秒开）
   showPage('home');
   // 立即更新云端状态 UI（避免卡在静态"初始化..."文字）
@@ -3436,6 +3470,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         var cloudChanged = await syncFromCloud();
         if (cloudChanged) {
           migrateDirtyUsedUp();
+          migrateSpecPacks();
           renderAll();
         }
       }
@@ -3480,8 +3515,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791298049 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791298049';
+// deploy.py 部署时会把 1791299218 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791299218';
 
 function checkAppUpdate(manual) {
   try {
@@ -4163,11 +4198,9 @@ function confirmRestock(itemId) {
           addedPieces = 1;
         }
         variant.stock = variantSpecContent(variant);
-        variant.packCount = variantSpecPieces(variant);
-        variant.packQty = 1;
-        variant.packWeight = 1;
+        // 套数/每套含是「购买记录」，补货按份数累加进明细即可，不覆盖（否则价格行变"67套×45.34"的矛盾显示）
+        if (!variant.specsFolded) variant.specsFolded = true;
         variant.packUnit = (spR[0].unit || variant.packUnit);
-        variant.packWeightUnit = (spR[0].unit || variant.packWeightUnit);
         variant.usedUp = false;   // 又补上了 → 不再是「用完」状态
         variant.finishDate = null;
       } else {
@@ -4282,11 +4315,13 @@ function openItemForm(itemId) {
         id: v.id, brand: v.brand||'', stock: v.stock||0, price: v.price||0, totalPrice: v.totalPrice||0,
         packCount: (typeof v.packCount!=='undefined'?v.packCount:(v.stock||0)),
         packPrice: (typeof v.packPrice!=='undefined'?v.packPrice:(v.totalPrice||0)),
-        packQty: (typeof v.packQty!=='undefined'?v.packQty:1),
+        packQty: (typeof v.packQty!=='undefined'?v.packQty:''),
         packUnit: v.packUnit||(item?item.unit||'个':'个'),
-        packWeight: (typeof v.packWeight!=='undefined'?v.packWeight:0),
-        packWeightUnit: v.packWeightUnit || 'kg',
+        packWeight: (typeof v.packWeight!=='undefined'?v.packWeight:''),
+        packWeightUnit: v.packWeightUnit || '',
         noRestock: !!v.noRestock,
+        specsFolded: !!v.specsFolded,
+        specPerPack: !v.specsFolded,   // 存量数据明细=全部总量(不勾)；只有未折算过的新明细默认按「每套构成」
         specs: (v.specs || []).map(function (s) { return { name: s.name || '', qty: +s.qty || 0, content: +s.content || 0, unit: s.unit || '' }; }),
         photos: (v.photos||[]).slice()
       };
@@ -4432,9 +4467,9 @@ function renderConsumableVariantRows() {
     // 套餐数 × 套餐价 = 总价（单行紧凑）
     var cPack = v.packCount || 0;
     var cPackPrice = v.packPrice || 0;
-    var cPackQty = v.packQty || 1;
-    var cWeight = v.packWeight || 0;
-    var cWeightUnit = v.packWeightUnit || 'kg';
+    var cPackQty = v.packQty || '';
+    var cWeight = v.packWeight || '';
+    var cWeightUnit = v.packWeightUnit || '';
     var cStock = v.stock || 0;
     var cTotal = v.totalPrice || (cPackPrice * cPack);
     html += '<div style="display:flex;gap:6px;align-items:center">';
@@ -4455,7 +4490,10 @@ function renderConsumableVariantRows() {
     // 库存提示（衍生，非编辑）：带计算过程，一眼看懂"每套含"该填什么
     html += '<div id="packstock-' + i + '" style="font-size:12px;color:var(--text-secondary);line-height:1.5">' + packHintOf(v) + '</div>';
     // 混合规格（本品牌可选）：一个品牌下可以有多种规格的存货（正装 1瓶×50ml + 小样 3个×15ml）
-    html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:6px">🧩 混合规格（本品牌选填：正装+小样等，单位可填 ml/kg/粒/个…）</div>';
+    html += '<div style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">';
+    html += '<span style="font-size:12px;color:var(--text-secondary)">🧩 混合规格（选填）</span>';
+    html += '<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:' + (v.specPerPack ? 'var(--accent)' : 'var(--text-tertiary)') + ';cursor:pointer"><input type="checkbox" ' + (v.specPerPack ? 'checked' : '') + ' onchange="onSpecPerPackToggle(' + i + ',this.checked)"> 明细是一套的量（×套餐数）</label>';
+    html += '</div>';
     (v.specs || []).forEach(function (s, k) {
       html += '<div style="display:flex;gap:4px;margin-bottom:4px">';
       html += '<input type="text" class="form-input" style="font-size:12px;flex:1.2;min-width:0;padding:5px 6px" placeholder="名称(正装)" value="' + escapeHtml(s.name || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'name\',this.value)">';
@@ -4495,7 +4533,14 @@ function renderConsumableVariantRows() {
 function addVariantSpec(i) {
   var v = (window._editVariants || [])[i]; if (!v) return;
   if (!v.specs) v.specs = [];
-  v.specs.push({ name: '', qty: 1, content: 0, unit: (v.specs[0] ? v.specs[0].unit : (v.packWeightUnit || '')) });
+  v.specs.push({ name: '', qty: '', content: '', unit: (v.specs[0] ? v.specs[0].unit : (v.packWeightUnit || '')) }); // 全选填，不预填数字
+  renderVariantList();
+}
+// 勾选/取消「明细是一套的量」→ 只影响保存时的折算与预览
+function onSpecPerPackToggle(i, checked) {
+  var v = (window._editVariants || [])[i]; if (!v) return;
+  v.specPerPack = !!checked;
+  // 重新渲染整行以更新勾选颜色与折算预览
   renderVariantList();
 }
 function removeVariantSpec(i, k) {
@@ -4556,7 +4601,8 @@ function onConsumablePriceInput(idx, which, val) {
   // 重算：总价 = 套餐数 × 套餐价；库存 = 套餐数 × 每套含数；单价 = 总价 / 库存
   v.totalPrice = Math.round(packCount * packPrice * 100) / 100;
   var stock = Math.max(0, Math.round(packCount * packQty));
-  v.stock = stock;
+  // 混合规格变体：库存以规格明细为准（保存时重算），这里不改写
+  if (!(v.specs && v.specs.length)) v.stock = stock;
   v.price = stock > 0 ? Math.round((v.totalPrice / stock) * 100) / 100 : (packPrice || 0);
   // 只回写"非当前正在编辑"的框，避免打断小数点输入（如 44. 输入到一半）
   var curEl = which === 'pack' ? packEl : which === 'packprice' ? priceEl : which === 'total' ? totalEl : which === 'packqty' ? qtyEl : weightEl;
@@ -4604,7 +4650,13 @@ function packHintOf(v) {
       var nm = String(s.name || '').trim();
       return (nm ? nm + ' ' : '') + trimNum(+s.qty) + '×' + trimNum(+s.content) + (s.unit || '') + ' = ' + trimNum((+s.qty) * (+s.content)) + (s.unit || '');
     });
-    return '📦 库存 = ' + parts.join(' + ') + ' = ' + trimNum(variantSpecContent(v)) + variantSpecUnit(v) + '（共 ' + trimNum(variantSpecPieces(v)) + ' 件）';
+    var base = parts.join(' + ') + ' = ' + trimNum(variantSpecContent(v)) + variantSpecUnit(v);
+    // 勾了「明细是一套的量」：显示 ×套餐数 的折算预览（如 67片/套 × 2套 = 134片）
+    var pcH = parseFloat(v.packCount) || 0;
+    if (v.specPerPack && pcH > 1) {
+      return '📦 库存 = ' + base + '/套 × ' + pcH + '套 = ' + trimNum(variantSpecContent(v) * pcH) + variantSpecUnit(v);
+    }
+    return '📦 库存 = ' + base + '（共 ' + trimNum(variantSpecPieces(v)) + ' 件）';
   }
   var pc = parseFloat(v.packCount) || 0;
   var pq = parseFloat(v.packQty) || 1;
@@ -4641,7 +4693,7 @@ function onConsumableWeightUnitInput(idx, val) {
 function addConsumableVariantRow() {
   window._editVariants = window._editVariants || [];
   window._editVariantPhotos = window._editVariantPhotos || [];
-  window._editVariants.push({ id: genId(), brand: '', stock: 0, price: 0, totalPrice: 0, packCount: 1, packPrice: 0, packQty: 1, packUnit: '个', packWeight: 0, photos: [] });
+  window._editVariants.push({ id: genId(), brand: '', stock: 0, price: 0, totalPrice: 0, packCount: '', packPrice: 0, packQty: '', packUnit: '', packWeight: '', specPerPack: true, photos: [] });
   window._editVariantPhotos.push([]);
   document.getElementById('variant-list').innerHTML = renderConsumableVariantRows();
 }
@@ -4950,21 +5002,36 @@ function saveItem() {
       nv.photos = (editPhotos[i] || []).slice();
       nv.opened = false; nv.openDate = null; nv.finishDate = null;
       nv.usedUp = false; nv.openQty = 0; nv.feeling = null; nv.shelfLife = null; nv.productionDate = null;
-      nv.packCount = (typeof ev.packCount !== 'undefined' ? ev.packCount : evStock);
+      nv.packCount = (typeof ev.packCount !== 'undefined' && ev.packCount !== '' ? ev.packCount : evStock);
       nv.packPrice = (typeof ev.packPrice !== 'undefined' ? ev.packPrice : (ev.totalPrice || 0));
-      nv.packQty = (typeof ev.packQty !== 'undefined' ? ev.packQty : 1);
+      nv.packQty = (typeof ev.packQty !== 'undefined' && parseFloat(ev.packQty) > 0 ? parseFloat(ev.packQty) : 1); // 选填：空 = 1（不参与乘法）
       nv.packUnit = ev.packUnit || '个';
-      nv.packWeight = (typeof ev.packWeight !== 'undefined' ? ev.packWeight : 0);
+      nv.packWeight = (typeof ev.packWeight !== 'undefined' && ev.packWeight !== '' ? ev.packWeight : 0);
       // 混合规格（本品牌可选）：库存按含量口径汇总，件数仅作参考
       nv.specs = (ev.specs || []).filter(function (s) { return (+s.qty > 0) && (+s.content > 0); }).map(function (s) {
         return { name: (s.name || '').trim(), qty: +s.qty || 0, content: +s.content || 0, unit: (s.unit || '').trim() };
       });
       if (nv.specs.length) {
+        // 运算规则：勾选「明细是一套的量」时，specs = 单套构成 × 套餐数 = 全量库存
+        // （每套 39+8+20=67片 × 2套 = 134片）；不勾选则 specs 本身就是全部总量，不乘套餐数
+        // 折算一次后 specsFolded=true，之后编辑保存不会重复折算
+        var packsN = parseFloat(nv.packCount) || 0;
+        if (nv.specPerPack && packsN > 1) {
+          nv.specs.forEach(function (s) { s.qty = Math.round((+s.qty || 0) * packsN * 100) / 100; });
+        }
         var sc = 0, spc = 0;
         nv.specs.forEach(function (s) { sc += s.qty * s.content; spc += s.qty; });
-        nv.stock = Math.round(sc * 100) / 100;
-        nv.packCount = Math.round(spc * 100) / 100; // 件数（参考，不参与库存换算）
-        nv.packQty = 1;
+        nv.stock = Math.round(sc * 100) / 100;          // 库存（小单位总数，如 134片）
+        // 保持「套数 × 每套含 = 库存」自洽：2套 × 67片/套 = 134片
+        if (nv.specPerPack && packsN > 1) {
+          nv.packCount = packsN;
+          nv.packQty = Math.round((spc / packsN) * 100) / 100;
+        } else {
+          // 明细=全部总量 → 记成 1 批（价格行显示 1 套 × 总价，不再出现份数当套数的矛盾）
+          nv.packCount = 1;
+          nv.packQty = Math.round(spc * 100) / 100;
+        }
+        nv.specsFolded = true;
         nv.packUnit = nv.specs[0].unit || nv.packUnit;
         nv.packWeight = 1;
         nv.packWeightUnit = nv.specs[0].unit || nv.packWeightUnit;
@@ -5721,8 +5788,8 @@ function saveStockAudit(itemId) {
         });
         if (touched) {
           v.stock = variantSpecContent(v);
-          v.packCount = variantSpecPieces(v);
-          v.packQty = 1;
+          // 套数/每套含是「购买记录」，盘点只校正明细与库存，不覆盖（否则套数被写成份数总和）
+          if (!v.specsFolded) v.specsFolded = true;
           if (v.stock > 0) {
             v.usedUp = false; v.finishDate = null;
             // 使用中与否以「有没有未结束的开封记录」为准
