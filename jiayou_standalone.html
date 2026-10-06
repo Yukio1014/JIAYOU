@@ -2085,9 +2085,10 @@ function estimateStockDaysLeft(item, totalStock, variants) {
   var records = item.usageRecords.filter(function(r) { return r.startDate && r.endDate; });
   if (records.length === 0) return null;
   // 统计总消耗量和首次使用日期
-  var totalQty = 0, earliestDate = null;
+  var totalQty = 0, totalContent = 0, allContent = true, earliestDate = null;
   records.forEach(function(r) {
     totalQty += (r.qty || 1);
+    if (r.contentUsed > 0) totalContent += r.contentUsed; else allContent = false;
     var start = new Date(r.startDate);
     if (!earliestDate || start < earliestDate) earliestDate = start;
   });
@@ -2095,6 +2096,12 @@ function estimateStockDaysLeft(item, totalStock, variants) {
   // 从首次使用到今天经过多少天
   var totalDays = daysBetween(earliestDate, new Date());
   if (totalDays < 1) totalDays = 1;
+  // 多规格开封记录：库存本身就是含量口径，直接按「每天消耗多少含量」折算
+  if (allContent && totalContent > 0) {
+    var perDay = totalContent / totalDays;
+    if (perDay <= 0) return null;
+    return Math.round(totalStock / perDay);
+  }
   var avgDaysPerUnit = totalDays / totalQty;
   // 剩余库存换算成"套"：消耗记录 qty 记的是套餐数，pack 模式 stock 是小单位总数，需除以每套含数
   var isPackMode = item.consumeMode === 'pack';
@@ -2177,8 +2184,16 @@ function contentRateOf(item) {
     var v = null;
     if (r.variantId) v = vs.find(function(x) { return x.id === r.variantId; });
     if (!v) v = vs.find(function(x) { return (parseFloat(x.packWeight) || 0) > 0; }); // 旧记录无variantId → 回退第一个有含量的
-    var w = v ? (parseFloat(v.packWeight) || 0) : 0;
     var m = v ? CONTENT_UNIT_TABLE[weightUnitOf(v)] : null;
+    if (r.contentUsed > 0) {
+      // 多规格开封记录：直接记了本次消耗的总含量
+      if (!m || m[0] !== CONTENT_UNIT_TABLE[baseUnit][0]) { ok = false; return; }
+      total += r.contentUsed * m[1] / baseFactor;
+      var s0 = new Date(r.startDate);
+      if (!earliest || s0 < earliest) earliest = s0;
+      return;
+    }
+    var w = v ? (parseFloat(v.packWeight) || 0) : 0;
     if (!v || w <= 0 || !m || m[0] !== CONTENT_UNIT_TABLE[baseUnit][0]) { ok = false; return; }
     var mult = item.consumeMode === 'pack' ? (parseFloat(v.packQty) || 1) : 1;
     total += (r.qty || 1) * w * mult * m[1] / baseFactor;
@@ -2211,9 +2226,10 @@ function estimateOpenedDaysLeft(item, variants) {
   if (records.length === 0) return null;
 
   // 统计总消耗量和首次使用日期
-  var totalQty = 0, earliestDate = null;
+  var totalQty = 0, totalContent = 0, allContent = true, earliestDate = null;
   records.forEach(function(r) {
     totalQty += (r.qty || 1);
+    if (r.contentUsed > 0) totalContent += r.contentUsed; else allContent = false;
     var start = new Date(r.startDate);
     if (!earliestDate || start < earliestDate) earliestDate = start;
   });
@@ -2228,6 +2244,12 @@ function estimateOpenedDaysLeft(item, variants) {
 
   // 已使用天数
   var usedDays = daysBetween(new Date(activeVariant.openDate), new Date());
+  // 多规格：库存是含量口径，直接按「剩余含量 ÷ 每天消耗含量」估
+  if (allContent && totalContent > 0) {
+    var perDayC = totalContent / totalDays;
+    if (perDayC <= 0) return null;
+    return Math.round((activeVariant.stock || 0) / perDayC - usedDays);
+  }
   // 预估剩余天数 = 平均周期 - 已使用天数
   return Math.round(avgDaysPerUnit - usedDays);
 }
@@ -2876,15 +2898,23 @@ function renderCardBack(item, zone) {
       shownRecs.forEach(function(w) {
         var r = w.r;
         var startStr = r.startDate ? formatDate(r.startDate) : (r.date ? formatDate(r.date) : '');
-        var qtyTxt = (r.qty||1) + rateUnitName(item);
-        if (item.consumeMode === 'pack' && aqR > 1) qtyTxt += '（≈' + round1((r.qty||1) * aqR) + escapeHtml(mainPackUnit(item)) + '）';
-        else if (item.consumeMode !== 'pack') {
-          // unit 模式：按该记录对应品牌的「每个含量」折算含量（如 1个 ≈ 15ml）
-          var vsR = item.variants || [];
-          var vR = r.variantId ? vsR.find(function(x) { return x.id === r.variantId; }) : null;
-          if (!vR) vR = vsR.find(function(x) { return (parseFloat(x.packWeight) || 0) > 0; });
-          var wR = vR ? (parseFloat(vR.packWeight) || 0) : 0;
-          if (wR > 0) qtyTxt += '（≈' + trimNum(round1((r.qty||1) * wR)) + weightUnitOf(vR) + '）';
+        var vsR0 = item.variants || [];
+        var vR0 = r.variantId ? vsR0.find(function(x) { return x.id === r.variantId; }) : null;
+        var qtyTxt;
+        if (r.specText) {
+          // 多规格开封：记录的是「规格×份数」，如 小样×1 + 正装×2
+          qtyTxt = r.specText;
+          if (r.contentUsed > 0) qtyTxt += '（≈' + trimNum(round1(r.contentUsed)) + (vR0 ? weightUnitOf(vR0) : '') + '）';
+        } else {
+          qtyTxt = (r.qty||1) + rateUnitName(item);
+          if (item.consumeMode === 'pack' && aqR > 1) qtyTxt += '（≈' + round1((r.qty||1) * aqR) + escapeHtml(mainPackUnit(item)) + '）';
+          else if (item.consumeMode !== 'pack') {
+            // unit 模式：按该记录对应品牌的「每个含量」折算含量（如 1个 ≈ 15ml）
+            var vR = vR0;
+            if (!vR) vR = vsR0.find(function(x) { return (parseFloat(x.packWeight) || 0) > 0; });
+            var wR = vR ? (parseFloat(vR.packWeight) || 0) : 0;
+            if (wR > 0) qtyTxt += '（≈' + trimNum(round1((r.qty||1) * wR)) + weightUnitOf(vR) + '）';
+          }
         }
         var recTxt;
         if (r.endDate) {
@@ -3265,8 +3295,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791279824 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791279824';
+// deploy.py 部署时会把 1791282967 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791282967';
 
 function checkAppUpdate(manual) {
   try {
@@ -3324,7 +3354,11 @@ function openItem(itemId) {
   ensureVariants(item);
 
   // 选择开封哪个品牌（移除"已有正在使用的就锁定"的限制，允许多个同时使用）
-  var available = item.variants.filter(function(v) { return v.stock > 0 && (!v.opened || v.usedUp); });
+  // 多规格变体：只要还有规格份数剩余就仍可继续开（如先开小样、再开正装）
+  var available = item.variants.filter(function(v) {
+    if (variantSpecsOf(v).length) return true;
+    return v.stock > 0 && (!v.opened || v.usedUp);
+  });
   if (available.length === 0) {
     toast('没有可开封的库存了');
     return;
@@ -3344,7 +3378,12 @@ function openItem(itemId) {
       if (v.opened && !v.usedUp) statusBadge = ' <span style="color:var(--orange);font-size:11px">· 使用中</span>';
       html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px;border-radius:10px;background:#F8F8FA;margin-bottom:8px;cursor:pointer" onclick="openVariantItem(\'' + itemId + '\',\'' + v.id + '\')">';
       html += '<div style="font-weight:600">' + escapeHtml(v.brand || '未命名') + statusBadge + '</div>';
-      html += '<div style="color:var(--text-secondary);font-size:13px">库存 ' + (v.stock||0) + (v.packUnit || mainPackUnit(item)) + ' →</div>';
+      if (variantSpecsOf(v).length) {
+        var spT = variantSpecText(v);
+        html += '<div style="color:var(--text-secondary);font-size:12px;text-align:right;max-width:60%">' + escapeHtml(spT) + ' →</div>';
+      } else {
+        html += '<div style="color:var(--text-secondary);font-size:13px">库存 ' + (v.stock||0) + (v.packUnit || mainPackUnit(item)) + ' →</div>';
+      }
       html += '</div>';
     });
     html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">取消</button>';
@@ -3386,6 +3425,41 @@ function openVariantItem(itemId, variantId) {
     window._openQty = 1;
     window._maxOpenQty = maxStock;
     window._openVariantId = variantId;
+    return;
+  }
+
+  // 混合规格：消耗对象是规格本身（1个小样 / 1盒3合1），按份扣减，不是按含量扣
+  var spOpen = variantSpecsOf(v);
+  if (spOpen.length) {
+    var html = '<div class="modal-handle"></div>';
+    html += '<div class="modal-title">🔓 开封使用（多规格）</div>';
+    html += '<div style="text-align:center;margin-bottom:12px">';
+    html += '<div style="font-size:16px;font-weight:700">' + escapeHtml(item.name) + '</div>';
+    html += '<div style="font-size:14px;color:var(--accent)">' + escapeHtml(v.brand) + '</div>';
+    html += '<div style="font-size:13px;color:var(--text-secondary)">库存：' + trimNum(variantSpecContent(v)) + variantSpecUnit(v) + '（共 ' + trimNum(variantSpecPieces(v)) + ' 件）</div>';
+    html += '</div>';
+    html += '<div style="font-size:13px;font-weight:700;margin-bottom:6px">选择本次开封的规格（按份扣）</div>';
+    window._openSpecQty = {};
+    spOpen.forEach(function (s, k) {
+      window._openSpecQty[k] = 0;
+      html += '<div style="display:flex;gap:8px;align-items:center;padding:10px;background:var(--bg);border-radius:10px;margin-bottom:6px">';
+      html += '<div style="flex:1;min-width:0"><div style="font-weight:600;font-size:14px">' + escapeHtml(s.name || ('规格' + (k + 1))) + '</div>';
+      html += '<div style="font-size:12px;color:var(--text-secondary)">' + trimNum(s.content) + (s.unit || '') + '/份 · 剩 ' + trimNum(s.qty) + ' 份</div></div>';
+      html += '<div class="stepper"><button onclick="adjustSpecOpen(' + k + ',-1)">−</button><span class="stepper-val" id="spec-open-' + k + '">0</span><button onclick="adjustSpecOpen(' + k + ',1)">＋</button></div>';
+      html += '</div>';
+    });
+    html += '<div class="form-group">';
+    html += '<label class="form-label">开始使用日期</label>';
+    html += '<input type="date" class="form-input" id="open-date" value="' + new Date().toISOString().split('T')[0] + '">';
+    html += '</div>';
+    html += '<button class="btn btn-primary btn-full" onclick="confirmOpen(\'' + itemId + '\',\'' + variantId + '\')">确认开封</button>';
+    html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">取消</button>';
+    document.getElementById('modal-content').innerHTML = html;
+    document.getElementById('modal-overlay').classList.add('show');
+    window._openQty = 1;
+    window._maxOpenQty = 1;
+    window._openVariantId = variantId;
+    window._openItemId = itemId;
     return;
   }
 
@@ -3447,17 +3521,68 @@ function adjustOpenQty(delta) {
   var valEl = document.getElementById('open-qty-val');
   if (valEl) valEl.textContent = window._openQty;
 }
+// 多规格开封：每个规格独立步进（0 ~ 该规格剩余份数）
+function adjustSpecOpen(k, delta) {
+  var q = window._openSpecQty || {};
+  var item = getItem(currentZoneId, window._openItemId);
+  var v = item && item.variants ? item.variants.find(function (x) { return x.id === window._openVariantId; }) : null;
+  var sp = v ? variantSpecsOf(v) : [];
+  var max = sp[k] ? sp[k].qty : 0;
+  q[k] = Math.max(0, Math.min(max, (q[k] || 0) + delta));
+  window._openSpecQty = q;
+  var el = document.getElementById('spec-open-' + k);
+  if (el) el.textContent = q[k];
+}
 
 function confirmOpen(itemId, variantId, markAsUsed) {
   var item = getItem(currentZoneId, itemId);
   if (!item) return;
   var v = item.variants.find(function(v) { return v.id === variantId; });
   if (!v) return;
-  var qty = window._openQty || 1;
-  if (qty > (v.stock || 0)) qty = v.stock || 0; // 不超过现有库存
   var dateInput = document.getElementById('open-date');
   var date = dateInput ? dateInput.value : new Date().toISOString().split('T')[0];
   var nowISO = new Date(date).toISOString();
+
+  // 混合规格：按「规格×份数」扣减，如 小样×1、3合1×2
+  var spOpen = variantSpecsOf(v);
+  if (spOpen.length && window._openSpecQty) {
+    var usedParts = [], pieces = 0, contentUsed = 0;
+    var spUnit = variantSpecUnit(v); // 先取单位：扣完可能全部归零，之后再取就空了
+    spOpen.forEach(function (s, k) {
+      var n = Math.min(window._openSpecQty[k] || 0, s.qty);
+      if (n <= 0) return;
+      s.qty -= n;
+      usedParts.push((s.name || '规格' + (k + 1)) + '×' + n);
+      pieces += n;
+      contentUsed += n * (+s.content || 0);
+    });
+    if (!pieces) { toast('先选择要开封的规格'); return; }
+    v.opened = true;
+    v.openDate = nowISO;
+    v.openQty = pieces;
+    v.stock = variantSpecContent(v);
+    var allEmpty = spOpen.every(function (s) { return s.qty <= 0; });
+    if (allEmpty) { v.usedUp = true; v.finishDate = nowISO; }
+    if (!item.usageRecords) item.usageRecords = [];
+    item.usageRecords.push({
+      startDate: nowISO,
+      endDate: allEmpty ? nowISO : null,
+      qty: pieces,
+      variantId: variantId,
+      brand: v.brand,
+      specText: usedParts.join(' + '),
+      contentUsed: Math.round(contentUsed * 100) / 100
+    });
+    syncItemFromVariants(item);
+    saveDB();
+    closeModal();
+    openCardDetail(currentZoneId, itemId);
+    toast('已开封 ' + escapeHtml(v.brand) + '：' + usedParts.join(' + ') + '，- ' + trimNum(contentUsed) + spUnit);
+    return;
+  }
+
+  var qty = window._openQty || 1;
+  if (qty > (v.stock || 0)) qty = v.stock || 0; // 不超过现有库存
 
   v.opened = true;
   v.usedUp = !!markAsUsed;
@@ -3515,6 +3640,11 @@ function finishVariant(itemId, variantId) {
 
   v.usedUp = true;
   v.finishDate = v.finishDate || new Date().toISOString();
+  // 混合规格：整变体用完 → 各规格剩余清零
+  if (variantSpecsOf(v).length) {
+    v.specs.forEach(function (s) { s.qty = 0; });
+    v.stock = 0;
+  }
 
   if (item.usageRecords && item.usageRecords.length > 0) {
     var lastRecord = item.usageRecords[item.usageRecords.length - 1];
@@ -3567,6 +3697,7 @@ function openRestockForm(itemId) {
   if (!item) return;
   closeCardDetail();
   ensureVariants(item);
+  window._restockItemId = itemId;
 
   var html = '<div class="modal-handle"></div>';
   html += '<div class="modal-title">📦 补货</div>';
@@ -3593,10 +3724,12 @@ function openRestockForm(itemId) {
     html += '<div class="price-compare price-first">历史最低 ¥' + minPrice.toFixed(2) + ' · 上次 ¥' + lastPrice.toFixed(2) + '</div>';
   }
 
-  html += '<div class="form-row">';
+  html += '<div class="form-row" id="restock-qty-row">';
   html += '<div class="form-group"><label class="form-label">补货数量</label><input type="number" class="form-input" id="restock-qty" value="1" min="0" step="0.5"></div>';
   html += '<div class="form-group"><label class="form-label">单位</label><input type="text" class="form-input" id="restock-unit" value="' + escapeHtml(item.unit||'个') + '"></div>';
   html += '</div>';
+  // 多规格品牌：补货按「规格×份数」录入（如 小样 +2、正装 +1）
+  html += '<div id="restock-spec-block" style="display:none"></div>';
   html += '<div class="form-row">';
   html += '<div class="form-group"><label class="form-label">总价</label><input type="number" class="form-input" id="restock-total" value="" placeholder="0"></div>';
   html += '<div class="form-group"><label class="form-label">单价（自动算）</label><input type="number" class="form-input" id="restock-unit-price" value="" placeholder="自动"></div>';
@@ -3627,11 +3760,72 @@ function openRestockForm(itemId) {
   document.getElementById('restock-brand').addEventListener('change', function() {
     var ng = document.getElementById('new-brand-group');
     ng.style.display = this.value === '__new__' ? 'block' : 'none';
+    renderRestockSpecs(item);
   });
 
   // 监听价格变化
   document.getElementById('restock-total').addEventListener('input', function() { updateRestockCompare(item); });
   document.getElementById('restock-qty').addEventListener('input', function() { updateRestockCompare(item); });
+
+  renderRestockSpecs(item);
+}
+
+// 多规格品牌的补货明细：按规格录份数；也支持直接按含量补
+function renderRestockSpecs(item) {
+  var box = document.getElementById('restock-spec-block');
+  if (!box) return;
+  var sel = document.getElementById('restock-brand');
+  var vid = sel ? sel.value : '';
+  var v = null;
+  item.variants.forEach(function(x) { if (x.id === vid) v = x; });
+  var sp = (v && v.specs) ? v.specs : [];
+  var qtyRow = document.getElementById('restock-qty-row');
+  if (!sp.length || !v) {
+    box.style.display = 'none'; box.innerHTML = '';
+    if (qtyRow) qtyRow.style.display = 'flex';
+    return;
+  }
+  box.style.display = 'block';
+  var h = '<div style="font-size:13px;font-weight:700;margin:4px 0 6px">🧩 补货规格（按份数）</div>';
+  h += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">现有：' + escapeHtml(variantSpecText(v)) + '</div>';
+  sp.forEach(function (s, k) {
+    h += '<div class="form-row" style="align-items:center;margin-bottom:6px">';
+    h += '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">' + escapeHtml(s.name || ('规格' + (k + 1))) + '</div>';
+    h += '<div style="font-size:11px;color:var(--text-secondary)">' + trimNum(s.content) + (s.unit || '') + '/份 · 现有 ' + trimNum(s.qty) + ' 份</div></div>';
+    h += '<input type="number" class="form-input" style="width:92px;flex:none" id="restock-spec-' + k + '" value="0" min="0" step="1" oninput="syncRestockSpecQty()">';
+    h += '</div>';
+  });
+  h += '<div class="form-row">';
+  h += '<div class="form-group" style="flex:1"><label class="form-label">或按含量补（选填）</label><input type="number" class="form-input" id="restock-spec-content" value="" placeholder="如 100" oninput="syncRestockSpecQty()"></div>';
+  h += '<div class="form-group" style="width:96px;flex:none"><label class="form-label">单位</label><input type="text" class="form-input" id="restock-spec-unit" value="' + escapeHtml(sp[0].unit || '') + '"></div>';
+  h += '</div>';
+  box.innerHTML = h;
+  window._restockSpecs = sp;
+  if (qtyRow) qtyRow.style.display = 'flex'; // 数量行保留（用于算单价），由规格自动回填
+}
+// 规格份数 → 自动回填「补货数量」（含量口径），省得再手算
+function syncRestockSpecQty() {
+  var sp = window._restockSpecs || [];
+  var total = 0, unit = '';
+  for (var i = 0; i < sp.length; i++) {
+    var e = document.getElementById('restock-spec-' + i);
+    if (e) total += (parseFloat(e.value) || 0) * (+sp[i].content || 0);
+  }
+  if (sp.length) unit = sp[0].unit || '';
+  var cEl = document.getElementById('restock-spec-content');
+  if (cEl) {
+    total += (parseFloat(cEl.value) || 0);
+    var uEl = document.getElementById('restock-spec-unit');
+    if (uEl && uEl.value) unit = uEl.value;
+  }
+  var qEl = document.getElementById('restock-qty');
+  if (qEl && total > 0) qEl.value = Math.round(total * 100) / 100;
+  var unEl = document.getElementById('restock-unit');
+  if (unEl && unit) unEl.value = unit;
+  if (window._restockItemId) {
+    var it = getItem(currentZoneId, window._restockItemId);
+    if (it) updateRestockCompare(it);
+  }
 }
 
 function updateRestockCompare(item) {
@@ -3718,9 +3912,43 @@ function confirmRestock(itemId) {
   } else {
     variant = item.variants.find(function(v) { return v.id === brandSelect; });
     if (variant) {
-      variant.stock = (variant.stock || 0) + qty;
+      // 多规格品牌：按「规格×份数」补，库存由规格明细重算（否则会被下次开封覆盖）
+      var spR = (variant.specs && variant.specs.length) ? variant.specs : null;
+      var addedPieces = 0;
+      if (spR) {
+        spR.forEach(function (s, k) {
+          var el = document.getElementById('restock-spec-' + k);
+          var n = el ? (parseFloat(el.value) || 0) : 0;
+          if (n > 0) { s.qty = (+s.qty || 0) + n; addedPieces += n; }
+        });
+        if (!addedPieces) {
+          // 没填份数 → 按含量补：同含量同单位的规格合并，否则新增一行「补货」
+          var cEl = document.getElementById('restock-spec-content');
+          var c = cEl ? (parseFloat(cEl.value) || 0) : 0;
+          if (c <= 0) c = qty;
+          var uEl = document.getElementById('restock-spec-unit');
+          var u = uEl ? (uEl.value || '').trim() : '';
+          var hit = null;
+          spR.forEach(function (s) {
+            if (!hit && Math.abs((+s.content || 0) - c) < 1e-6 && (s.unit || '') === u) hit = s;
+          });
+          if (hit) hit.qty = (+hit.qty || 0) + 1;
+          else spR.push({ name: '补货', qty: 1, content: c, unit: u });
+          addedPieces = 1;
+        }
+        variant.stock = variantSpecContent(variant);
+        variant.packCount = variantSpecPieces(variant);
+        variant.packQty = 1;
+        variant.packWeight = 1;
+        variant.packUnit = (spR[0].unit || variant.packUnit);
+        variant.packWeightUnit = (spR[0].unit || variant.packWeightUnit);
+        variant.usedUp = false;   // 又补上了 → 不再是「用完」状态
+        variant.finishDate = null;
+      } else {
+        variant.stock = (variant.stock || 0) + qty;
+      }
       variant.price = parseFloat(unitPrice.toFixed(2));
-      variant.totalPrice = parseFloat((variant.price * variant.stock).toFixed(2));
+      variant.totalPrice = parseFloat((variant.price * (variant.stock || 0)).toFixed(2));
       variant.channel = channel;
     }
   }
