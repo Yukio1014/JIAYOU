@@ -1538,30 +1538,65 @@ function genId() {
 // ========== 子物品（品牌变体）辅助 ==========
 // 库存摘要（人话版）：套餐数 + 容量，如「4套 · ≈200ml」；没有套餐数据则退回「200ml」
 // ---------- 变体级混合规格：每个品牌（变体）自己可选，互不干扰 ----------
-// 例：品牌A面霜 = 正装 1瓶×50ml + 小样 3个×15ml = 95ml；单位自由：ml / kg / g / L / 粒 / 个 …
+// 两层数量模型（新）：每个规格 = 包数(packCount) × 每包含量(packQty) × 每份规格(content) + 单位(unit)
+//   例：姨妈巾 日用 3包 × 5片/包 × 1片/份 = 15片
+// 兼容一层旧数据：没有 packCount/packQty 的规格视为 packCount=qty、packQty=1
+//   → 洗衣凝珠 {qty:3, content:44} = 3包 × 1粒/包 × 44粒/份 = 132粒（数值不变）
+function specPackCount(s) { // 规格的「包数」
+  if (s.packCount !== undefined && s.packCount !== null && s.packCount !== '') return +s.packCount || 0;
+  return +s.qty || 0; // 兼容一层旧数据
+}
+function specPackQty(s) { // 规格的「每包含量」
+  var p = parseFloat(s.packQty);
+  return (isFinite(p) && p > 0) ? p : 1; // 兼容一层旧数据；空 = 1
+}
+function specContentOf(s) { return +s.content || 0; } // 每份规格（如每片 1 片、每毫升 1ml）
+// 表单回显用：保留用户原本填的空字符串（空 = 按 1 计算，但不预填任何数字）
+function specPackCountRaw(s) { if (s.packCount !== undefined && s.packCount !== null && s.packCount !== '') return s.packCount; return (s.qty !== undefined && s.qty !== null && s.qty !== '') ? s.qty : ''; }
+function specPackQtyRaw(s) { return (s.packQty !== undefined && s.packQty !== null && s.packQty !== '') ? s.packQty : ''; }
+function specTotalOf(s) { // 该规格总含量 = 包数 × 每包含量 × 每份规格
+  return specPackCount(s) * specPackQty(s) * specContentOf(s);
+}
+function specPiecesOf(s) { // 该规格总件数 = 包数 × 每包含量
+  return specPackCount(s) * specPackQty(s);
+}
 function variantSpecsOf(v) {
-  return ((v && v.specs) || []).filter(function (s) { return (+s.qty > 0) && (+s.content > 0); });
+  return ((v && v.specs) || []).filter(function (s) { return specPackCount(s) > 0 && (+s.packQty > 0 || +s.qty > 0 || +s.content > 0); });
 }
 function variantSpecContent(v) { // 总含量（库存口径）
   var ss = variantSpecsOf(v); if (!ss.length) return 0;
-  var t = 0; ss.forEach(function (s) { t += (+s.qty || 0) * (+s.content || 0); });
+  var t = 0; ss.forEach(function (s) { t += specTotalOf(s); });
   return Math.round(t * 100) / 100;
 }
-function variantSpecPieces(v) { // 总件数（参考）
+function variantSpecPieces(v) { // 总件数（参考）= 所有规格的「包数 × 每包含量」
   var ss = variantSpecsOf(v); if (!ss.length) return 0;
-  var t = 0; ss.forEach(function (s) { t += (+s.qty || 0); });
+  var t = 0; ss.forEach(function (s) { t += specPiecesOf(s); });
+  return Math.round(t * 100) / 100;
+}
+// 总包数（组合消耗型④按包开合时使用）
+function variantSpecPacks(v) {
+  var ss = variantSpecsOf(v); if (!ss.length) return 0;
+  var t = 0; ss.forEach(function (s) { t += specPackCount(s); });
   return Math.round(t * 100) / 100;
 }
 function variantSpecUnit(v) {
   var ss = variantSpecsOf(v);
   return ss.length ? (ss[0].unit || '') : '';
 }
-function variantSpecText(v) { // "正装 1×50ml + 小样 3×15ml = 95ml"
+// 规格行展示文本："日用 3包×5片 = 15片"
+function specLineText(s) {
+  var nm = String(s.name || '').trim();
+  var pc = specPackCount(s), pq = specPackQty(s), ct = specContentOf(s), u = s.unit || '';
+  var head = (nm ? nm + ' ' : '');
+  var mid;
+  if (pq !== 1) mid = trimNum(pc) + '包×' + trimNum(pq) + u + '/包';
+  else if (ct !== 1 && ct > 0) mid = trimNum(pc) + '×' + trimNum(ct) + u;
+  else mid = trimNum(pc) + '包';
+  return head + mid + ' = ' + trimNum(specTotalOf(s)) + u;
+}
+function variantSpecText(v) { // "日用 3包×5片 = 15片 + 夜用 2包×3片 = 6片 = 21片"
   var ss = variantSpecsOf(v); if (!ss.length) return '';
-  var parts = ss.map(function (s) {
-    var nm = String(s.name || '').trim();
-    return (nm ? nm + ' ' : '') + trimNum(+s.qty) + '×' + trimNum(+s.content) + (s.unit || '');
-  });
+  var parts = ss.map(specLineText);
   return parts.join(' + ') + ' = ' + trimNum(variantSpecContent(v)) + (ss[0].unit || '');
 }
 function stockSummaryOf(item) {
@@ -1684,6 +1719,57 @@ function migrateSpecPacks() {
     console.log('[自愈] 多规格套数口径：统一标记 ' + marked + ' 个变体为全量明细（1批 × 总价）');
   }
   return marked;
+}
+
+// ===== 四模型重定义：数据迁移 =====
+// consumeMode 四值：count(①件数周期) / spec(②规格周期) / instant(③即时消耗) / combo(④组合消耗)
+// 旧值映射：pack→spec、unit→count、oneShot=true→instant、有 specs→combo 优先
+var CONSUME_MODELS = {
+  count:   { key: 'count',   icon: '🧴', name: '件数周期型', desc: '开瓶→空瓶，按"件/瓶"消耗（面霜、牙膏、洗发水）' },
+  spec:    { key: 'spec',    icon: '🐱', name: '规格周期型', desc: '开包→吃完，按 KG/L 消耗（猫粮、大米、大桶洗衣液）' },
+  instant: { key: 'instant', icon: '🧻', name: '即时消耗型', desc: '点一次扣一份，开袋即用完（面膜、棉片、一次性内裤）' },
+  combo:   { key: 'combo',   icon: '🧩', name: '组合消耗型', desc: '按子规格分别开包，包数周期+片数汇总（姨妈巾、混合套餐）' }
+};
+function consumeModelOf(item) {
+  if (!item) return 'spec';
+  var m = item.consumeMode;
+  if (m === 'count' || m === 'spec' || m === 'instant' || m === 'combo') return m;
+  // 旧值兼容：pack→spec，unit→count；有 specs 的优先判 combo（旧的多规格物品本就是组合语义）
+  if ((item.variants || []).some(function (v) { return variantSpecsOf(v).length; })) return 'combo';
+  if (m === 'unit') return 'count';
+  if (item.oneShot === true) return 'instant';
+  return 'spec';
+}
+// 迁移：specs 从一层(qty×content)升级为两层(packCount包数 × packQty每包含量 × content每份规格)
+// 原则：库存数值必须不变 —— qty=3,content=44 → packCount=3,packQty=1,content=44（3×1×44=132，与旧值一致）
+function migrateSpecTwoLayer() {
+  var fixed = 0;
+  DB.zones.forEach(function(zone) {
+    (zone.items || []).forEach(function(item) {
+      if (!item.variants || !item.variants.length) return;
+      var touched = false;
+      item.variants.forEach(function(v) {
+        (v.specs || []).forEach(function(s) {
+          if (s.packCount === undefined || s.packCount === null) {
+            s.packCount = +s.qty || 0;                 // 旧 qty → 包数
+            if (s.packQty === undefined || s.packQty === null || s.packQty === '') s.packQty = 1;
+            if (s.content === undefined || s.content === null || s.content === '') s.content = 1;
+            fixed++; touched = true;
+          }
+          // 保留 qty 字段做兼容读取（旧代码路径），但以 packCount 为准
+        });
+      });
+      // consumeMode 归一（写入四值之一，避免每次都要跑兼容分支）
+      var want = consumeModelOf(item);
+      if (item.consumeMode !== want) { item.consumeMode = want; touched = true; }
+      if (touched) syncItemFromVariants(item);
+    });
+  });
+  if (fixed) {
+    saveDB();
+    console.log('[自愈] 规格两层结构：迁移 ' + fixed + ' 条规格明细（库存数值不变）');
+  }
+  return fixed;
 }
 
 // ===== 套餐模型展示辅助 =====
@@ -2871,10 +2957,18 @@ function renderCardBack(item, zone) {
 
   // === 吸顶操作条（补给品：开封/补货/盘点，滚动时始终可见） ===
   if (zone.type === 'consumable') {
+    var cModel = consumeModelOf(item);
     html += '<div class="sticky-actions">';
-    html += '<button class="btn btn-primary btn-sm" style="flex:1" onclick="openItem(\'' + item.id + '\')">🔓 开封</button>';
-    html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="openRestockForm(\'' + item.id + '\')">📦 补货</button>';
-    html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="openStockAuditForm(\'' + item.id + '\')">📦 盘点</button>';
+    if (cModel === 'instant') {
+      // 模型③：纯打卡，主按钮 = 消耗一份（可反复点），副按钮 = 撤销一次
+      html += '<button class="btn btn-primary btn-sm" style="flex:1.6" onclick="punchInstant(\'' + item.id + '\',\'' + instantTargetVariant(item) + '\')">✨ 消耗一份</button>';
+      html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="unpunchInstant(\'' + item.id + '\',\'' + instantTargetVariant(item) + '\')">↩️ 撤销</button>';
+      html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="openRestockForm(\'' + item.id + '\')">📦 补货</button>';
+    } else {
+      html += '<button class="btn btn-primary btn-sm" style="flex:1" onclick="openItem(\'' + item.id + '\')">🔓 开封</button>';
+      html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="openRestockForm(\'' + item.id + '\')">📦 补货</button>';
+      html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="openStockAuditForm(\'' + item.id + '\')">📦 盘点</button>';
+    }
     html += '</div>';
     html += '<div style="margin:8px 0 2px"><button class="btn btn-outline btn-sm" style="width:100%;font-size:12px" onclick="taskFromItem(\'' + zone.id + '\',\'' + item.id + '\')">📋 加入待接委托（免手输，去填价格）</button></div>';
   }
@@ -2960,6 +3054,25 @@ function renderCardBack(item, zone) {
           html += '<div class="vc-meta-item' + (hasWeight ? '' : ' wide') + '"><div class="vc-meta-label">开封时间</div><div class="vc-meta-value">' + dateTxt + '</div></div>';
         }
         html += '</div>';
+        // === 组合消耗型④：按子规格分行，每行可独立「开启新包 / 这包用完」===
+        if (consumeModelOf(item) === 'combo' && variantSpecsOf(v).length && !isDone) {
+          html += '<div style="margin-top:8px;border-top:1px dashed var(--separator);padding-top:8px">';
+          variantSpecsOf(v).forEach(function (s) {
+            var si = (v.specs || []).indexOf(s); // 原始下标（openOnePack 按 v.specs 解析）
+            var packsL = specPackCount(s), pqL = specPackQty(s), uL = s.unit || '';
+            var nmL = s.name || ('规格' + (si + 1));
+            var leftPieces = specPiecesOf(s);
+            html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 0">';
+            html += '<div style="flex:1;min-width:0">';
+            html += '<div style="font-size:13px;font-weight:600">' + escapeHtml(nmL) + '</div>';
+            html += '<div style="font-size:11px;color:var(--text-secondary)">剩 ' + trimNum(leftPieces) + uL + '（' + trimNum(packsL) + '包未开' + (pqL !== 1 ? ' × ' + trimNum(pqL) + uL + '/包' : '') + '）</div>';
+            html += '</div>';
+            html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0;font-size:11px;padding:5px 8px" ' + (packsL > 0 ? '' : 'disabled style="opacity:.45"') + ' onclick="openOnePack(\'' + item.id + '\',\'' + v.id + '\',' + si + ')">📦 开启新包</button>';
+            html += '</div>';
+          });
+          html += '<button class="btn btn-outline btn-sm" style="width:100%;margin-top:6px;font-size:12px" onclick="confirmOpenCombo(\'' + item.id + '\',\'' + v.id + '\')">✅ 这包用完了</button>';
+          html += '</div>';
+        }
         // 使用感受：有任意内容就显示
         if (v.feeling && (v.feeling.rating || (v.feeling.tags && v.feeling.tags.length > 0) || v.feeling.notes)) {
           html += '<div class="vc-feel">';
@@ -3070,10 +3183,23 @@ function renderCardBack(item, zone) {
 
     // === 使用记录 ===
     if (item.usageRecords && item.usageRecords.length > 0) {
+      var cModelR = consumeModelOf(item);
       html += '<div class="back-section">';
       html += '<div class="back-section-title">使用记录 (' + item.usageRecords.length + '次)</div>';
       var rate = calcUsageRate(item);
-      if (rate > 0) {
+      if (cModelR === 'instant') {
+        // 模型③：只展示「今年已用 N 份」，不做周期速率（打卡没有起止周期概念）
+        var iuQty = instantUsedQty(item);
+        var iuUnit = (item.variants && item.variants[0] ? (item.variants[0].packUnit || mainPackUnit(item)) : mainPackUnit(item)) || '份';
+        html += '<div class="back-row"><span class="back-label">今年已用</span><span class="back-value" style="color:var(--accent);font-weight:700">' + trimNum(iuQty) + ' ' + escapeHtml(iuUnit) + '</span></div>';
+        var iuRest = getTotalStock(item);
+        html += '<div class="back-row"><span class="back-label">剩余</span><span class="back-value">' + trimNum(iuRest) + ' ' + escapeHtml(iuUnit) + '</span></div>';
+        if (iuQty > 0) {
+          var iuPerMonth = iuQty / ((new Date().getMonth() + 1) || 1);
+          var iuMonth = iuPerMonth > 0 ? (iuRest / iuPerMonth) : 0;
+          if (iuMonth > 0) html += '<div class="back-row"><span class="back-label">按当前速度</span><span class="back-value">还能用 ≈ ' + round1(iuMonth) + ' 个月</span></div>';
+        }
+      } else if (rate > 0) {
         html += '<div class="back-row"><span class="back-label">月消耗量</span><span class="back-value">' + rateValueText(item, rate, '/月') + '</span></div>';
         html += '<div class="back-row"><span class="back-label">年消耗量</span><span class="back-value">' + rateValueText(item, rate * 12, '/年') + '</span></div>';
         if (item.consumeMode === 'pack') {
@@ -3106,7 +3232,11 @@ function renderCardBack(item, zone) {
           }
         }
         var recTxt;
-        if (r.endDate) {
+        if (r.instant) {
+          // 模型③ 打卡记录：只显示「✨ 累计消耗 N 份 · 最近日期」
+          var iu = (vR0 ? (vR0.packUnit || mainPackUnit(item)) : mainPackUnit(item)) || '份';
+          recTxt = '✨ ' + (vR0 ? escapeHtml(vR0.brand) + ' · ' : '') + '累计消耗 ' + trimNum(r.qty) + ' ' + escapeHtml(iu) + (startStr ? ' · 最近 ' + startStr : '');
+        } else if (r.endDate) {
           var days = daysBetween(new Date(r.startDate), new Date(r.endDate));
           recTxt = '📅 ' + startStr + ' → ' + formatDate(r.endDate) + ' · ' + days + '天 · ' + qtyTxt;
         } else if (startStr) {
@@ -3454,6 +3584,7 @@ document.addEventListener('DOMContentLoaded', async function() {
   // 自愈历史脏数据（旧版本「用完了」不清库存导致的假折叠 + 多规格套数口径）
   migrateDirtyUsedUp();
   migrateSpecPacks();
+  migrateSpecTwoLayer();
   // 立即用本地数据渲染首页（不等待网络，秒开）
   showPage('home');
   // 立即更新云端状态 UI（避免卡在静态"初始化..."文字）
@@ -3471,6 +3602,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (cloudChanged) {
           migrateDirtyUsedUp();
           migrateSpecPacks();
+          migrateSpecTwoLayer();
           renderAll();
         }
       }
@@ -3515,8 +3647,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791299218 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791299218';
+// deploy.py 部署时会把 1791301778 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791301778';
 
 function checkAppUpdate(manual) {
   try {
@@ -3648,31 +3780,48 @@ function openVariantItem(itemId, variantId) {
     return;
   }
 
-  // 混合规格：消耗对象是规格本身（1个小样 / 1盒3合1），按份扣减，不是按含量扣
+  // 混合规格（组合消耗型④）：按子规格分行，主操作是「开启新包」——一次开一包
   var spOpen = variantSpecsOf(v);
   if (spOpen.length) {
+    var cM = consumeModelOf(item);
+    var isCombo = (cM === 'combo');
     var html = '<div class="modal-handle"></div>';
-    html += '<div class="modal-title">🔓 开封使用（多规格）</div>';
+    html += '<div class="modal-title">' + (isCombo ? '🧩 开启新包（按规格）' : '🔓 开封使用（多规格）') + '</div>';
     html += '<div style="text-align:center;margin-bottom:12px">';
     html += '<div style="font-size:16px;font-weight:700">' + escapeHtml(item.name) + '</div>';
     html += '<div style="font-size:14px;color:var(--accent)">' + escapeHtml(v.brand) + '</div>';
     html += '<div style="font-size:13px;color:var(--text-secondary)">库存：' + trimNum(variantSpecContent(v)) + variantSpecUnit(v) + '（共 ' + trimNum(variantSpecPieces(v)) + ' 件）</div>';
     html += '</div>';
-    html += '<div style="font-size:13px;font-weight:700;margin-bottom:6px">选择本次开封的规格（按份扣）</div>';
     window._openSpecQty = {};
-    spOpen.forEach(function (s, k) {
+    spOpen.forEach(function (s) {
+      var k = (v.specs || []).indexOf(s); // 原始下标：confirmOpen/openOnePack 都按 v.specs 解析
+      var packs = specPackCount(s), pq = specPackQty(s), u = s.unit || '';
+      var pieces = specPiecesOf(s);
       window._openSpecQty[k] = 0;
-      html += '<div style="display:flex;gap:8px;align-items:center;padding:10px;background:var(--bg);border-radius:10px;margin-bottom:6px">';
+      html += '<div style="padding:10px;background:var(--bg);border-radius:10px;margin-bottom:6px">';
+      html += '<div style="display:flex;gap:8px;align-items:center">';
       html += '<div style="flex:1;min-width:0"><div style="font-weight:600;font-size:14px">' + escapeHtml(s.name || ('规格' + (k + 1))) + '</div>';
-      html += '<div style="font-size:12px;color:var(--text-secondary)">' + trimNum(s.content) + (s.unit || '') + '/份 · 剩 ' + trimNum(s.qty) + ' 份</div></div>';
-      html += '<div class="stepper"><button onclick="adjustSpecOpen(' + k + ',-1)">−</button><span class="stepper-val" id="spec-open-' + k + '">0</span><button onclick="adjustSpecOpen(' + k + ',1)">＋</button></div>';
+      html += '<div style="font-size:12px;color:var(--text-secondary)">剩 ' + trimNum(pieces) + u + '（' + trimNum(packs) + '包' + (pq !== 1 ? ' × ' + trimNum(pq) + u + '/包' : '') + '）</div></div>';
+      if (isCombo) {
+        // 组合消耗型：一键开一整包（包数 -1）
+        html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0" ' + (packs > 0 ? '' : 'disabled') + ' onclick="openOnePack(\'' + itemId + '\',\'' + variantId + '\',' + k + ')">📦 开启新包</button>';
+      } else {
+        html += '<div class="stepper"><button onclick="adjustSpecOpen(' + k + ',-1)">−</button><span class="stepper-val" id="spec-open-' + k + '">0</span><button onclick="adjustSpecOpen(' + k + ',1)">＋</button></div>';
+      }
+      html += '</div>';
       html += '</div>';
     });
-    html += '<div class="form-group">';
-    html += '<label class="form-label">开始使用日期</label>';
-    html += '<input type="date" class="form-input" id="open-date" value="' + new Date().toISOString().split('T')[0] + '">';
-    html += '</div>';
-    html += '<button class="btn btn-primary btn-full" onclick="confirmOpen(\'' + itemId + '\',\'' + variantId + '\')">确认开封</button>';
+    if (isCombo) {
+      html += '<div style="font-size:12px;color:var(--text-secondary);margin:8px 0">开新包 → 用完了再点「这包用完」。也可以一次把整批开好。</div>';
+      html += '<button class="btn btn-outline btn-full btn-sm" style="margin-bottom:8px" onclick="openAllPacks(\'' + itemId + '\',\'' + variantId + '\')">📦 整批开启（每规格各开 1 包）</button>';
+      html += '<button class="btn btn-primary btn-full" onclick="confirmOpenCombo(\'' + itemId + '\',\'' + variantId + '\')">✅ 这包用完了</button>';
+    } else {
+      html += '<div class="form-group">';
+      html += '<label class="form-label">开始使用日期</label>';
+      html += '<input type="date" class="form-input" id="open-date" value="' + new Date().toISOString().split('T')[0] + '">';
+      html += '</div>';
+      html += '<button class="btn btn-primary btn-full" onclick="confirmOpen(\'' + itemId + '\',\'' + variantId + '\')">确认开封</button>';
+    }
     html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">取消</button>';
     document.getElementById('modal-content').innerHTML = html;
     document.getElementById('modal-overlay').classList.add('show');
@@ -3741,17 +3890,126 @@ function adjustOpenQty(delta) {
   var valEl = document.getElementById('open-qty-val');
   if (valEl) valEl.textContent = window._openQty;
 }
-// 多规格开封：每个规格独立步进（0 ~ 该规格剩余份数）
+// 多规格开封：每个规格独立步进（0 ~ 该规格剩余份数）；k = v.specs 原始下标
 function adjustSpecOpen(k, delta) {
   var q = window._openSpecQty || {};
   var item = getItem(currentZoneId, window._openItemId);
   var v = item && item.variants ? item.variants.find(function (x) { return x.id === window._openVariantId; }) : null;
-  var sp = v ? variantSpecsOf(v) : [];
-  var max = sp[k] ? sp[k].qty : 0;
+  var s = v ? (v.specs || [])[k] : null;
+  var max = s ? specPiecesOf(s) : 0;
   q[k] = Math.max(0, Math.min(max, (q[k] || 0) + delta));
   window._openSpecQty = q;
   var el = document.getElementById('spec-open-' + k);
   if (el) el.textContent = q[k];
+}
+
+// ========== 模型④ 组合消耗型：动作按「包」，统计按「片」 ==========
+// 说明：specIdx 是 v.specs 的原始下标（UI 与记录都用它），但只有「有效规格」才可操作
+// 开启新包：某子规格 packCount -1，记一条开包记录（带 specName / packPieces）
+function openOnePack(itemId, variantId, specIdx) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  var v = item.variants.find(function (x) { return x.id === variantId; });
+  if (!v) return;
+  var s = (v.specs || [])[specIdx];
+  if (!s) return;
+  // 该规格必须仍然是「有效规格」（包数 > 0），否则视为不可操作
+  if (specPackCount(s) <= 0) { toast('这个规格已经没有新包了'); return; }
+  var packs = specPackCount(s);
+  var pq = specPackQty(s), u = s.unit || '';
+  var nm = s.name || ('规格' + (specIdx + 1));
+
+  s.packCount = Math.round((packs - 1) * 100) / 100;
+  // packQty 不变（新包的量），但「剩余件数」由 packCount × packQty 决定
+  s.qty = Math.round(specPiecesOf(s) * 100) / 100;
+  // 记下「这一包正在用」的规格（同一时间每个规格最多一包在开）
+  s.__openPack = true;
+
+  var nowISO = new Date().toISOString();
+  if (!item.usageRecords) item.usageRecords = [];
+  // 同一规格已有未结束的开包记录 → 先收尾（用户连点两次开包 = 上一包也用完了）
+  (item.usageRecords || []).forEach(function (r) {
+    if (r.variantId === variantId && r.specName === nm && !r.endDate && !r.instant) r.endDate = nowISO;
+  });
+  item.usageRecords.push({
+    startDate: nowISO, endDate: null,
+    qty: pq, variantId: variantId, brand: v.brand,
+    specName: nm, packPieces: pq,
+    specText: nm + '×1包' + (pq !== 1 ? '（' + trimNum(pq) + u + '）' : '')
+  });
+
+  v.stock = variantSpecContent(v);
+  v.opened = true;
+  v.openDate = nowISO;
+  var allGone = variantSpecsOf(v).every(function (x) { return specPiecesOf(x) <= 0; });
+  if (variantSpecContent(v) <= 0 && allGone) { v.usedUp = true; v.finishDate = nowISO; }
+  syncItemFromVariants(item);
+  saveDB();
+  closeModal();
+  openCardDetail(currentZoneId, itemId);
+  toast('已开启 ' + nm + ' 新包' + (pq !== 1 ? '（' + trimNum(pq) + u + '）' : '') + '，剩 ' + trimNum(specPackCount(s)) + ' 包未开');
+}
+
+// 整批开启：每个还有包的规格各开 1 包
+function openAllPacks(itemId, variantId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  var v = item.variants.find(function (x) { return x.id === variantId; });
+  if (!v) return;
+  var sp = variantSpecsOf(v);
+  var openedCount = 0;
+  var nowISO = new Date().toISOString();
+  if (!item.usageRecords) item.usageRecords = [];
+  sp.forEach(function (s) {
+    if (specPackCount(s) <= 0) return;
+    var nm = s.name || '规格';
+    var pq = specPackQty(s);
+    s.packCount = Math.round((specPackCount(s) - 1) * 100) / 100;
+    s.qty = Math.round(specPiecesOf(s) * 100) / 100;
+    s.__openPack = true;
+    (item.usageRecords || []).forEach(function (r) {
+      if (r.variantId === variantId && r.specName === nm && !r.endDate && !r.instant) r.endDate = nowISO;
+    });
+    item.usageRecords.push({
+      startDate: nowISO, endDate: null, qty: pq, variantId: variantId, brand: v.brand,
+      specName: nm, packPieces: pq, specText: nm + '×1包'
+    });
+    openedCount++;
+  });
+  if (!openedCount) { toast('没有可开启的新包'); return; }
+  v.stock = variantSpecContent(v);
+  v.opened = true;
+  v.openDate = v.openDate || nowISO;
+  syncItemFromVariants(item);
+  saveDB();
+  closeModal();
+  openCardDetail(currentZoneId, itemId);
+  toast('已整批开启 ' + openedCount + ' 个规格的新包');
+}
+
+// 这包用完了：结束所有未结束的开包记录（不扣库存——开包时已扣）
+function confirmOpenCombo(itemId, variantId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  var v = item.variants.find(function (x) { return x.id === variantId; });
+  if (!v) return;
+  var nowISO = new Date().toISOString();
+  var closed = 0, usedPieces = 0;
+  (item.usageRecords || []).forEach(function (r) {
+    if (r.variantId === variantId && r.specName && !r.endDate && !r.instant) {
+      r.endDate = nowISO; closed++; usedPieces += (r.qty || 0);
+    }
+  });
+  if (!closed) { toast('没有正在使用的包（先点「开启新包」）'); return; }
+  variantSpecsOf(v).forEach(function (s) { s.__openPack = false; });
+  var allGone = variantSpecsOf(v).every(function (s) { return specPiecesOf(s) <= 0; });
+  if (allGone) { v.usedUp = true; v.finishDate = nowISO; }
+  else { v.opened = false; v.usedUp = false; v.finishDate = null; }
+  syncItemFromVariants(item);
+  saveDB();
+  closeModal();
+  openCardDetail(currentZoneId, itemId);
+  toast('这包已用完（' + closed + ' 个规格，共 ' + trimNum(usedPieces) + variantSpecUnit(v) + '）');
 }
 
 function confirmOpen(itemId, variantId, markAsUsed) {
@@ -3768,20 +4026,31 @@ function confirmOpen(itemId, variantId, markAsUsed) {
   if (spOpen.length && window._openSpecQty) {
     var usedParts = [], pieces = 0, contentUsed = 0;
     var spUnit = variantSpecUnit(v); // 先取单位：扣完可能全部归零，之后再取就空了
-    spOpen.forEach(function (s, k) {
-      var n = Math.min(window._openSpecQty[k] || 0, s.qty);
+    spOpen.forEach(function (s) {
+      var k = (v.specs || []).indexOf(s); // 原始下标：与 adjustSpecOpen / 表单一致
+      var avail = specPiecesOf(s);                     // 可开的份数 = 包数 × 每包含量
+      var n = Math.min(window._openSpecQty[k] || 0, avail);
       if (n <= 0) return;
-      s.qty -= n;
+      // 两层扣减：按包的整数部分扣 packCount，零头留在 packQty 上，保证「件数」守恒
+      var pq = specPackQty(s);
+      var packsOff = Math.floor(n / pq);
+      var rest = Math.round((n - packsOff * pq) * 100) / 100;
+      var newPacks = Math.round((specPackCount(s) - packsOff) * 100) / 100;
+      if (newPacks < 0) newPacks = 0;
+      s.packCount = newPacks;
+      s.packQty = (rest > 0 && newPacks > 0) ? rest : pq;
+      if (newPacks <= 0) { s.packCount = 0; s.packQty = 0; }
+      s.qty = Math.round(specPiecesOf(s) * 100) / 100; // 兼容字段同步
       usedParts.push((s.name || '规格' + (k + 1)) + '×' + n);
       pieces += n;
-      contentUsed += n * (+s.content || 0);
+      contentUsed += n * specContentOf(s);
     });
     if (!pieces) { toast('先选择要开封的规格'); return; }
     v.opened = true;
     v.openDate = nowISO;
     v.openQty = pieces;
     v.stock = variantSpecContent(v);
-    var allEmpty = spOpen.every(function (s) { return s.qty <= 0; });
+    var allEmpty = spOpen.every(function (s) { return specPiecesOf(s) <= 0; });
     if (allEmpty) { v.usedUp = true; v.finishDate = nowISO; }
     if (!item.usageRecords) item.usageRecords = [];
     item.usageRecords.push({
@@ -3851,6 +4120,101 @@ function confirmFinish(itemId, variantId) {
   toast('已记录用完。消耗数据已更新');
 }
 
+// ========== 模型③ 即时消耗型：纯打卡扣减 ==========
+// 语义：点一次 = 消耗一份，可反复点；不设 opened/finishDate，也不进「本批用完」流程；
+//      扣到 0 才自动折叠进「已用完」。记录标记 instant:true，便于和周期型区分统计。
+function punchInstant(itemId, variantId, delta) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  var v = item.variants.find(function (x) { return x.id === variantId; });
+  if (!v) return;
+  var d = (delta === undefined) ? 1 : parseFloat(delta);
+  if (!(d > 0)) return;
+  var stock = parseFloat(v.stock) || 0;
+  if (stock <= 0) { toast('已经用完了'); return; }
+  var take = Math.min(d, stock);
+  var u = v.packUnit || mainPackUnit(item) || '份';
+
+  v.stock = Math.round((stock - take) * 100) / 100;
+  // 即时消耗不区分「开封/用完」两态，只保留一个滚动中的批次（用不完就一直累积为一条）
+  var rec = null;
+  if (item.usageRecords) {
+    for (var i = item.usageRecords.length - 1; i >= 0; i--) {
+      var r = item.usageRecords[i];
+      if (r.variantId === variantId && r.instant) { rec = r; break; }
+    }
+  }
+  if (!item.usageRecords) item.usageRecords = [];
+  var nowISO = new Date().toISOString();
+  if (rec) {
+    rec.qty = Math.round(((rec.qty || 0) + take) * 100) / 100;
+    rec.endDate = nowISO;
+  } else {
+    item.usageRecords.push({
+      startDate: nowISO, endDate: nowISO, qty: take,
+      variantId: variantId, brand: v.brand, instant: true
+    });
+  }
+  // 扣到 0 才算真正用完 → 折叠
+  if (v.stock <= 0) {
+    v.usedUp = true;
+    v.finishDate = nowISO;
+    if (rec) rec.endDate = nowISO;
+    syncItemFromVariants(item);
+    saveDB();
+    openCardDetail(currentZoneId, itemId);
+    toast('已用完（今年累计 ' + trimNum(instantUsedQty(item, variantId)) + u + '）');
+    return;
+  }
+  syncItemFromVariants(item);
+  saveDB();
+  openCardDetail(currentZoneId, itemId);
+  toast('打卡 -' + trimNum(take) + u + '，剩 ' + trimNum(v.stock) + u);
+}
+// 某变体本年的即时消耗量（按记录年份汇总）
+function instantUsedQty(item, variantId, year) {
+  var y = year || new Date().getFullYear();
+  return (item.usageRecords || [])
+    .filter(function (r) {
+      if (!r.instant) return false;
+      if (variantId && r.variantId !== variantId) return false;
+      var d = new Date(r.endDate || r.startDate);
+      return d.getFullYear() === y;
+    })
+    .reduce(function (s, r) { return s + (parseFloat(r.qty) || 0); }, 0);
+}
+// 模型③改数量：点「−」回落 / 点错撤销（不允许低于 0，也不超过购买总量）
+function unpunchInstant(itemId, variantId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  var v = item.variants.find(function (x) { return x.id === variantId; });
+  if (!v) return;
+  if (!item.usageRecords) { toast('没有可撤销的打卡'); return; }
+  var rec = null;
+  for (var i = item.usageRecords.length - 1; i >= 0; i--) {
+    var r = item.usageRecords[i];
+    if (r.variantId === variantId && r.instant && (r.qty || 0) > 0) { rec = r; break; }
+  }
+  if (!rec) { toast('没有可撤销的打卡'); return; }
+  var u = v.packUnit || mainPackUnit(item) || '份';
+  rec.qty = Math.round(((rec.qty || 0) - 1) * 100) / 100;
+  if (rec.qty <= 0) item.usageRecords.splice(item.usageRecords.indexOf(rec), 1);
+  v.stock = Math.round(((parseFloat(v.stock) || 0) + 1) * 100) / 100;
+  if (v.stock > 0 && v.usedUp) { v.usedUp = false; v.finishDate = null; }
+  syncItemFromVariants(item);
+  saveDB();
+  openCardDetail(currentZoneId, itemId);
+  toast('已撤销 1' + u + '，剩 ' + trimNum(v.stock) + u);
+}
+
+// 即时消耗型：点「消耗一份」时作用在哪个品牌上
+// 规则：优先还有库存的品牌；多个都有 → 取第一个（用户可在卡片里切换品牌后单独点）
+function instantTargetVariant(item) {
+  var vs = (item.variants || []).filter(function (v) { return !v.usedUp && (parseFloat(v.stock) || 0) > 0; });
+  if (!vs.length) return (item.variants && item.variants[0]) ? item.variants[0].id : '';
+  return vs[0].id;
+}
+
 // 直接标记某个变体用完（用于多变体的"用完了"按钮，食品类直接完成）
 function finishVariant(itemId, variantId) {
   var item = getItem(currentZoneId, itemId);
@@ -3873,6 +4237,16 @@ function finishVariant(itemId, variantId) {
     v.finishDate = null;
     v.opened = false; // 本批结束，剩余库存等下次开封
     var usedC = (recF && recF.contentUsed > 0) ? recF.contentUsed : 0;
+    // 整变体已清零（规格全部为 0）→ 真正用完，折叠进「已用完」区
+    if (variantSpecContent(v) <= 0) {
+      v.usedUp = true;
+      v.finishDate = v.finishDate || nowF;
+      syncItemFromVariants(item);
+      saveDB();
+      openCardDetail(currentZoneId, itemId);
+      toast('已用完' + (usedC > 0 ? '（≈' + trimNum(usedC) + variantSpecUnit(v) + '）' : ''));
+      return;
+    }
     var remainC = variantSpecContent(v), remainP = variantSpecPieces(v), spU = variantSpecUnit(v);
     syncItemFromVariants(item);
     saveDB();
@@ -4332,31 +4706,25 @@ function openItemForm(itemId) {
     html += '<button class="btn btn-outline btn-sm" style="margin-top:6px;width:100%" onclick="addConsumableVariantRow()">＋ 添加品牌</button>';
     html += '</div>';
 
-    // 消耗模式（用户手动定义，系统不自动猜）
-    var mPack = (!item || item.consumeMode !== 'unit');
-    var mUnit = (item && item.consumeMode === 'unit');
+    // 消耗模型（四个模型，你手动定义，系统不自动猜）
+    var cmNow = consumeModelOf(item);
+    var cmOrder = ['count', 'spec', 'instant', 'combo'];
     html += '<div class="form-group">';
-    html += '<label class="form-label">消耗模式（你手动定义）</label>';
-    html += '<div style="display:flex;gap:8px">';
-    html += '<button type="button" class="btn ' + (mPack ? 'btn-primary' : 'btn-outline') + '" style="flex:1" data-cmode="pack" onclick="setConsumeMode(\'pack\')">📦 套餐消耗</button>';
-    html += '<button type="button" class="btn ' + (mUnit ? 'btn-primary' : 'btn-outline') + '" style="flex:1" data-cmode="unit" onclick="setConsumeMode(\'unit\')">🔢 小单位消耗</button>';
+    html += '<label class="form-label">消耗模型（你手动定义）</label>';
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+    cmOrder.forEach(function (k) {
+      var m = CONSUME_MODELS[k];
+      var on = (cmNow === k);
+      html += '<button type="button" class="btn ' + (on ? 'btn-primary' : 'btn-outline') + '" style="flex-direction:column;align-items:flex-start;line-height:1.35;padding:8px 10px;text-align:left" data-cmode="' + k + '" onclick="setConsumeMode(\'' + k + '\')">';
+      html += '<span style="font-size:13px;font-weight:700">' + m.icon + ' ' + m.name + '</span>';
+      html += '<span style="font-size:10px;font-weight:400;opacity:.85;white-space:normal">' + m.desc + '</span>';
+      html += '</button>';
+    });
     html += '</div>';
-    html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">套餐消耗：开一整套用，用完再开下一整套（纸巾/猫粮/凝珠）。小单位消耗：每次取一个小单位，包装只是采购打包（面膜/小样）。</div>';
-    html += '<input type="hidden" id="item-consumemode" value="' + (mUnit ? 'unit' : 'pack') + '">';
+    html += '<div id="cm-hint" style="font-size:12px;color:var(--text-secondary);margin-top:6px">' + CONSUME_MODELS[cmNow].desc + '</div>';
+    html += '<input type="hidden" id="item-consumemode" value="' + cmNow + '">';
     html += '</div>';
 
-    html += '<div class="form-group">';
-    html += '<label class="form-label">开袋即用完</label>';
-    html += '<div class="switch-row"><span class="switch-desc">开封后自动标记为已用完（适合食品、小样、一次性用品，由你手动决定）</span>';
-    html += '<label class="switch"><input type="checkbox" id="item-oneshot"' + (item && item.oneShot === true ? ' checked' : '') + '><span class="slider"></span></label>';
-    html += '</div></div>';
-
-    html += '<div class="form-row">';
-    html += '<div class="form-group"><label class="form-label">保质期（月）</label><input type="number" class="form-input" id="item-shelf" value="' + (item?(item.shelfLife||''):'') + '" placeholder="如：12"></div>';
-    html += '<div class="form-group"><label class="form-label">生产日期</label><input type="date" class="form-input" id="item-prod-date" value="' + (item&&item.productionDate?item.productionDate.split('T')[0]:'') + '"></div>';
-    html += '</div>';
-    html += '<div class="form-row">';
-    html += '<div class="form-group"><label class="form-label">单位</label><input type="text" class="form-input" id="item-unit" value="' + (item?escapeHtml(item.unit||''):'个') + '"></div>';
     html += '<div class="form-group"><label class="form-label">库存告急阈值</label><input type="number" class="form-input" id="item-threshold" value="' + (item?(item.stockThreshold||1):1) + '" step="0.5"></div>';
     html += '</div>';
   }
@@ -4381,12 +4749,16 @@ function openItemForm(itemId) {
 
 // 切换消耗模式（套餐/小单位）
 function setConsumeMode(m) {
+  if (!CONSUME_MODELS[m]) m = 'spec';
   var el = document.getElementById('item-consumemode');
   if (el) el.value = m;
   document.querySelectorAll('[data-cmode]').forEach(function(b) {
     var on = b.getAttribute('data-cmode') === m;
     b.className = 'btn ' + (on ? 'btn-primary' : 'btn-outline');
+    b.setAttribute('style', 'flex-direction:column;align-items:flex-start;line-height:1.35;padding:8px 10px;text-align:left');
   });
+  var hint = document.getElementById('cm-hint');
+  if (hint) hint.textContent = CONSUME_MODELS[m].desc;
 }
 
 // 根据所选大类填充子分类下拉（选填）
@@ -4464,44 +4836,48 @@ function renderConsumableVariantRows() {
     // 品牌名 + 套餐数 × 套餐价 = 总价（套餐模型）
     html += '<div style="flex:1;display:flex;flex-direction:column;gap:8px">';
     html += '<input type="text" class="form-input" style="font-size:14px" placeholder="品牌名" value="' + escapeHtml(v.brand) + '" onchange="updateConsumableVariantField(' + i + ',\'brand\',this.value)">';
-    // 套餐数 × 套餐价 = 总价（单行紧凑）
+    // ===== 七项主结构：主名称 / 总套餐数 / 套餐单价 / 套餐总价 / 套餐内包数 / 单包规格 / 规格单位 =====
+    // 字段映射：packCount=总套餐数、packQty=套餐内包数、packWeight=单包规格、packWeightUnit=规格单位
     var cPack = v.packCount || 0;
     var cPackPrice = v.packPrice || 0;
     var cPackQty = v.packQty || '';
     var cWeight = v.packWeight || '';
     var cWeightUnit = v.packWeightUnit || '';
-    var cStock = v.stock || 0;
     var cTotal = v.totalPrice || (cPackPrice * cPack);
+    // 行1：总套餐数 × 套餐单价 = 套餐总价
     html += '<div style="display:flex;gap:6px;align-items:center">';
-    html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="套餐数" value="' + (cPack||'') + '" oninput="onConsumablePriceInput(' + i + ',\'pack\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'pack\',this.value)" step="1">';
+    html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="总套餐数" value="' + (cPack||'') + '" oninput="onConsumablePriceInput(' + i + ',\'pack\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'pack\',this.value)" step="1" title="买了几套">';
     html += '<span style="font-size:12px;color:var(--text-tertiary)">×</span>';
-    html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="套餐价" value="' + (cPackPrice||'') + '" oninput="onConsumablePriceInput(' + i + ',\'packprice\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'packprice\',this.value)" step="0.01">';
+    html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="套餐单价" value="' + (cPackPrice||'') + '" oninput="onConsumablePriceInput(' + i + ',\'packprice\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'packprice\',this.value)" step="0.01">';
     html += '<span style="font-size:12px;color:var(--text-tertiary)">=</span>';
-    html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="总价" value="' + (cTotal||'') + '" oninput="onConsumablePriceInput(' + i + ',\'total\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'total\',this.value)" step="0.01">';
+    html += '<input type="number" class="form-input" style="font-size:13px;flex:1;min-width:0" placeholder="套餐总价" value="' + (cTotal||'') + '" oninput="onConsumablePriceInput(' + i + ',\'total\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'total\',this.value)" step="0.01">';
     html += '</div>';
-    // 每套含数 + 每套单位 + 每小单位含量 + 含量单位（用于比价 + 库存含量显示）
+    // 行2：套餐内包数 / 单包规格 / 规格单位
     html += '<div style="display:flex;gap:6px;align-items:center">';
-    html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="每套含多少(如30ml填30)" value="' + (cPackQty||'') + '" oninput="onConsumablePriceInput(' + i + ',\'packqty\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'packqty\',this.value)" step="1" title="一套里含多少个小单位；混合套餐可直接写算式，如 3*77+2*45">';
-    html += '<input type="text" class="form-input" style="font-size:12px;width:76px;flex-shrink:0" placeholder="单位:ml/颗/片" value="' + escapeHtml(v.packUnit || '') + '" oninput="onConsumableUnitInput(' + i + ',this.value)" title="每套含数的单位，任意填写：ml、毫升、L、颗、片、包…">';
-    html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="每单位含量选填" value="' + (cWeight||'') + '" oninput="onConsumablePriceInput(' + i + ',\'weight\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'weight\',this.value)" step="0.01" title="填每个小单位的含量（如猫粮一袋1kg填1；护理液一瓶200ml填200）。填了就按含量单位比价，库存也会显示总含量">';
-    // 含量单位不写死：可选常用项，也可自己填（ml / kg / g / L / 粒 / 个 / 片 / 颗 / 包 / 瓶 …）
-    html += '<input type="text" class="form-input" style="font-size:12px;width:58px;flex-shrink:0" list="spec-unit-list" placeholder="单位" value="' + escapeHtml(cWeightUnit || '') + '" onchange="onConsumableWeightUnitInput(' + i + ',this.value)" title="含量单位，可自己填：ml / kg / g / L / 粒 / 个 / 片 / 颗 …">';
+    html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="套餐内包数" value="' + (cPackQty||'') + '" oninput="onConsumablePriceInput(' + i + ',\'packqty\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'packqty\',this.value)" step="1" title="一套里有几包（如猫粮 1盒6包填6；面霜 1盒1瓶填1，留空=1）">';
+    html += '<input type="number" class="form-input" style="font-size:12px;flex:1;min-width:0" placeholder="单包规格" value="' + (cWeight||'') + '" oninput="onConsumablePriceInput(' + i + ',\'weight\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'weight\',this.value)" step="0.01" title="一包含多少（猫粮 1.5KG填1.5；面霜 15ml填15）">';
+    html += '<input type="text" class="form-input" style="font-size:12px;width:70px;flex-shrink:0" list="spec-unit-list" placeholder="规格单位" value="' + escapeHtml(cWeightUnit || '') + '" onchange="onConsumableWeightUnitInput(' + i + ',this.value)" title="kg / L / ml / g / 片 / 个 / 包 …">';
     html += '</div>';
-    // 库存提示（衍生，非编辑）：带计算过程，一眼看懂"每套含"该填什么
+    // 库存提示（衍生，非编辑）：带完整算式
     html += '<div id="packstock-' + i + '" style="font-size:12px;color:var(--text-secondary);line-height:1.5">' + packHintOf(v) + '</div>';
-    // 混合规格（本品牌可选）：一个品牌下可以有多种规格的存货（正装 1瓶×50ml + 小样 3个×15ml）
+    // 混合规格（本品牌可选）：组合消耗型④用「包数 × 每包含量」，如 日用 3包×5片 = 15片
     html += '<div style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">';
-    html += '<span style="font-size:12px;color:var(--text-secondary)">🧩 混合规格（选填）</span>';
+    html += '<span style="font-size:12px;color:var(--text-secondary)">🧩 规格明细（选填）</span>';
     html += '<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:' + (v.specPerPack ? 'var(--accent)' : 'var(--text-tertiary)') + ';cursor:pointer"><input type="checkbox" ' + (v.specPerPack ? 'checked' : '') + ' onchange="onSpecPerPackToggle(' + i + ',this.checked)"> 明细是一套的量（×套餐数）</label>';
+    html += '</div>';
+    html += '<div style="display:flex;gap:4px;margin:4px 0 2px;font-size:10px;color:var(--text-tertiary)">';
+    html += '<span style="flex:1.4;min-width:0">名称</span><span style="flex:.85;min-width:0">包数</span><span style="flex:.85;min-width:0">每包含量</span><span style="width:52px;flex-shrink:0">单位</span><span style="width:30px;flex-shrink:0"></span>';
     html += '</div>';
     (v.specs || []).forEach(function (s, k) {
       html += '<div style="display:flex;gap:4px;margin-bottom:4px">';
-      html += '<input type="text" class="form-input" style="font-size:12px;flex:1.2;min-width:0;padding:5px 6px" placeholder="名称(正装)" value="' + escapeHtml(s.name || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'name\',this.value)">';
-      html += '<input type="number" class="form-input" style="font-size:12px;flex:.8;min-width:0;padding:5px 6px" placeholder="份数" value="' + (s.qty || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'qty\',parseFloat(this.value)||0)">';
-      html += '<input type="number" class="form-input" style="font-size:12px;flex:.9;min-width:0;padding:5px 6px" placeholder="每份含量" value="' + (s.content || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'content\',parseFloat(this.value)||0)">';
-      html += '<input type="text" class="form-input" style="font-size:12px;width:52px;flex-shrink:0;padding:5px 4px" placeholder="单位" value="' + escapeHtml(s.unit || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'unit\',this.value)" list="spec-unit-list">';
+      html += '<input type="text" class="form-input" style="font-size:12px;flex:1.4;min-width:0;padding:5px 6px" placeholder="日用" value="' + escapeHtml(s.name || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'name\',this.value)">';
+      html += '<input type="number" class="form-input" style="font-size:12px;flex:.85;min-width:0;padding:5px 6px" placeholder="3" value="' + (specPackCountRaw(s) || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'packCount\',this.value)">';
+      html += '<input type="number" class="form-input" style="font-size:12px;flex:.85;min-width:0;padding:5px 6px" placeholder="5" value="' + (specPackQtyRaw(s) || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'packQty\',this.value)">';
+      html += '<input type="text" class="form-input" style="font-size:12px;width:52px;flex-shrink:0;padding:5px 4px" placeholder="片" value="' + escapeHtml(s.unit || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'unit\',this.value)" list="spec-unit-list">';
       html += '<button class="btn btn-danger btn-sm" style="flex-shrink:0;padding:5px 7px" onclick="removeVariantSpec(' + i + ',' + k + ')">✕</button>';
       html += '</div>';
+      // 该规格的算式预览（如 日用 3包×5片 = 15片）
+      html += '<div style="font-size:11px;color:var(--text-tertiary);margin:-2px 0 4px 2px">' + escapeHtml(specLineText(s)) + '</div>';
     });
     html += '<button class="btn btn-outline btn-sm" style="width:100%;padding:5px;margin-bottom:4px" onclick="addVariantSpec(' + i + ')">＋ 添加规格</button>';
     var spTxt = variantSpecText(v);
@@ -4578,39 +4954,41 @@ function onConsumablePriceInput(idx, which, val) {
   var row = document.querySelectorAll('.consumable-variant-row')[idx];
   if (!row) return;
   var inputs = row.querySelectorAll('input[type=number]');
-  // inputs[0]=套餐数 [1]=套餐价 [2]=总价 [3]=每套含数 [4]=重量
+  // inputs[0]=总套餐数 [1]=套餐单价 [2]=套餐总价 [3]=套餐内包数 [4]=单包规格
   var packEl = inputs[0], priceEl = inputs[1], totalEl = inputs[2], qtyEl = inputs[3], weightEl = inputs[4];
-  var packCount = parseFloat(v.packCount) || 0;
-  var packPrice = parseFloat(v.packPrice) || 0;
-  var packQty = parseFloat(v.packQty) || 1;
-  var weight = parseFloat(v.packWeight) || 0;
+  // 空值语义统一：数量类字段留空 → 记为 ''（按 1 参与计算），显式 0 → 记为 0
+  function numOrEmpty(x) { var s = String(x == null ? '' : x).trim(); return s === '' ? '' : (parseFloat(s) || 0); }
   if (which === 'pack') {
-    packCount = parseFloat(val) || 0; v.packCount = packCount;
+    v.packCount = numOrEmpty(val);
   } else if (which === 'packprice') {
-    packPrice = parseFloat(val) || 0; v.packPrice = packPrice;
+    v.packPrice = parseFloat(val) || 0;
   } else if (which === 'total') {
     var t = parseFloat(val) || 0; v.totalPrice = t;
-    if (packCount > 0) { packPrice = t / packCount; v.packPrice = packPrice; }
   } else if (which === 'packqty') {
     var evQ = evalSimpleExpr(val);
-    packQty = (!isNaN(evQ) && evQ > 0) ? evQ : (parseFloat(val) || 1);
-    v.packQty = packQty;
+    v.packQty = (!isNaN(evQ) && evQ >= 0) ? evQ : numOrEmpty(val);
   } else if (which === 'weight') {
-    weight = parseFloat(val) || 0; v.packWeight = weight;
+    v.packWeight = numOrEmpty(val);
   }
-  // 重算：总价 = 套餐数 × 套餐价；库存 = 套餐数 × 每套含数；单价 = 总价 / 库存
-  v.totalPrice = Math.round(packCount * packPrice * 100) / 100;
-  var stock = Math.max(0, Math.round(packCount * packQty));
-  // 混合规格变体：库存以规格明细为准（保存时重算），这里不改写
-  if (!(v.specs && v.specs.length)) v.stock = stock;
-  v.price = stock > 0 ? Math.round((v.totalPrice / stock) * 100) / 100 : (packPrice || 0);
-  // 只回写"非当前正在编辑"的框，避免打断小数点输入（如 44. 输入到一半）
+  // 参与计算时：留空 = 1，填 0 = 0
+  var pc = (v.packCount === '' || v.packCount == null) ? 1 : (parseFloat(v.packCount) || 0);
+  var pq = (v.packQty === '' || v.packQty == null) ? 1 : (parseFloat(v.packQty) || 0);
+  var priceV = parseFloat(v.packPrice) || 0;
+  var weightV = (v.packWeight === '' || v.packWeight == null) ? 1 : (parseFloat(v.packWeight) || 0);
+  // 联动：总价随套餐数×套餐价变化（用户正在编辑总价框时不回压）
+  if (which !== 'total') v.totalPrice = Math.round(pc * priceV * 100) / 100;
+  // 库存 = 总套餐数 × 套餐内包数（件数口径）；含量 = 再 × 单包规格（保存时统一以明细/主结构重算）
+  var pieces = Math.round(pc * pq * 100) / 100;
+  if (!(v.specs && v.specs.length)) v.stock = Math.max(0, pieces);
+  var contentStock = Math.round(pieces * weightV * 100) / 100;
+  v.price = contentStock > 0 ? Math.round((v.totalPrice / contentStock) * 100) / 100 : priceV;
+  // 只回写"非当前正在编辑"的框，避免打断小数点输入
   var curEl = which === 'pack' ? packEl : which === 'packprice' ? priceEl : which === 'total' ? totalEl : which === 'packqty' ? qtyEl : weightEl;
-  if (packEl && packEl !== curEl) packEl.value = packCount || '';
-  if (priceEl && priceEl !== curEl) priceEl.value = packPrice || '';
+  if (packEl && packEl !== curEl) packEl.value = (v.packCount === 0 ? 0 : (v.packCount || ''));
+  if (priceEl && priceEl !== curEl) priceEl.value = priceV || '';
   if (totalEl && totalEl !== curEl) totalEl.value = v.totalPrice || '';
-  if (qtyEl && qtyEl !== curEl) qtyEl.value = (packQty > 0 ? packQty : '');
-  if (weightEl && weightEl !== curEl) weightEl.value = weight || '';
+  if (qtyEl && qtyEl !== curEl) qtyEl.value = (v.packQty === 0 ? 0 : (v.packQty || ''));
+  if (weightEl && weightEl !== curEl) weightEl.value = (v.packWeight === 0 ? 0 : (v.packWeight || ''));
   var hint = document.getElementById('packstock-' + idx);
   if (hint) hint.innerHTML = packHintOf(v);
 }
@@ -4620,55 +4998,66 @@ function onConsumablePriceBlur(idx, which, val) {
   if (!v) return;
   var raw = (val === undefined || val === null) ? '' : String(val).trim();
   var num = raw === '' ? 0 : (parseFloat(raw) || 0);
-  if (which === 'pack') v.packCount = num;
+  // 空值语义：留空记 ''（按 1 计算），显式 0 记 0
+  if (which === 'pack') v.packCount = raw === '' ? '' : num;
   else if (which === 'packprice') v.packPrice = num;
   else if (which === 'total') v.totalPrice = num;
   else if (which === 'packqty') {
     var evB = evalSimpleExpr(raw);
-    num = (!isNaN(evB) && evB > 0) ? evB : num;
-    v.packQty = num > 0 ? num : 1;
+    num = (!isNaN(evB) && evB >= 0) ? evB : num;
+    v.packQty = raw === '' ? '' : num;
   }
-  else if (which === 'weight') v.packWeight = num;
+  else if (which === 'weight') v.packWeight = raw === '' ? '' : num;
   var row = document.querySelectorAll('.consumable-variant-row')[idx];
   if (!row) return;
   var inputs = row.querySelectorAll('input[type=number]');
   var el = which === 'pack' ? inputs[0] : which === 'packprice' ? inputs[1] : which === 'total' ? inputs[2] : which === 'packqty' ? inputs[3] : inputs[4];
   if (el) {
     if (raw === '') el.value = '';
-    else if (which === 'pack') el.value = String(num);
-    else if (which === 'packqty') el.value = num > 0 ? String(num) : '';
+    else if (which === 'pack' || which === 'packqty') el.value = String(num);
     else el.value = num.toFixed(2);
   }
   onConsumablePriceInput(idx, which, String(num));
 }
-// 库存提示：带计算过程（套餐数 × 每套含 = 库存小单位）
+// 库存提示：带计算过程（总套餐数 × 套餐内包数 × 单包规格 = 库存）
+// 规则：留空的一律按 1 参与计算（也可以填 0）；全部留空则只显示「未填写」
 function packHintOf(v) {
+  var MUL = ' <span style="color:var(--text-tertiary)">×</span> ';
   // 混合规格：直接列出每种规格的件数与含量，再汇总
   var sp = variantSpecsOf(v);
   if (sp.length) {
     var parts = sp.map(function (s) {
       var nm = String(s.name || '').trim();
-      return (nm ? nm + ' ' : '') + trimNum(+s.qty) + '×' + trimNum(+s.content) + (s.unit || '') + ' = ' + trimNum((+s.qty) * (+s.content)) + (s.unit || '');
+      var u = s.unit || '';
+      return (nm ? nm + ' ' : '') + trimNum(specPackCount(s)) + '包' + MUL + trimNum(specPackQty(s)) + u + '/包 = ' + trimNum(specTotalOf(s)) + u;
     });
     var base = parts.join(' + ') + ' = ' + trimNum(variantSpecContent(v)) + variantSpecUnit(v);
     // 勾了「明细是一套的量」：显示 ×套餐数 的折算预览（如 67片/套 × 2套 = 134片）
     var pcH = parseFloat(v.packCount) || 0;
     if (v.specPerPack && pcH > 1) {
-      return '📦 库存 = ' + base + '/套 × ' + pcH + '套 = ' + trimNum(variantSpecContent(v) * pcH) + variantSpecUnit(v);
+      return '📦 库存 = (' + base + ')' + MUL + pcH + '套 = ' + trimNum(variantSpecContent(v) * pcH) + variantSpecUnit(v) + '（共 ' + trimNum(variantSpecPacks(v) * pcH) + ' 包）';
     }
-    return '📦 库存 = ' + base + '（共 ' + trimNum(variantSpecPieces(v)) + ' 件）';
+    return '📦 库存 = ' + base + '（共 ' + trimNum(variantSpecPacks(v)) + ' 包）';
   }
-  var pc = parseFloat(v.packCount) || 0;
-  var pq = parseFloat(v.packQty) || 1;
-  var st = Math.max(0, Math.round(pc * pq));
-  var u = v.packUnit || '个';
-  var w = parseFloat(v.packWeight) || 0;
-  var wu = weightUnitOf(v);
-  var txt;
-  if (pq > 1) txt = pc + ' 套 × ' + pq + u + '/套 = ' + st + u;
-  else txt = st + ' ' + u;
-  if (w > 0) txt += ' × ' + w + wu + ' ≈ ' + round1(st * w) + wu + '（' + st + ' × ' + w + wu + '/' + u + '）';
-  return '📦 库存 = ' + txt;
+  // 主结构：总套餐数 × 套餐内包数 × 单包规格 = 库存
+  var pcRaw = (v.packCount === '' || v.packCount === undefined || v.packCount === null) ? '' : String(v.packCount);
+  var pqRaw = (v.packQty === '' || v.packQty === undefined || v.packQty === null) ? '' : String(v.packQty);
+  var wRaw = (v.packWeight === '' || v.packWeight === undefined || v.packWeight === null) ? '' : String(v.packWeight);
+  if (pcRaw === '' && pqRaw === '' && wRaw === '') return '📦 库存：填写总套餐数 / 套餐内包数 / 单包规格后自动计算（留空按 1）';
+  var pc = parseFloat(pcRaw) || 0;                 // 空 = 1 → pc 取 1；填 0 就是 0
+  if (pcRaw === '') pc = 1;
+  var pq = parseFloat(pqRaw); if (!isFinite(pq)) pq = 1;
+  var w = wRaw === '' ? 1 : (parseFloat(wRaw) || 0);
+  var content = Math.round(pc * pq * w * 100) / 100; // 库存口径（总含量）
+  var pieces = Math.round(pc * pq * 100) / 100;      // 件数口径（包数）
+  var cu = (v.packWeightUnit || '').trim();          // 规格单位（ml / kg / 片…）
+  var pu = (v.packUnit || '').trim() || '包';        // 套餐内单位（包）
+  var seg = [];
+  seg.push((pcRaw === '' ? '<i style="color:var(--text-tertiary)">1</i>' : trimNum(pc)) + '套');
+  seg.push((pqRaw === '' ? '<i style="color:var(--text-tertiary)">1</i>' : trimNum(pq)) + pu + '/套');
+  if (cu || wRaw !== '') seg.push((wRaw === '' ? '<i style="color:var(--text-tertiary)">1</i>' : trimNum(w)) + cu + '/' + pu);
+  var txt = seg.join(MUL) + ' = ' + trimNum(content) + cu;
+  return '📦 库存 = ' + txt + '（' + trimNum(pieces) + ' ' + pu + '）';
 }
 // 每套单位：任意文本（ml / 毫升 / L / 颗 / 片 / 包…），不限制
 function onConsumableUnitInput(idx, val) {
@@ -4693,7 +5082,7 @@ function onConsumableWeightUnitInput(idx, val) {
 function addConsumableVariantRow() {
   window._editVariants = window._editVariants || [];
   window._editVariantPhotos = window._editVariantPhotos || [];
-  window._editVariants.push({ id: genId(), brand: '', stock: 0, price: 0, totalPrice: 0, packCount: '', packPrice: 0, packQty: '', packUnit: '', packWeight: '', specPerPack: true, photos: [] });
+  window._editVariants.push({ id: genId(), brand: '', stock: 0, price: 0, totalPrice: 0, packCount: '', packPrice: '', packQty: '', packUnit: '包', packWeight: '', packWeightUnit: '', specPerPack: true, specs: [], photos: [] });
   window._editVariantPhotos.push([]);
   document.getElementById('variant-list').innerHTML = renderConsumableVariantRows();
 }
@@ -4987,6 +5376,8 @@ function saveItem() {
     var editVariants = window._editVariants || [];
     var editPhotos = window._editVariantPhotos || [];
     data.variants = editVariants.map(function(ev, i) {
+      // 留空 = 1，填 0 = 0：所有数量类字段统一按此语义归一
+      function normQty(x) { var s = String(x == null ? '' : x).trim(); if (s === '') return 1; return parseFloat(s) || 0; }
       var evStock = parseFloat(ev.stock) || 0;
       var evPrice = parseFloat(ev.price) || 0;
       // 以编辑行数据为基础（保留 packWeightUnit / noRestock / notes 等扩展字段，避免保存时丢失），
@@ -5002,28 +5393,37 @@ function saveItem() {
       nv.photos = (editPhotos[i] || []).slice();
       nv.opened = false; nv.openDate = null; nv.finishDate = null;
       nv.usedUp = false; nv.openQty = 0; nv.feeling = null; nv.shelfLife = null; nv.productionDate = null;
-      nv.packCount = (typeof ev.packCount !== 'undefined' && ev.packCount !== '' ? ev.packCount : evStock);
+      nv.packCount = normQty(ev.packCount);
       nv.packPrice = (typeof ev.packPrice !== 'undefined' ? ev.packPrice : (ev.totalPrice || 0));
-      nv.packQty = (typeof ev.packQty !== 'undefined' && parseFloat(ev.packQty) > 0 ? parseFloat(ev.packQty) : 1); // 选填：空 = 1（不参与乘法）
-      nv.packUnit = ev.packUnit || '个';
-      nv.packWeight = (typeof ev.packWeight !== 'undefined' && ev.packWeight !== '' ? ev.packWeight : 0);
+      nv.packQty = normQty(ev.packQty);
+      nv.packUnit = ev.packUnit || '包';
+      nv.packWeight = normQty(ev.packWeight);
       // 混合规格（本品牌可选）：库存按含量口径汇总，件数仅作参考
-      nv.specs = (ev.specs || []).filter(function (s) { return (+s.qty > 0) && (+s.content > 0); }).map(function (s) {
-        return { name: (s.name || '').trim(), qty: +s.qty || 0, content: +s.content || 0, unit: (s.unit || '').trim() };
-      });
+      // 规格两层结构：packCount(包数) × packQty(每包含量) × content(每份规格)；留空 = 1，填 0 = 0
+      nv.specs = (ev.specs || []).map(function (s) {
+        var spc_ = (s.packCount !== undefined && s.packCount !== null && s.packCount !== '') ? (parseFloat(s.packCount) || 0) : ((+s.qty || 0) > 0 ? +s.qty : 1);
+        var spq_ = (s.packQty !== undefined && s.packQty !== null && s.packQty !== '') ? (parseFloat(s.packQty) || 0) : 1;
+        var sct_ = (s.content !== undefined && s.content !== null && s.content !== '') ? (+s.content || 0) : 1;
+        return { name: (s.name || '').trim(), packCount: spc_, packQty: spq_, content: sct_, unit: (s.unit || '').trim(), qty: Math.round(spc_ * spq_ * 100) / 100 };
+      }).filter(function (s) { return +s.packCount > 0; });
       if (nv.specs.length) {
         // 运算规则：勾选「明细是一套的量」时，specs = 单套构成 × 套餐数 = 全量库存
         // （每套 39+8+20=67片 × 2套 = 134片）；不勾选则 specs 本身就是全部总量，不乘套餐数
         // 折算一次后 specsFolded=true，之后编辑保存不会重复折算
-        var packsN = parseFloat(nv.packCount) || 0;
-        if (nv.specPerPack && packsN > 1) {
-          nv.specs.forEach(function (s) { s.qty = Math.round((+s.qty || 0) * packsN * 100) / 100; });
+        var packsN = parseFloat(nv.packCount); if (!isFinite(packsN)) packsN = 1;
+        if (nv.specPerPack && packsN !== 1) {
+          nv.specs.forEach(function (s) { s.packCount = Math.round((+s.packCount || 0) * packsN * 100) / 100; });
         }
         var sc = 0, spc = 0;
-        nv.specs.forEach(function (s) { sc += s.qty * s.content; spc += s.qty; });
+        nv.specs.forEach(function (s) {
+          spc += specPiecesOf(s);
+          sc += specTotalOf(s);
+          s.qty = Math.round(specPiecesOf(s) * 100) / 100; // 兼容字段：包数 × 每包含量
+          if (!(+s.content > 0)) s.content = 1;
+        });
         nv.stock = Math.round(sc * 100) / 100;          // 库存（小单位总数，如 134片）
         // 保持「套数 × 每套含 = 库存」自洽：2套 × 67片/套 = 134片
-        if (nv.specPerPack && packsN > 1) {
+        if (nv.specPerPack && packsN !== 1) {
           nv.packCount = packsN;
           nv.packQty = Math.round((spc / packsN) * 100) / 100;
         } else {
@@ -5048,13 +5448,10 @@ function saveItem() {
     data.stock = data.variants.reduce(function(s,v) { return s + (v.stock||0); }, 0);
     // 补给品总金额 = 各品牌总价之和
     data.currentPrice = data.variants.reduce(function(s,v){ return s + (v.totalPrice || ((v.price||0)*(v.stock||0))); }, 0);
-    data.unit = document.getElementById('item-unit').value || '个';
-    data.shelfLife = parseInt(document.getElementById('item-shelf').value) || null;
-    var prodDate = document.getElementById('item-prod-date').value;
-    data.productionDate = prodDate ? new Date(prodDate).toISOString() : null;
     data.stockThreshold = parseFloat(document.getElementById('item-threshold').value) || 1;
-    data.oneShot = !!document.getElementById('item-oneshot').checked;
-    data.consumeMode = (document.getElementById('item-consumemode') ? document.getElementById('item-consumemode').value : 'pack') || 'pack';
+    var cmEl = document.getElementById('item-consumemode');
+    data.consumeMode = (cmEl && CONSUME_MODELS[cmEl.value]) ? cmEl.value : 'spec';
+    data.oneShot = (data.consumeMode === 'instant'); // 即时消耗 = 旧 oneShot 语义，保持字段兼容
   } else {
     // 耐用品：从件数编辑器读取
     var dEditVariants = window._editVariants || [];
@@ -5783,7 +6180,10 @@ function saveStockAudit(itemId) {
           if (!el) return;
           var n = parseFloat(el.value);
           if (isNaN(n) || n < 0) { toast('请输入有效份数'); ok = false; return; }
-          s.qty = n;
+          // 两层落账：盘点填的是「剩几份」→ packCount = 份数（每包含量归 1）
+          s.packCount = n;
+          s.packQty = 1;
+          s.qty = n; // 兼容字段同步
           touched = true;
         });
         if (touched) {
