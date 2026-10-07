@@ -3018,6 +3018,96 @@ function aiEntrySubText() {
 }
 
 // ========== 物品状态判断 ==========
+// ===== 【第 18 轮】正在使用中的实物库存（真实可用库存的另一半） =====
+// 语义：开封动作在开包瞬间就把库存扣掉了（specs.openPacks+1 / v.stock-qty），
+// 但那包/那件实物还在手里消耗 —— 「总库存 0 包」绝不等于断粮。
+// 真实可用库存 = 未开库存 + 在用实物。本函数统计「在用实物」：
+//   qty     —— 件数口径：多规格每条未结束记录 = 1 包（1 包 = 1 件）；普通开封记录按 r.qty 累计
+//   content —— 含量口径（kg/ml 等）：多规格 = 该包容量；普通 = r.qty × 单包含量
+//   hasContent —— 含量口径是否完整（有对不上的记录/变体没配含量 → false，禁用含量路径）
+function inUseStockOf(item) {
+  var out = { qty: 0, content: 0, hasContent: true };
+  if (!item) return out;
+  if (consumeModelOf(item) === 'instant') return out;   // 打卡型无「在用」：打卡即扣库存
+  // 旧数据兜底：没有 variantId 的未结束开封记录（早期版本不写品牌归属）——物品级只算一次
+  var recsNoV = (item.usageRecords || []).filter(function (r) {
+    return r && !r.instant && r.type !== 'surplus' && !r.endDate && !r.variantId;
+  });
+  function plainAcc(qty, packW) {
+    var q = parseFloat(qty);
+    if (!(q > 0)) q = 1;
+    out.qty += q;
+    if (packW > 0) out.content += q * packW;
+    else out.hasContent = false;
+  }
+  var wItem = (item.variants && item.variants[0] ? (parseFloat(item.variants[0].packWeight) || 0) : (parseFloat(item.packWeight) || 0));
+  recsNoV.forEach(function (r) { plainAcc(r.qty, wItem); });
+  var vs = (item.variants && item.variants.length) ? item.variants : [];
+  vs.forEach(function (v) {
+    var recs = variantActiveOpenRecs(item, v);
+    if (!recs.length) return;
+    var sp = variantSpecsOf(v);
+    var w = parseFloat(v.packWeight) || 0;
+    recs.forEach(function (r) {
+      if (sp.length) {
+        // 多规格：每条未结束开封记录 = 1 包在用；r.qty = 开启时自动带入的「每包含量/每包片数」
+        out.qty += 1;
+        var s1 = null;
+        for (var i = 0; i < sp.length; i++) {
+          if (String(sp[i].name || '') === String(r.specName || '')) { s1 = sp[i]; break; }
+        }
+        var perPack = parseFloat(r.qty);
+        if (!(perPack > 0) && s1) perPack = specPackQty(s1);
+        if (!(perPack > 0)) perPack = 1;
+        if (s1 && isContentUnitText(s1.unit)) {
+          out.content += perPack * (specContentOf(s1) || 1);
+        } else {
+          out.hasContent = false;   // 片/粒类或对不上规格 → 含量口径不完整
+        }
+      } else {
+        var q = parseFloat(r.qty);
+        if (!(q > 0)) q = 1;
+        out.qty += q;
+        if (w > 0) out.content += q * w;
+        else out.hasContent = false;
+      }
+    });
+  });
+  out.qty = Math.round(out.qty * 100) / 100;
+  out.content = Math.round(out.content * 100) / 100;
+  return out;
+}
+
+// 【第 18 轮】真实剩余可用天数：（未开库存 + 在用实物）÷ 历史日均消耗
+// 作为 statsOf 口径的兜底（statsOf 优先，保证与详情页「月消耗量/约够用 N 月」同口径）
+function estimateRealDaysLeft(item) {
+  if (!item) return null;
+  var records = validPeriodRecords(item);
+  if (!records.length) return null;
+  var totalQty = 0, totalContent = 0, allContent = true, earliestDate = null;
+  records.forEach(function (r) {
+    totalQty += (r.qty || 1);
+    if (r.contentUsed > 0) totalContent += r.contentUsed; else allContent = false;
+    var start = new Date(r.startDate);
+    if (!earliestDate || start < earliestDate) earliestDate = start;
+  });
+  if (totalQty === 0) return null;
+  var totalDays = Math.max(1, daysBetween(earliestDate, new Date()));
+  var iu = inUseStockOf(item);
+  // 口径A：含量（未开含量 + 在用含量）÷ 日均含量消耗
+  if (allContent && totalContent > 0 && iu.hasContent) {
+    var scE = itemStockContent(item);
+    if (scE !== null) {
+      var perDayC = totalContent / totalDays;
+      if (perDayC > 0) return Math.round((scE + iu.content) / perDayC);
+    }
+  }
+  // 口径B：件数（未开件数 + 在用包/件）× 平均每件周期
+  var avgDaysPerUnit = totalDays / totalQty;
+  var stockQ = getActiveStock(item);
+  return Math.round((stockQ + iu.qty) * avgDaysPerUnit);
+}
+
 function getItemStatus(item) {
   var status = {
     expired: false, expiring: false,
@@ -3067,44 +3157,36 @@ function getItemStatus(item) {
   // 全部品牌都标记「不再买」→ 整个物品不再提醒补货（保质期提醒保留）
   if (variants.length === 0) return status;
 
-  // === 库存告急判断（基于消耗速率预估） ===
+  // === 库存告急判断（【第 18 轮】真实可用库存 = 未开库存 + 在用实物） ===
+  // 优先用 statsOf 的统一口径（与详情页「月消耗量 / 约够用 N 个月」完全一致，
+  // 其剩余量已含「使用中」的包），statsOf 算不出时退回 estimateRealDaysLeft。
+  // 预警规则（用户定版）：预估剩余 >5 个月无边框；1~5 个月黄框；<1 个月红框。
   var threshold = item.stockThreshold || 1;
-  if (totalStock > 0) {
-    // 有库存：基于历史消耗速率预估剩余可用天数
-    var estDays = estimateStockDaysLeft(item, totalStock, variants);
-    status.estDaysLeft = estDays;
-    if (estDays !== null) {
-      // 有历史数据：以「预估剩余天数」为主判据，不再额外要求库存数 ≤ 阈值
-      // （抽纸剩 3 包、月耗 1.9 包 → 约 47 天，虽然件数 > 阈值也必须提示）
-      if (estDays <= 30) status.lowStock = true;
-      else if (estDays <= 90) status.lowStockSoft = true;
-      // 预估天数还够，但库存已经降到阈值以内 → 温和提示
-      else if (totalStock <= threshold) status.lowStockSoft = true;
-    } else {
-      // 没有历史数据：库存 ≤ 阈值，用温和提示（浅蓝色），不显示黄色告急
-      if (totalStock <= threshold) status.lowStockSoft = true;
-    }
+  var st18 = null;
+  try { st18 = statsOf(item); } catch (e) { st18 = null; }
+  var realDays18 = null;
+  if (st18 && st18.rate > 0 && st18.monthsLeft !== null && st18.monthsLeft !== undefined && isFinite(st18.monthsLeft)) {
+    realDays18 = Math.max(0, Math.round(st18.monthsLeft * 30));
   } else {
-    // 库存为 0：先分「还有没有在用的」
-    var hasOpenedInUse = variants.some(function(v) { return v.opened && !v.usedUp; });
-    if (hasOpenedInUse) {
-      // 有使用中的变体：按消耗速率预估剩余天数
-      // 【第 17 轮】红色告急只留给「预估 ≤30 天内真的断粮」：
-      //   预估为负（已超平均周期仍在用，如洗头膏用了 334 天）或算不出来（无记录）
-      //   都不能证明马上断粮 → 一律温和提示，不再红色误报
-      var openedEstDays = estimateOpenedDaysLeft(item, variants);
-      status.estDaysLeft = openedEstDays;
-      if (openedEstDays !== null && openedEstDays > 0 && openedEstDays <= 30) {
-        // 使用中的那份按速率真的快见底了 → 真正告急（红）
-        status.lowStock = true;
-      } else {
-        // 还能用很久 / 已超平均周期仍在服役 / 数据不足 → 温和提示补货（蓝）
-        status.lowStockSoft = true;
-      }
-    } else {
-      // 没有使用中的变体，库存为 0，真正告急
+    realDays18 = estimateRealDaysLeft(item);
+  }
+  if (realDays18 !== null) {
+    status.estDaysLeft = realDays18;
+    if (realDays18 <= 30) {
+      // <1 个月：真的快断粮了 → 红
       status.lowStock = true;
+    } else if (realDays18 <= 150) {
+      // 1~5 个月：余量偏少，该考虑补货 → 黄
+      status.lowStockSoft = true;
     }
+    // >150 天（>5 个月）：库存充足 → 无边框、无告急提示
+  } else if (totalStock > 0) {
+    // 算不出速率（无历史数据）：库存 ≤ 阈值 → 温和提示（浅蓝），绝不红色误报
+    if (totalStock <= threshold) status.lowStockSoft = true;
+  } else {
+    // 库存 0 且算不出速率：还有使用中的 → 温和提示；彻底没有 → 真断粮（红）
+    if (status.hasInUse) status.lowStockSoft = true;
+    else status.lowStock = true;
   }
 
   // 余量较少/告急：够用天数少或余量低都要提示，未开封也提示（抽纸未开封但只剩 3 包）
@@ -3117,15 +3199,9 @@ function getItemStatus(item) {
   // 与是否开封、是否使用中无关；库存 0 也照常提示
   var hasAnyRecord = (item.usageRecords || []).some(function (r) { return r.startDate && r.endDate; });
   if (hasAnyRecord) {
-    var estAll = null;
-    if (totalStock > 0) {
-      estAll = estimateStockDaysLeft(item, totalStock, variants);
-    } else {
-      // 库存为 0：还有使用中的那份在用 → 它用完就彻底没了，剩余天数取其预估值
-      var inUseV = variants.filter(function (v) { return v.opened && !v.usedUp; });
-      if (inUseV.length) estAll = Math.max(0, estimateOpenedDaysLeft(item, variants) || 0);
-      else estAll = 0;
-    }
+    // 【第 18 轮】囤货判断与告急判断同口径：realDays18 已把「使用中」的实物算进真实可用
+    var estAll = realDays18;
+    if (estAll === null && totalStock <= 0 && !status.hasInUse) estAll = 0;
     if (estAll !== null) {
       status.estDaysLeft = (status.estDaysLeft === null || status.estDaysLeft === undefined) ? estAll : status.estDaysLeft;
       status.monthsLeft = Math.round((estAll / 30) * 10) / 10;
@@ -3456,6 +3532,27 @@ function statsOf(item) {
       var uS = s.unit || '';
       restPieces += isContentUnitText(uS) ? specPacksRemaining(v0, s) : specPacksRemaining(v0, s) * specPackQty(s);
     });
+    // 【第 18 轮】把「正在使用中」的包算回真实可用库存：开包瞬间库存已扣（openPacks+1），
+    // 但那包实物还在消耗 —— 剩余量必须加上它，否则「0 包 + 2kg 在用」会被误判成断粮。
+    // 在用量与速率完全同口径累计（含量单位 = 包数；片/粒 = 片数），只统计未结束的开封记录。
+    var iuPieces18 = 0, iuBySpec18 = {};
+    (item.usageRecords || []).forEach(function (r) {
+      if (!r || r.instant || r.type === 'surplus' || r.endDate) return;
+      var nmR = String(r.specName || '');
+      if (!nmR) return;
+      var sR = null;
+      for (var _i = 0; _i < sp.length; _i++) { if (String(sp[_i].name || '') === nmR) { sR = sp[_i]; break; } }
+      var qR = parseFloat(r.qty);
+      if (!(qR > 0) && sR) qR = specPackQty(sR);
+      if (!(qR > 0)) qR = 1;
+      var pqR = parseFloat(r.packPieces) || 1;
+      var npacks = qR / pqR;                       // 该条记录 = 1 包在用
+      iuPieces18 += isContentUnitText(sR ? (sR.unit || '') : '') ? npacks : (npacks * (sR ? specPackQty(sR) : 1));
+      iuBySpec18[nmR] = (iuBySpec18[nmR] || 0) + npacks;
+    });
+    restPieces += iuPieces18;
+    // 旧数据兜底：没有任何规格明细的组合型（specs 为空），剩余量退回普通库存件数
+    if (!sp.length) restPieces = getTotalStock(item) || 0;
     out.restSmall = restPieces;
     out.monthsLeft = (ratePiecesM > 0) ? (restPieces / ratePiecesM) : null;
     // 子规格明细（作为「按套」结论下的参考）
@@ -3474,6 +3571,7 @@ function statsOf(item) {
       var pm = q > 0 ? (q / dd * 30) : 0;
       var uS = s.unit || '';
       var restP = specPacksRemaining(v0, s) * specPackQty(s);   // 该规格剩余容量（ml/片）
+      restP += (iuBySpec18[nm] || 0) * specPackQty(s);           // 【第 18 轮】+ 在用中的包（同口径折算）
       out.breakdown.push({
         name: nm, unit: uS || u, perMonth: pm,
         rest: restP,
@@ -3493,9 +3591,11 @@ function statsOf(item) {
   if (cr && cr.perMonth > 0) { out.contentRate = cr.perMonth; out.contentUnit = cr.unit; }
   var totS = getTotalStock(item);
   var scS = itemStockContent(item);
+  // 【第 18 轮】真实可用 = 未开库存 + 在用实物（开封即扣库存，但实物还在消耗）
+  var iu18 = inUseStockOf(item);
   // 库存与速率同口径：含量优先，否则件/份
-  if (cr && cr.perMonth > 0 && scS !== null) out.monthsLeft = scS / cr.perMonth;
-  else if (rate > 0 && !(item.usageRecords || []).some(function (r) { return r.specText; })) out.monthsLeft = (totS || 0) / rate;
+  if (cr && cr.perMonth > 0 && scS !== null) out.monthsLeft = (scS + (iu18.hasContent ? iu18.content : 0)) / cr.perMonth;
+  else if (rate > 0 && !(item.usageRecords || []).some(function (r) { return r.specText; })) out.monthsLeft = ((totS || 0) + iu18.qty) / rate;
   return out;
 }
 
@@ -4031,17 +4131,15 @@ function cardUsageStatusLabel(item) {
   var anyOpened = vs.some(function (v) { return v.opened && !v.usedUp; });
   // 【第 17 轮】库存归零不再一律告急：
   //   没有任何使用中的 → 真正断粮，告急（红）
-  //   还有使用中的 → 看预估剩余天数：≤30 天才告急；31~90 天 ⚠️；更久或算不准 → 🌀
-  //   （洗头膏类长期使用品：已用 300~1500 天、多件在用，仅因库存数字为 0 就标红是误报，
-  //    会造成警报疲劳——红色只留给真正需要立刻补货的物品）
+  //   【第 18 轮】阈值统一为用户定版规则：<1 个月(30天) ❗️红；1~5 个月(30~150天) ⚠️黄；>5 个月 🌀
   if (totalStock <= 0) {
     var anyUse0 = vs.some(function (v) { return v.opened && !v.usedUp; });
     if (!anyUse0) return { icon: '❗️', label: '告急', cls: 'st-danger' };
     var st0 = null;
     try { st0 = getItemStatus(item); } catch (e) { st0 = null; }
     var ed0 = st0 ? st0.estDaysLeft : null;
-    if (typeof ed0 === 'number' && ed0 > 0 && ed0 <= 30) return { icon: '❗️', label: '告急', cls: 'st-danger' };
-    if (typeof ed0 === 'number' && ed0 > 30 && ed0 <= 90) return { icon: '⚠️', label: '余量较少', cls: 'st-warn' };
+    if (typeof ed0 === 'number' && ed0 <= 30) return { icon: '❗️', label: '告急', cls: 'st-danger' };
+    if (typeof ed0 === 'number' && ed0 <= 150) return { icon: '⚠️', label: '余量较少', cls: 'st-warn' };
     return { icon: '🌀', label: '使用中', cls: 'st-using' };
   }
   // 从未开封 + 有库存 → 呆滞品
@@ -4054,8 +4152,9 @@ function cardUsageStatusLabel(item) {
   if (m === null || m === undefined || !(st && st.monthsLeft > -1 && (st.estDaysLeft !== null && st.estDaysLeft !== undefined))) {
     return { icon: '🌀', label: '使用中', cls: 'st-using' };
   }
+  // 【第 18 轮】阈值 = 用户定版预警规则：>5 个月 🌀无边框；1~5 个月 ⚠️黄框；<1 个月 ❗️红框
   if (m > 5) return { icon: '🌀', label: '使用中', cls: 'st-using' };
-  if (m >= 3) return { icon: '⚠️', label: '余量较少', cls: 'st-warn' };
+  if (m >= 1) return { icon: '⚠️', label: '余量较少', cls: 'st-warn' };
   return { icon: '❗️', label: '告急', cls: 'st-danger' };
 }
 // 【第 10 轮】原 cardStockShort 已被 renderItemCard 内的 hero 拆分逻辑取代
@@ -4820,13 +4919,19 @@ function renderCardBack(item, zone) {
     var advB = buyAdviceOf(item);
     var rateB = calcUsageRate(item);
     var cModelR = consumeModelOf(item);
+    // 【第 18 轮】总库存旁标注「使用中」实物：0 包 ≠ 断粮，用户一眼看到还有多少在手里消耗
+    var iuDtl18 = (cModelR !== 'instant') ? inUseStockOf(item) : null;
     html += '<div style="padding:11px 13px;border-radius:11px;background:var(--bg-secondary);margin-bottom:14px">';
 
     // ① 总库存（主数字 —— 唯一保留 600 权重，字号降到 14px）
     html += '<div style="display:flex;align-items:baseline;gap:8px">';
     html += '<span style="font-size:12px;color:var(--text-secondary)">📦 总库存</span>';
     html += '<span style="flex:1"></span>';
-    html += '<span style="font-size:14px;color:var(--text-primary);font-weight:600">' + escapeHtml(stockSummaryOf(item)) + '</span>';
+    var stockTxt18 = escapeHtml(stockSummaryOf(item));
+    if (iuDtl18 && iuDtl18.qty > 0) {
+      stockTxt18 += ' <span style="font-size:11px;color:var(--orange);font-weight:500">· 🔥使用中 ' + trimNum(iuDtl18.qty) + ' ' + escapeHtml(mainPackUnit(item)) + '</span>';
+    }
+    html += '<span style="font-size:14px;color:var(--text-primary);font-weight:600">' + stockTxt18 + '</span>';
     html += '</div>';
 
     // ② 告急阈值（小字，保持原有弱化地位，位置不动）
