@@ -1219,39 +1219,81 @@ async function initAuth() {
   }
 }
 
+// 确定性派生密码（第 14 轮）：不再用 Math.random —— 只要 deviceId 还在，
+// 密码随时可以重新算出来。否则 localStorage 一旦被 iOS 清理，随机密码就
+// 永久丢失，旧云端账号（里面有全部数据）再也无法登录。
+function deriveDevicePassword(deviceId) {
+  var h1 = 5381, h2 = 52711;
+  for (var i = 0; i < deviceId.length; i++) {
+    var c = deviceId.charCodeAt(i);
+    h1 = ((h1 << 5) + h1 + c) >>> 0;
+    h2 = ((h2 << 7) + h2 + c + i) >>> 0;
+  }
+  return 'jy_' + h1.toString(16) + '_' + h2.toString(16) + '_' + deviceId.slice(-6);
+}
+
 async function fallbackAnonymousLogin() {
   if (!ensureSupabaseClient()) return;
   var deviceId = getDeviceId();
   var email = localStorage.getItem('jiayou_anon_email');
-  var password = localStorage.getItem('jiayou_anon_password');
+  var storedPwd = localStorage.getItem('jiayou_anon_password');
   var isNew = false;
   if (!email) {
     email = deviceId + '@jiayou.app';
-    password = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
     isNew = true;
   }
+  var derivedPwd = deriveDevicePassword(deviceId);
   try {
     if (isNew) {
-      // 新设备：直接注册
+      // 新设备：直接注册（用派生密码）
       var { data: signUpData, error: signUpErr } = await supabaseClient.auth.signUp({
         email: email,
-        password: password,
+        password: derivedPwd,
         options: { data: { source: 'jiayou_app' } }
       });
-      if (signUpErr) throw signUpErr;
+      if (signUpErr) {
+        // 「already registered」= 这是老设备但本机凭证丢了（存储被清/被重试登录清掉）。
+        // 依次尝试：派生密码 → 本地存过的旧密码。都不行就明确报告，绝不反复注册。
+        if (/already registered/i.test(signUpErr.message || '')) {
+          var d1 = await supabaseClient.auth.signInWithPassword({ email: email, password: derivedPwd });
+          if (!d1.error && d1.data && d1.data.user) {
+            currentUser = d1.data.user;
+            localStorage.setItem('jiayou_anon_email', email);
+            localStorage.setItem('jiayou_anon_password', derivedPwd);
+            cloudSyncState.message = '';
+            updateCloudUI();
+            toast('云端已恢复登录');
+            return;
+          }
+          if (storedPwd) {
+            var d2 = await supabaseClient.auth.signInWithPassword({ email: email, password: storedPwd });
+            if (!d2.error && d2.data && d2.data.user) {
+              currentUser = d2.data.user;
+              cloudSyncState.message = '';
+              updateCloudUI();
+              return;
+            }
+          }
+          // 旧版本注册的账号密码是随机数，本机丢失后无法推算 —— 如实告知救援路径
+          cloudSyncState.message = '设备账号已注册但本机密码丢失。请在 Supabase 控制台重置 ' + email + ' 的密码后重试，或从控制台 Table Editor 导出数据用「导入数据」恢复';
+          updateCloudUI();
+          return;
+        }
+        throw signUpErr;
+      }
       if (!signUpData.user) throw new Error('注册后未返回用户');
       currentUser = signUpData.user;
       localStorage.setItem('jiayou_anon_email', email);
-      localStorage.setItem('jiayou_anon_password', password);
+      localStorage.setItem('jiayou_anon_password', derivedPwd);
       cloudSyncState.message = '';
       updateCloudUI();
       toast('已创建云端账号');
       return;
     }
-    // 已有账号：尝试登录
+    // 已有账号：先试存储的密码，失败再试派生密码
     var { data: signInData, error: signInErr } = await supabaseClient.auth.signInWithPassword({
       email: email,
-      password: password
+      password: storedPwd || derivedPwd
     });
     if (!signInErr && signInData.user) {
       currentUser = signInData.user;
@@ -1259,18 +1301,18 @@ async function fallbackAnonymousLogin() {
       updateCloudUI();
       return;
     }
-    // 登录失败：可能账号被删或密码错，重新注册
-    var { data: signUpData2, error: signUpErr2 } = await supabaseClient.auth.signUp({
-      email: email,
-      password: password,
-      options: { data: { source: 'jiayou_app' } }
-    });
-    if (signUpErr2) throw signUpErr2;
-    if (!signUpData2.user) throw new Error('重新注册后未返回用户');
-    currentUser = signUpData2.user;
-    cloudSyncState.message = '';
+    var d3 = await supabaseClient.auth.signInWithPassword({ email: email, password: derivedPwd });
+    if (!d3.error && d3.data && d3.data.user) {
+      currentUser = d3.data.user;
+      localStorage.setItem('jiayou_anon_password', derivedPwd);
+      cloudSyncState.message = '';
+      updateCloudUI();
+      return;
+    }
+    // 登录彻底失败：不再盲目重新注册（同邮箱 signUp 只会得到 already registered），
+    // 如实报告并给出救援路径
+    cloudSyncState.message = '云端登录失败: 密码不匹配。请在 Supabase 控制台重置 ' + email + ' 的密码后重试';
     updateCloudUI();
-    toast('已创建云端账号');
   } catch(e) {
     console.error('降级认证失败', e);
     cloudSyncState.message = '云端登录失败: ' + (e.message || e);
@@ -1278,16 +1320,14 @@ async function fallbackAnonymousLogin() {
   }
 }
 
-// 重试登录（清除旧凭据后重新走一遍）
+// 重试登录（第 14 轮重写）：绝不清除本地凭证！旧版会把 anon_email/password 清掉，
+// 导致同一设备邮箱被拿去重新注册 → Supabase 报 already registered，
+// 且唯一正确的随机密码被永久清除，云端账号从此登不上。现在只做重新登录。
 async function retryCloudLogin() {
   toast('正在重试登录...');
   cloudSyncState.message = '正在重试...';
   updateCloudUI();
   if (!ensureSupabaseClient()) { toast('Supabase 库未加载'); return; }
-  // 清除旧凭据，强制重新注册
-  localStorage.removeItem('jiayou_anon_email');
-  localStorage.removeItem('jiayou_anon_password');
-  // 清除 supabase 本地 session
   try { await supabaseClient.auth.signOut(); } catch(e) {}
   currentUser = null;
   await initAuth();
@@ -1297,6 +1337,57 @@ async function retryCloudLogin() {
     toast('登录成功');
   } else {
     toast('登录仍失败，请检查网络或稍后再试');
+  }
+}
+
+// ========== 手动填入云端账号（第 14 轮数据救援）==========
+// 当本机凭证被系统清掉、老账号又是随机密码时，自动登录必然失败。
+// 这时可以在 Supabase 控制台把那个账号的密码重置为自己设的值，再在这里填入，
+// App 就会用它登录并把云端数据完整拉回来（也可用于迁移到自己的邮箱账号）。
+function openCloudAccountForm() {
+  var email = '';
+  try { email = localStorage.getItem('jiayou_anon_email') || ''; } catch(e) {}
+  var html = '';
+  html += '<div class="modal-handle"></div>';
+  html += '<div class="modal-title">🔑 手动填入云端账号</div>';
+  html += '<div style="font-size:13px;line-height:1.7;color:var(--text-secondary);margin-bottom:12px">本机登录凭证丢失时用这个救活数据：<br>去 Supabase 控制台 → Authentication → Users 找到你的设备邮箱，把它重置为自定义密码，或到 Table Editor 直接导出数据用「导入数据」恢复。</div>';
+  html += '<div class="form-group"><label class="form-label">云端账号邮箱</label><input type="email" class="form-input" id="cloud-email" value="' + escapeHtml(email) + '" placeholder="例如 dev_xxx@jiayou.app"></div>';
+  html += '<div class="form-group"><label class="form-label">密码</label><input type="text" class="form-input" id="cloud-pwd" placeholder="Supabase 里设置的密码"></div>';
+  html += '<button class="btn btn-primary btn-full" style="margin-top:12px" onclick="saveCloudAccount()">登录并取回云端数据</button>';
+  html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">取消</button>';
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('show');
+}
+
+async function saveCloudAccount() {
+  var emailEl = document.getElementById('cloud-email');
+  var pwdEl = document.getElementById('cloud-pwd');
+  var email = (emailEl && emailEl.value ? emailEl.value : '').trim();
+  var pwd = (pwdEl && pwdEl.value ? pwdEl.value : '').trim();
+  if (!email || !pwd) { toast('请填写完整的邮箱和密码'); return; }
+  closeModal();
+  try {
+    localStorage.setItem('jiayou_anon_email', email);
+    localStorage.setItem('jiayou_anon_password', pwd);
+    if (!ensureSupabaseClient()) { toast('Supabase 库未加载'); return; }
+    if (currentUser) { try { await supabaseClient.auth.signOut(); } catch(e) {} currentUser = null; }
+    toast('正在登录...');
+    var { data, error } = await supabaseClient.auth.signInWithPassword({ email: email, password: pwd });
+    if (error || !data.user) throw error || new Error('登录失败');
+    currentUser = data.user;
+    cloudSyncState.message = '';
+    updateCloudUI();
+    toast('登录成功，正在取回云端数据...');
+    var changed = await syncFromCloud();
+    if (changed) renderAll();
+    var n = 0;
+    try { n = (DB.zones || []).reduce(function (s, z) { return s + ((z.items || []).length); }, 0); } catch(e) {}
+    toast('☁️ 已取回云端数据，本机现有 ' + n + ' 件物品');
+  } catch(e) {
+    var msg = (e && e.message) ? e.message : String(e);
+    cloudSyncState.message = '手动登录失败: ' + msg;
+    updateCloudUI();
+    toast('登录失败: ' + msg);
   }
 }
 
@@ -1411,6 +1502,19 @@ async function syncToCloud(force) {
   cloudSyncState.pending = false;
   setCloudStatus('syncing', '正在同步...');
   try {
+    // ===== 空库防推护栏（第 14 轮）=====
+    // 本机物品数为 0、但本机历史上明明有过数据 → 几乎必然是存储被系统清了/损坏了。
+    // 此时把空 DB 推上云端会覆盖掉用户最后一份真实数据，绝对禁止。
+    var _nowItems = (DB.zones || []).reduce(function (s, z) { return s + ((z.items || []).length); }, 0);
+    var _prevItems = 0;
+    try { _prevItems = parseInt(localStorage.getItem('jiayou_prev_item_count') || '0', 10) || 0; } catch (e) {}
+    if (_nowItems === 0 && _prevItems > 0) {
+      cloudSyncState.pending = false;
+      setCloudStatus('error', '本机为空，已暂停上传以保护云端数据');
+      console.warn('空库防推护栏生效：本机 0 件物品但历史曾有过 ' + _prevItems + ' 件，拒绝上传');
+      toast('⚠️ 本机数据为空，已暂停上传以保护云端数据');
+      return;
+    }
     // 先上传本地 base64 照片
     await uploadAllLocalPhotos();
     // 保存元数据
@@ -1605,6 +1709,11 @@ async function syncFromCloud() {
       try { localStorage.setItem('jiayou_db', JSON.stringify(DB)); } catch(e) {}
       saveDBIndexed().catch(function(){});
       try { localStorage.setItem('jiayou_last_local_write', String(Date.now())); } catch(e) {}
+      // 恢复完毕后刷新「本机物品数」基准，让空库防推护栏解除
+      try {
+        var _restored = (DB.zones || []).reduce(function (s, z) { return s + ((z.items || []).length); }, 0);
+        localStorage.setItem('jiayou_prev_item_count', String(_restored));
+      } catch(e) {}
     } else if (localItemsCount > 0) {
       // 本地有数据但云端没有，推送到云端
       await syncToCloud(true);
@@ -1667,9 +1776,17 @@ function initIndexedDB() {
   return new Promise(function(resolve) {
     if (dbPromise) { resolve(dbPromise); return; }
     if (!window.indexedDB) { resolve(null); return; }
+    // 超时兜底：iOS 在站点存储被系统清理/损坏后，indexedDB.open 可能既不触发
+    // onsuccess 也不触发 onerror（永久挂起），把整个启动序列卡死在
+    // 「await loadDB()」上 —— 表现为页面空白 + 云端状态永远「初始化...」。
+    // 3.5 秒没响应就放弃 IndexedDB，降级 localStorage 继续启动。
+    var settled = false;
+    var timer = setTimeout(function() {
+      if (!settled) { settled = true; console.error('IndexedDB打开超时(3.5s)，降级localStorage'); resolve(null); }
+    }, 3500);
     var req = indexedDB.open(DB_NAME, 1);
-    req.onerror = function() { console.error('IndexedDB打开失败'); resolve(null); };
-    req.onsuccess = function(e) { dbPromise = e.target.result; resolve(dbPromise); };
+    req.onerror = function() { console.error('IndexedDB打开失败'); if (!settled) { settled = true; clearTimeout(timer); resolve(null); } };
+    req.onsuccess = function(e) { if (!settled) { settled = true; clearTimeout(timer); dbPromise = e.target.result; resolve(dbPromise); } };
     req.onupgradeneeded = function(e) {
       var db = e.target.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
@@ -1719,6 +1836,11 @@ function saveDB() {
     try { localStorage.setItem('jiayou_db', json); } catch(lsErr) { console.warn('localStorage保存失败', lsErr); }
     // 记录本机最后一次写入时间（用于云端/本地冲突检测，见 detectCloudConflict）
     try { localStorage.setItem('jiayou_last_local_write', String(Date.now())); } catch(e) {}
+    // 记录本机物品数（用于「空库防推护栏」：本机突然变空时拒绝上传，见 syncToCloud）
+    try {
+      var _items = (DB.zones || []).reduce(function (s, z) { return s + ((z.items || []).length); }, 0);
+      localStorage.setItem('jiayou_prev_item_count', String(_items));
+    } catch(e) {}
     // 排队同步到 Supabase 云端（最可靠）
     queueCloudSync();
   } catch(e) {
@@ -5301,20 +5423,23 @@ function migrateTaskParent() {
 
 // 点击正面翻面
 document.addEventListener('DOMContentLoaded', async function() {
-  await loadDB();
+  // 分段防崩（第 14 轮）：存储被 iOS 清空/损坏后，任何一步迁移抛异常都会
+  // 中断整个回调 —— 表现为页面空白 + 云端状态永远卡在「初始化...」。
+  // 每一步独立兜底，确保 UI 一定被拉起来。
+  try { await loadDB(); } catch (e) { console.error('loadDB失败', e); }
   // 自愈历史脏数据（旧版本「用完了」不清库存导致的假折叠 + 多规格套数口径）
-  migrateDirtyUsedUp();
-  migrateSpecPacks();
-  migrateSpecTwoLayer();
-  migratePackUnit();
-  migrateTaskParent();
+  try { migrateDirtyUsedUp(); } catch (e) { console.error('migrateDirtyUsedUp失败', e); }
+  try { migrateSpecPacks(); } catch (e) { console.error('migrateSpecPacks失败', e); }
+  try { migrateSpecTwoLayer(); } catch (e) { console.error('migrateSpecTwoLayer失败', e); }
+  try { migratePackUnit(); } catch (e) { console.error('migratePackUnit失败', e); }
+  try { migrateTaskParent(); } catch (e) { console.error('migrateTaskParent失败', e); }
   // 立即用本地数据渲染首页（不等待网络，秒开）
-  showPage('home');
+  try { showPage('home'); } catch (e) { console.error('showPage失败', e); }
   // 立即更新云端状态 UI（避免卡在静态"初始化..."文字）
-  updateCloudUI();
+  try { updateCloudUI(); } catch (e) { console.error('updateCloudUI失败', e); }
 
   // 检查是否有新版本（有则提示并自动刷新）
-  checkAppUpdate();
+  try { checkAppUpdate(); } catch (e) {}
 
   // 初始化认证 + 云端同步，全部后台进行，不阻塞界面
   setTimeout(async function() {
@@ -5420,8 +5545,8 @@ function manualRefresh() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791382298 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791382298';
+// deploy.py 部署时会把 1791383565 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791383565';
 
 function checkAppUpdate(manual) {
   try {
@@ -5438,7 +5563,16 @@ function checkAppUpdate(manual) {
           if (manual) toast('检查失败，请检查网络');
           return;
         }
-        if (remote === APP_VERSION) { // 版本一致，无需更新
+        // 数值比较（时间戳）：只在「线上确实比本机新」时才提示更新。
+        // 若 version.json 反而更旧（部署方漏传），绝不能拿旧号去刷新 —— 否则会陷入
+        // 「发现新版本 → 刷新 → 版本还是对不上 → 请关闭重开」的死循环（第 14 轮实锤 Bug）。
+        var remoteNum = parseInt(remote, 10) || 0;
+        var localNum = parseInt(APP_VERSION, 10) || 0;
+        if (remoteNum === localNum) { // 版本一致，无需更新
+          if (manual) toast('✅ 已是最新版本');
+          return;
+        }
+        if (remoteNum < localNum) { // version.json 滞后于页面本身：视为最新，不折腾
           if (manual) toast('✅ 已是最新版本');
           return;
         }
@@ -10130,6 +10264,8 @@ function renderSettings() {
   if (!currentUser) {
     html += '<button class="btn btn-outline btn-full" style="margin-top:8px;" onclick="retryCloudLogin()">🔄 重试登录</button>';
   }
+  // 第 14 轮：凭证丢失时的救援入口 —— 允许手动指定云端账号登录，把数据拉回来
+  html += '<button class="btn btn-ghost btn-full" style="margin-top:8px;" onclick="openCloudAccountForm()">🔑 手动填入云端账号（数据救援）</button>';
   html += '</div>';
 
   // 数据管理
