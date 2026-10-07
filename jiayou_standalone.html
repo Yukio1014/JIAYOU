@@ -1694,7 +1694,10 @@ function specPackQty(s) { // 规格的「每包含量」
   var p = parseFloat(s.packQty);
   return (isFinite(p) && p > 0) ? p : 1; // 兼容一层旧数据；空 = 1
 }
-function specContentOf(s) { return +s.content || 0; } // 每份规格（如每片 1 片、每毫升 1ml）
+function specContentOf(s) { // 每份规格（如每片 1 片、每毫升 1ml）；留空/0 → 按 1（与保存口径一致）
+  var c = parseFloat(s && s.content);
+  return (isFinite(c) && c > 0) ? c : 1;
+}
 // 表单回显用：保留用户原本填的空字符串（空 = 按 1 计算，但不预填任何数字）
 function specPackCountRaw(s) { if (s.packCount !== undefined && s.packCount !== null && s.packCount !== '') return s.packCount; return (s.qty !== undefined && s.qty !== null && s.qty !== '') ? s.qty : ''; }
 function specPackQtyRaw(s) { return (s.packQty !== undefined && s.packQty !== null && s.packQty !== '') ? s.packQty : ''; }
@@ -1707,18 +1710,22 @@ function specPiecesOf(s) { // 该规格总件数 = 包数 × 每包含量
 function variantSpecsOf(v) {
   return ((v && v.specs) || []).filter(function (s) { return specPackCount(s) > 0 && (+s.packQty > 0 || +s.qty > 0 || +s.content > 0); });
 }
-function variantSpecContent(v) { // 总含量（库存口径）
+function variantSpecContent(v) { // 总含量（库存口径）= Σ 各规格剩余包数 × 每包含量 × 每份规格
   var ss = variantSpecsOf(v); if (!ss.length) return 0;
-  var t = 0; ss.forEach(function (s) { t += specTotalOf(s); });
-  return Math.round(t * 100) / 100;
+  return variantSpecStockCalc(v);
 }
-function variantSpecPieces(v) { // 总件数（参考）= 所有规格的「包数 × 每包含量」
+function variantSpecPieces(v) { // 总件数（参考）= Σ 各规格剩余包数 × 每包含量
   var ss = variantSpecsOf(v); if (!ss.length) return 0;
-  var t = 0; ss.forEach(function (s) { t += specPiecesOf(s); });
-  return Math.round(t * 100) / 100;
+  return variantSpecPiecesCalc(v);
 }
-// 总包数（组合消耗型④按包开合时使用）
+// 总包数（组合消耗型④按包开合时使用）= Σ 各规格剩余包数
 function variantSpecPacks(v) {
+  var ss = variantSpecsOf(v); if (!ss.length) return 0;
+  var t = 0; ss.forEach(function (s) { t += specPacksRemaining(v, s); });
+  return Math.round(t * 100) / 100;
+}
+// 单套内某规格的总包数（不乘套餐数）：用于「剩 X 包未开」的构成说明
+function variantSpecPacksPerSet(v) {
   var ss = variantSpecsOf(v); if (!ss.length) return 0;
   var t = 0; ss.forEach(function (s) { t += specPackCount(s); });
   return Math.round(t * 100) / 100;
@@ -1727,6 +1734,90 @@ function variantSpecUnit(v) {
   var ss = variantSpecsOf(v);
   return ss.length ? (ss[0].unit || '') : '';
 }
+
+// ===== 明细口径统一（v1.6）：specs = 单套构成，库存 = 剩余包数汇总 =====
+// 语义约定：
+//   specs[i]        = 「一套里装了什么」（单套构成），永不被套餐数折算写回
+//   specs[i].openPacks = 该规格「已开出的包数」（跨套累计，唯一消耗来源）
+//   v.packCount     = 购入套餐数（用户填写，消耗不改动，仅作记录/单价折算）
+//   v.stock         = Σ 各规格「(套餐数 × 单套包数 − 已开包数) × 每包含量 × 每份规格」
+function variantPacksLeft(v) {
+  if (!v) return 0;
+  if (variantSpecsOf(v).length) return variantPacksLeftCalc(v);
+  // 无明细：用旧口径（剩余件数 ÷ 每套件数）
+  var pq = parseFloat(v.packQty) || 1;
+  if (pq > 0) return Math.round(((parseFloat(v.stock) || 0) / pq) * 100) / 100;
+  return 0;
+}
+// 购入套餐数：留空按 1；填 0 就是 0
+function variantPacksBought(v) {
+  var raw = (v && v.packCount !== undefined && v.packCount !== null) ? String(v.packCount) : '';
+  if (raw === '') return 1;
+  var n = parseFloat(raw);
+  return isFinite(n) ? n : 0;
+}
+// 单套构成合计（含量）：Σ 每种规格 = 包数 × 每包含量 × 每份规格
+function variantSpecPerSet(v) {
+  var ss = variantSpecsOf(v); if (!ss.length) return 0;
+  var t = 0; ss.forEach(function (s) { t += specTotalOf(s); });
+  return Math.round(t * 100) / 100;
+}
+// 单套构成合计（件数/包数）
+function variantSpecPerSetPieces(v) {
+  var ss = variantSpecsOf(v); if (!ss.length) return 0;
+  var t = 0; ss.forEach(function (s) { t += specPiecesOf(s); });
+  return Math.round(t * 100) / 100;
+}
+// 是否有明细（有明细 = 父级规格行由明细接管）
+// 注意：用「明细行数」判定，而不是「有效明细」——刚点【＋ 添加规格】还没填数字时，
+// 父级规格行就应该立刻隐藏/变灰（用户心智：我已经决定用明细来描述这套装什么了）
+function variantHasSpecs(v) {
+  return !!((v && v.specs && v.specs.length) || variantSpecsOf(v).length);
+}
+
+// ===== 明细消耗层（v1.6）=====
+// specs[i].packCount = 单套内该规格的包数（构成，永不改）
+// specs[i].openPacks = 该规格「已开出的包数」（跨套累计，仅用于算剩余）
+// v.packCount        = 购入套餐数（记录，不随消耗变化）
+// 剩余包数(spec)     = 购入套餐数 × 单套内包数 − 已开包数
+// 剩余库存           = Σ_spec 剩余包数 × 每包含量 × 每份规格    ← 精确，不依赖「套」的凑整
+// 剩余套数           = min_spec (剩余包数 ÷ 单套内包数)         ← 展示用，小数保留
+function specOpenPacks(s) { var n = parseFloat(s && s.openPacks); return isFinite(n) && n > 0 ? n : 0; }
+// 某规格剩余未开包数（购买总量口径）
+function specPacksRemaining(v, s) {
+  var perSet = specPackCount(s);
+  var boughtTotal = variantPacksBought(v) * perSet;
+  return Math.round(Math.max(0, boughtTotal - specOpenPacks(s)) * 100) / 100;
+}
+// 该变体剩余套数（min 各规格的「剩余包数 ÷ 单套内包数」）
+function variantPacksLeftCalc(v) {
+  var ss = variantSpecsOf(v); if (!ss.length) return 0;
+  var m = Infinity;
+  ss.forEach(function (s) {
+    var perSet = specPackCount(s);
+    if (perSet <= 0) return;
+    var r = specPacksRemaining(v, s) / perSet;
+    if (r < m) m = r;
+  });
+  return isFinite(m) ? Math.round(m * 100) / 100 : 0;
+}
+// 该变体剩余总含量（= Σ 各规格剩余包数 × 每包含量 × 每份规格）
+function variantSpecStockCalc(v) {
+  var ss = variantSpecsOf(v); if (!ss.length) return 0;
+  var t = 0;
+  ss.forEach(function (s) {
+    t += specPacksRemaining(v, s) * specPackQty(s) * specContentOf(s);
+  });
+  return Math.round(t * 100) / 100;
+}
+// 该变体剩余总件数（= Σ 各规格剩余包数 × 每包含量）
+function variantSpecPiecesCalc(v) {
+  var ss = variantSpecsOf(v); if (!ss.length) return 0;
+  var t = 0;
+  ss.forEach(function (s) { t += specPacksRemaining(v, s) * specPackQty(s); });
+  return Math.round(t * 100) / 100;
+}
+
 // 规格行展示文本："日用 3包×5片 = 15片"
 function specLineText(s) {
   var nm = String(s.name || '').trim();
@@ -1738,10 +1829,10 @@ function specLineText(s) {
   else mid = trimNum(pc) + '包';
   return head + mid + ' = ' + trimNum(specTotalOf(s)) + u;
 }
-function variantSpecText(v) { // "日用 3包×5片 = 15片 + 夜用 2包×3片 = 6片 = 21片"
+function variantSpecText(v) { // "日用 3包×5片 = 15片 + 夜用 2包×3片 = 6片 = 21片/套"
   var ss = variantSpecsOf(v); if (!ss.length) return '';
   var parts = ss.map(specLineText);
-  return parts.join(' + ') + ' = ' + trimNum(variantSpecContent(v)) + (ss[0].unit || '');
+  return parts.join(' + ') + ' = ' + trimNum(variantSpecPerSet(v)) + (ss[0].unit || '') + '/套';
 }
 function stockSummaryOf(item) {
   var vs = (item.variants && item.variants.length) ? item.variants : [];
@@ -1844,11 +1935,12 @@ function migrateDirtyUsedUp() {
   return fixed;
 }
 
-// 数据自愈②：多规格变体的「套数」口径统一
+// 数据自愈②：多规格变体的「套数」口径统一（v1.6：明细 = 单套构成）
 // 旧版落账把规格份数和写进 packCount（如姨妈巾显示成「67套 × ¥45.34」、库存只算一套 67片）
-// 存量明细无法可靠判断是「单套构成」还是「全部总量」（反推套数有误折洗衣凝珠等数据的风险）
-// → 一律保守处理：packCount 归 1 批（价格行显示 1套 × 总价，自洽不再误导），明细与库存不动，
-//   并标记 specsFolded=true 永不自动折算；用户重新编辑时勾选「明细是一套的量（×套餐数）」保存即可修正
+// v1.6 起：specs 恒为「单套构成」，库存 = Σ 各规格(套餐数 × 单套包数 − 已开包数) × 每包含量 × 每份规格
+//   存量明细无法可靠判断是「单套构成」还是「全部总量」→ 一律保守按「全部总量」处理：
+//   packCount 归 1 批（1 套 = 全部总量，库存数值完全不变），并标记 specsFolded=true。
+//   这样旧数据在展示与消耗上自洽；用户重新编辑保存时，填上真实套餐数即可切换成「单套构成」口径。
 function migrateSpecPacks() {
   var marked = 0;
   DB.zones.forEach(function(zone) {
@@ -1857,9 +1949,12 @@ function migrateSpecPacks() {
       var touched = false;
       item.variants.forEach(function(v) {
         var sp = variantSpecsOf(v);
-        if (!sp.length || v.specsFolded) return;
+        if (!sp.length) return;
+        // 已开包数归零（新字段，旧数据没有）
+        (v.specs || []).forEach(function (s) { if (typeof s.openPacks === 'undefined') s.openPacks = 0; });
+        if (v.specsFolded) return;
         v.packCount = 1;
-        v.packQty = Math.round(variantSpecPieces(v) * 100) / 100;
+        v.packQty = Math.round(variantSpecPerSetPieces(v) * 100) / 100;
         v.packWeight = 1;
         v.packUnit = sp[0].unit || v.packUnit;
         v.packWeightUnit = sp[0].unit || v.packWeightUnit;
@@ -1872,7 +1967,7 @@ function migrateSpecPacks() {
   });
   if (marked) {
     saveDB();
-    console.log('[自愈] 多规格套数口径：统一标记 ' + marked + ' 个变体为全量明细（1批 × 总价）');
+    console.log('[自愈] 多规格口径：统一标记 ' + marked + ' 个变体为「1 套 = 全部总量」');
   }
   return marked;
 }
@@ -1962,9 +2057,12 @@ function migratePackUnit(target) {
 }
 
 // ===== 套餐模型展示辅助 =====
-// 变体总含量：套数 × 每套含 × 每小单位含量（packWeight=每个小单位的含量，单位见 packWeightUnit）
+// 变体「购买总量」含量（用于折算单价，不随消耗变化）
+//   混合规格 = 套餐数 × 单套构成合计
 function variantTotalWeight(v) {
-  if (variantSpecsOf(v).length) return variantSpecContent(v); // 混合规格：直接用明细汇总的含量
+  if (variantSpecsOf(v).length) {
+    return Math.round(variantPacksBought(v) * variantSpecPerSet(v) * 100) / 100;
+  }
   var w = parseFloat(v.packWeight) || 0;
   if (w <= 0) return 0;
   var pc = parseFloat(v.packCount) || 0;
@@ -2760,21 +2858,15 @@ function statsOf(item) {
     var spanD = earliest ? Math.max(1, daysBetween(earliest, new Date())) : 1;
     var ratePiecesM = totalPieces > 0 ? (totalPieces / spanD * 30) : 0;
 
-    // 「每套片数」= 保存时落账的 packQty（= 总片数 ÷ 套餐数，权威且不随消耗变化）
-    var setsTotal = parseFloat(v0 && v0.packCount) || 1;
+    // 「每套片数」= 单套构成合计（Σ 单套内包数 × 每包含量），与消耗无关
+    var setsTotal = variantPacksBought(v0);
     if (setsTotal <= 0) setsTotal = 1;
     var piecesPerSet = 0;
-    var savedPerSet = parseFloat(v0 && v0.packQty) || 0;
-    var sumPiecesNow = 0, sumPacksNow = 0;
-    sp.forEach(function (s) { sumPiecesNow += specPiecesOf(s); sumPacksNow += specPackCount(s); });
-    if (savedPerSet > 0) {
-      // 路径A（首选）：packQty 就是「每套多少片」，直接用
-      piecesPerSet = Math.max(1, Math.round(savedPerSet * 100) / 100);
-    } else if (sumPacksNow > 0) {
-      // 路径B（退化）：靠「子规格单包片数」加权平均估算每套片数
-      var avgPiecesPerPack = sumPiecesNow / sumPacksNow;
-      var packsPerSetEst = sumPacksNow / setsTotal;
-      piecesPerSet = Math.max(1, Math.round(packsPerSetEst * avgPiecesPerPack * 100) / 100);
+    var sumPiecesNow = variantSpecPerSetPieces(v0), sumPacksNow = variantSpecPacksPerSet(v0);
+    var computedPerSet = sumPiecesNow;
+    if (computedPerSet > 0) {
+      // 路径A（首选）：单套构成合计就是「每套多少件」
+      piecesPerSet = Math.max(1, Math.round(computedPerSet * 100) / 100);
     } else {
       piecesPerSet = 1;
     }
@@ -2788,11 +2880,11 @@ function statsOf(item) {
     out.piecesPerMonth = ratePiecesM;
     out.perYearQty = out.rate > 0 ? Math.max(1, Math.ceil(out.rate * 12)) : 0;
     var restPieces = 0;
-    sp.forEach(function (s) { restPieces += specPiecesOf(s); });
+    sp.forEach(function (s) { restPieces += specPacksRemaining(v0, s) * specPackQty(s); });
     out.restSmall = restPieces;
     out.monthsLeft = (ratePiecesM > 0) ? (restPieces / ratePiecesM) : null;
     // 子规格明细（作为「按套」结论下的参考）
-    // 注意：直接遍历 v0.specs（不能用 variantSpecsOf 过滤，否则已用完 packCount===0 的规格会漏掉）
+    // 注意：直接遍历 v0.specs（不能用 variantSpecsOf 过滤，否则已用完的规格会漏掉）
     var allSpecs = (v0 && v0.specs) ? v0.specs : [];
     allSpecs.forEach(function (s) {
       var nm = s.name || '规格';
@@ -2805,10 +2897,11 @@ function statsOf(item) {
       });
       var dd = e ? Math.max(1, daysBetween(e, new Date())) : 1;
       var pm = q > 0 ? (q / dd * 30) : 0;
+      var restP = specPacksRemaining(v0, s) * specPackQty(s);
       out.breakdown.push({
         name: nm, unit: s.unit || u, perMonth: pm,
-        rest: specPiecesOf(s),
-        monthsLeft: pm > 0 ? (specPiecesOf(s) / pm) : null
+        rest: restP,
+        monthsLeft: pm > 0 ? (restP / pm) : null
       });
     });
     return out;
@@ -3628,15 +3721,16 @@ function renderCardBack(item, zone) {
           html += '<div style="margin-top:8px;border-top:1px dashed var(--separator);padding-top:8px">';
           variantSpecsOf(v).forEach(function (s) {
             var si = (v.specs || []).indexOf(s); // 原始下标（openOnePack 按 v.specs 解析）
-            var packsL = specPackCount(s), pqL = specPackQty(s), uL = s.unit || '';
+            var packsRemain = specPacksRemaining(v, s), pqL = specPackQty(s), uL = s.unit || '';
             var nmL = s.name || ('规格' + (si + 1));
-            var leftPieces = specPiecesOf(s);
+            var leftPieces = Math.round(packsRemain * pqL * 100) / 100;
+            var perSetL = specPackCount(s);
             html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 0">';
             html += '<div style="flex:1;min-width:0">';
             html += '<div style="font-size:13px;font-weight:600">' + escapeHtml(nmL) + '</div>';
-            html += '<div style="font-size:11px;color:var(--text-secondary)">剩 ' + trimNum(leftPieces) + uL + '（' + trimNum(packsL) + '包未开' + (pqL !== 1 ? ' × ' + trimNum(pqL) + uL + '/包' : '') + '）</div>';
+            html += '<div style="font-size:11px;color:var(--text-secondary)">剩 ' + trimNum(leftPieces) + uL + '（' + trimNum(packsRemain) + '包未开' + (pqL !== 1 ? ' × ' + trimNum(pqL) + uL + '/包' : '') + ' · 单套 ' + trimNum(perSetL) + '包）</div>';
             html += '</div>';
-            html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0;font-size:11px;padding:5px 8px' + (packsL > 0 ? '' : ';opacity:.45') + '"' + (packsL > 0 ? '' : ' disabled') + ' onclick="openOnePack(\'' + item.id + '\',\'' + v.id + '\',' + si + ')">📦 开启新包</button>';
+            html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0;font-size:11px;padding:5px 8px' + (packsRemain > 0 ? '' : ';opacity:.45') + '"' + (packsRemain > 0 ? '' : ' disabled') + ' onclick="openOnePack(\'' + item.id + '\',\'' + v.id + '\',' + si + ')">📦 开启新包</button>';
             html += '</div>';
           });
           html += '<button class="btn btn-outline btn-sm" style="width:100%;margin-top:6px;font-size:12px" onclick="confirmOpenCombo(\'' + item.id + '\',\'' + v.id + '\')">✅ 这包用完了</button>';
@@ -4218,8 +4312,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791309358 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791309358';
+// deploy.py 部署时会把 1791342386 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791342386';
 
 function checkAppUpdate(manual) {
   try {
@@ -4363,16 +4457,16 @@ function openVariantItem(itemId, variantId) {
     window._openSpecQty = {};
     spOpen.forEach(function (s) {
       var k = (v.specs || []).indexOf(s); // 原始下标：confirmOpen/openOnePack 都按 v.specs 解析
-      var packs = specPackCount(s), pq = specPackQty(s), u = s.unit || '';
-      var pieces = specPiecesOf(s);
+      var packsRemain = specPacksRemaining(v, s), pq = specPackQty(s), u = s.unit || '';
+      var pieces = Math.round(packsRemain * pq * 100) / 100;
       window._openSpecQty[k] = 0;
       html += '<div style="padding:10px;background:var(--bg);border-radius:10px;margin-bottom:6px">';
       html += '<div style="display:flex;gap:8px;align-items:center">';
       html += '<div style="flex:1;min-width:0"><div style="font-weight:600;font-size:14px">' + escapeHtml(s.name || ('规格' + (k + 1))) + '</div>';
-      html += '<div style="font-size:12px;color:var(--text-secondary)">剩 ' + trimNum(pieces) + u + '（' + trimNum(packs) + '包' + (pq !== 1 ? ' × ' + trimNum(pq) + u + '/包' : '') + '）</div></div>';
+      html += '<div style="font-size:12px;color:var(--text-secondary)">剩 ' + trimNum(pieces) + u + '（' + trimNum(packsRemain) + '包未开' + (pq !== 1 ? ' × ' + trimNum(pq) + u + '/包' : '') + '）</div></div>';
       if (isCombo) {
-        // 组合消耗型：一键开一整包（包数 -1）
-        html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0" ' + (packs > 0 ? '' : 'disabled') + ' onclick="openOnePack(\'' + itemId + '\',\'' + variantId + '\',' + k + ')">📦 开启新包</button>';
+        // 组合消耗型：一键开一整包（已开包数 +1）
+        html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0" ' + (packsRemain > 0 ? '' : 'disabled') + ' onclick="openOnePack(\'' + itemId + '\',\'' + variantId + '\',' + k + ')">📦 开启新包</button>';
       } else {
         html += '<div class="stepper"><button onclick="adjustSpecOpen(' + k + ',-1)">−</button><span class="stepper-val" id="spec-open-' + k + '">0</span><button onclick="adjustSpecOpen(' + k + ',1)">＋</button></div>';
       }
@@ -4481,15 +4575,16 @@ function openOnePack(itemId, variantId, specIdx) {
   if (!v) return;
   var s = (v.specs || [])[specIdx];
   if (!s) return;
-  // 该规格必须仍然是「有效规格」（包数 > 0），否则视为不可操作
-  if (specPackCount(s) <= 0) { toast('这个规格已经没有新包了'); return; }
-  var packs = specPackCount(s);
+  // 该规格必须还有未开的包（剩余包数 > 0），否则视为不可操作
+  var remaining = specPacksRemaining(v, s);
+  if (remaining <= 0) { toast('这个规格已经没有新包了'); return; }
   var pq = specPackQty(s), u = s.unit || '';
   var nm = s.name || ('规格' + (specIdx + 1));
 
-  s.packCount = Math.round((packs - 1) * 100) / 100;
-  // packQty 不变（新包的量），但「剩余件数」由 packCount × packQty 决定
-  s.qty = Math.round(specPiecesOf(s) * 100) / 100;
+  // 消耗层：已开包数 +1（不改动构成 packCount，也不改动套餐数）
+  s.openPacks = Math.round((specOpenPacks(s) + 1) * 100) / 100;
+  // 兼容字段 qty：该规格「单套内包数 × 每包含量」（构成口径，保持稳定）
+  s.qty = Math.round(specPackCount(s) * pq * 100) / 100;
   // 记下「这一包正在用」的开始时间（同一规格同时只有一包在开）
   var pkey = '__packOpenAt_' + specIdx;
   if (!s[pkey]) s[pkey] = new Date().toISOString();
@@ -4510,13 +4605,13 @@ function openOnePack(itemId, variantId, specIdx) {
   v.stock = variantSpecContent(v);
   v.opened = true;
   v.openDate = nowISO;
-  var allGone = variantSpecsOf(v).every(function (x) { return specPiecesOf(x) <= 0; });
-  if (variantSpecContent(v) <= 0 && allGone) { v.usedUp = true; v.finishDate = nowISO; }
+  var allGone = variantSpecsOf(v).every(function (x) { return specPacksRemaining(v, x) <= 0; });
+  if (v.stock <= 0 && allGone) { v.usedUp = true; v.finishDate = nowISO; }
   syncItemFromVariants(item);
   saveDB();
   closeModal();
   openCardDetail(currentZoneId, itemId);
-  toast('已开启 ' + nm + ' 新包' + (pq !== 1 ? '（' + trimNum(pq) + u + '）' : '') + '，剩 ' + trimNum(specPackCount(s)) + ' 包未开');
+  toast('已开启 ' + nm + ' 新包' + (pq !== 1 ? '（' + trimNum(pq) + u + '）' : '') + '，剩 ' + trimNum(specPacksRemaining(v, s)) + ' 包未开');
 }
 
 // 整批开启：每个还有包的规格各开 1 包
@@ -4530,11 +4625,11 @@ function openAllPacks(itemId, variantId) {
   var nowISO = new Date().toISOString();
   if (!item.usageRecords) item.usageRecords = [];
   sp.forEach(function (s) {
-    if (specPackCount(s) <= 0) return;
+    if (specPacksRemaining(v, s) <= 0) return;
     var nm = s.name || '规格';
     var pq = specPackQty(s);
-    s.packCount = Math.round((specPackCount(s) - 1) * 100) / 100;
-    s.qty = Math.round(specPiecesOf(s) * 100) / 100;
+    s.openPacks = Math.round((specOpenPacks(s) + 1) * 100) / 100;
+    s.qty = Math.round(specPackCount(s) * pq * 100) / 100;
     s.__openPack = true;
     item.usageRecords.push({
       startDate: nowISO, endDate: null, qty: pq, variantId: variantId, brand: v.brand,
@@ -4568,7 +4663,7 @@ function confirmOpenCombo(itemId, variantId) {
   });
   if (!closed) { toast('没有正在使用的包（先点「开启新包」）'); return; }
   variantSpecsOf(v).forEach(function (s) { s.__openPack = false; });
-  var allGone = variantSpecsOf(v).every(function (s) { return specPiecesOf(s) <= 0; });
+  var allGone = variantSpecsOf(v).every(function (s) { return specPacksRemaining(v, s) <= 0; });
   if (allGone) { v.usedUp = true; v.finishDate = nowISO; }
   else { v.opened = false; v.usedUp = false; v.finishDate = null; }
   syncItemFromVariants(item);
@@ -4586,36 +4681,33 @@ function confirmOpen(itemId, variantId, markAsUsed) {
   var date = dateInput ? dateInput.value : new Date().toISOString().split('T')[0];
   var nowISO = new Date(date).toISOString();
 
-  // 混合规格：按「规格×份数」扣减，如 小样×1、3合1×2
+  // 混合规格：按「规格×份数」消耗（口径 = 已开包数 openPacks，不动构成与套餐数）
   var spOpen = variantSpecsOf(v);
   if (spOpen.length && window._openSpecQty) {
     var usedParts = [], pieces = 0, contentUsed = 0;
     var spUnit = variantSpecUnit(v); // 先取单位：扣完可能全部归零，之后再取就空了
     spOpen.forEach(function (s) {
       var k = (v.specs || []).indexOf(s); // 原始下标：与 adjustSpecOpen / 表单一致
-      var avail = specPiecesOf(s);                     // 可开的份数 = 包数 × 每包含量
+      var avail = specPacksRemaining(v, s) * specPackQty(s); // 可开份数 = 剩余包数 × 每包含量
       var n = Math.min(window._openSpecQty[k] || 0, avail);
       if (n <= 0) return;
-      // 两层扣减：按包的整数部分扣 packCount，零头留在 packQty 上，保证「件数」守恒
+      // 消耗换算：份数 → 包数（不足一包按一包计），累加进「已开包数」
       var pq = specPackQty(s);
-      var packsOff = Math.floor(n / pq);
-      var rest = Math.round((n - packsOff * pq) * 100) / 100;
-      var newPacks = Math.round((specPackCount(s) - packsOff) * 100) / 100;
-      if (newPacks < 0) newPacks = 0;
-      s.packCount = newPacks;
-      s.packQty = (rest > 0 && newPacks > 0) ? rest : pq;
-      if (newPacks <= 0) { s.packCount = 0; s.packQty = 0; }
-      s.qty = Math.round(specPiecesOf(s) * 100) / 100; // 兼容字段同步
-      usedParts.push((s.name || '规格' + (k + 1)) + '×' + n);
-      pieces += n;
-      contentUsed += n * specContentOf(s);
+      var packs = Math.max(1, Math.ceil(n / pq - 1e-9));
+      var maxPacks = specPacksRemaining(v, s);
+      if (packs > maxPacks) packs = maxPacks;
+      s.openPacks = Math.round((specOpenPacks(s) + packs) * 100) / 100;
+      s.qty = Math.round(specPackCount(s) * specPackQty(s) * 100) / 100; // 兼容字段：构成口径
+      usedParts.push((s.name || '规格' + (k + 1)) + '×' + packs + '包');
+      pieces += packs * pq;
+      contentUsed += packs * pq * specContentOf(s);
     });
     if (!pieces) { toast('先选择要开封的规格'); return; }
     v.opened = true;
     v.openDate = nowISO;
     v.openQty = pieces;
     v.stock = variantSpecContent(v);
-    var allEmpty = spOpen.every(function (s) { return specPiecesOf(s) <= 0; });
+    var allEmpty = spOpen.every(function (s) { return specPacksRemaining(v, s) <= 0; });
     if (allEmpty) { v.usedUp = true; v.finishDate = nowISO; }
     if (!item.usageRecords) item.usageRecords = [];
     item.usageRecords.push({
@@ -4986,13 +5078,16 @@ function renderRestockSpecs(item) {
     return;
   }
   box.style.display = 'block';
-  var h = '<div style="font-size:13px;font-weight:700;margin:4px 0 6px">🧩 补货规格（按份数）</div>';
-  h += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">现有：' + escapeHtml(variantSpecText(v)) + '</div>';
+  var h = '<div style="font-size:13px;font-weight:700;margin:4px 0 6px">🧩 补货（按「套」补）</div>';
+  h += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">单套构成：' + escapeHtml(variantSpecText(v)) + '<br>当前 套餐数 ' + trimNum(variantPacksBought(v)) + ' 套 · 剩 ' + trimNum(variantPacksLeftCalc(v)) + ' 套</div>';
+  h += '<div class="form-row" style="align-items:center;margin-bottom:6px">';
+  h += '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">这次补几套？</div>';
+  h += '<div style="font-size:11px;color:var(--text-secondary)">补 N 套 = 每种子规格各多 N × 单套包数</div></div>';
+  h += '<input type="number" class="form-input" style="width:92px;flex:none" id="restock-spec-sets" value="0" min="0" step="1" oninput="syncRestockSpecQty()">';
+  h += '</div>';
   sp.forEach(function (s, k) {
-    h += '<div class="form-row" style="align-items:center;margin-bottom:6px">';
-    h += '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">' + escapeHtml(s.name || ('规格' + (k + 1))) + '</div>';
-    h += '<div style="font-size:11px;color:var(--text-secondary)">' + trimNum(s.content) + (s.unit || '') + '/份 · 现有 ' + trimNum(s.qty) + ' 份</div></div>';
-    h += '<input type="number" class="form-input" style="width:92px;flex:none" id="restock-spec-' + k + '" value="0" min="0" step="1" oninput="syncRestockSpecQty()">';
+    h += '<div class="form-row" style="align-items:center;margin-bottom:4px">';
+    h += '<div style="flex:1;min-width:0;font-size:12px;color:var(--text-secondary)">' + escapeHtml(s.name || ('规格' + (k + 1))) + '（单套 ' + trimNum(specPackCount(s)) + ' 包 × ' + trimNum(specPackQty(s)) + (s.unit || '') + '）</div>';
     h += '</div>';
   });
   h += '<div class="form-row">';
@@ -5003,13 +5098,17 @@ function renderRestockSpecs(item) {
   window._restockSpecs = sp;
   if (qtyRow) qtyRow.style.display = 'flex'; // 数量行保留（用于算单价），由规格自动回填
 }
-// 规格份数 → 自动回填「补货数量」（含量口径），省得再手算
+// 补套数 → 自动回填「补货数量」（含量口径），省得再手算
 function syncRestockSpecQty() {
   var sp = window._restockSpecs || [];
   var total = 0, unit = '';
-  for (var i = 0; i < sp.length; i++) {
-    var e = document.getElementById('restock-spec-' + i);
-    if (e) total += (parseFloat(e.value) || 0) * (+sp[i].content || 0);
+  var setsEl = document.getElementById('restock-spec-sets');
+  var sets = setsEl ? (parseFloat(setsEl.value) || 0) : 0;
+  if (sets > 0 && sp.length) {
+    // 每套含量 = Σ 单套内包数 × 每包含量 × 每份规格
+    var perSet = 0;
+    sp.forEach(function (s) { perSet += specPackCount(s) * specPackQty(s) * specContentOf(s); });
+    total += sets * perSet;
   }
   if (sp.length) unit = sp[0].unit || '';
   var cEl = document.getElementById('restock-spec-content');
@@ -5112,32 +5211,29 @@ function confirmRestock(itemId) {
   } else {
     variant = item.variants.find(function(v) { return v.id === brandSelect; });
     if (variant) {
-      // 多规格品牌：按「规格×份数」补，库存由规格明细重算（否则会被下次开封覆盖）
+      // 多规格品牌：补货 = 又买了 N 套 → 套餐数 +N（构成不变，剩余量随之增加）
       var spR = (variant.specs && variant.specs.length) ? variant.specs : null;
       var addedPieces = 0;
       if (spR) {
-        spR.forEach(function (s, k) {
-          var el = document.getElementById('restock-spec-' + k);
-          var n = el ? (parseFloat(el.value) || 0) : 0;
-          if (n > 0) { s.qty = (+s.qty || 0) + n; addedPieces += n; }
-        });
-        if (!addedPieces) {
-          // 没填份数 → 按含量补：同含量同单位的规格合并，否则新增一行「补货」
-          var cEl = document.getElementById('restock-spec-content');
-          var c = cEl ? (parseFloat(cEl.value) || 0) : 0;
-          if (c <= 0) c = qty;
-          var uEl = document.getElementById('restock-spec-unit');
-          var u = uEl ? (uEl.value || '').trim() : '';
-          var hit = null;
-          spR.forEach(function (s) {
-            if (!hit && Math.abs((+s.content || 0) - c) < 1e-6 && (s.unit || '') === u) hit = s;
-          });
-          if (hit) hit.qty = (+hit.qty || 0) + 1;
-          else spR.push({ name: '补货', qty: 1, content: c, unit: u });
-          addedPieces = 1;
+        var setsEl = document.getElementById('restock-spec-sets');
+        var setsAdd = setsEl ? (parseFloat(setsEl.value) || 0) : 0;
+        if (setsAdd > 0) {
+          variant.packCount = Math.round((variantPacksBought(variant) + setsAdd) * 100) / 100;
+          addedPieces = setsAdd;
+        } else {
+          // 没填套数 → 按含量补：把含量折算成「套数」加上去（不足一套按一套）
+          var cEl0 = document.getElementById('restock-spec-content');
+          var c0 = cEl0 ? (parseFloat(cEl0.value) || 0) : 0;
+          if (c0 <= 0) c0 = qty;
+          var perSet0 = variantSpecPerSet(variant);
+          if (perSet0 > 0 && c0 > 0) {
+            var setsFromContent = Math.ceil(c0 / perSet0 - 1e-9);
+            variant.packCount = Math.round((variantPacksBought(variant) + setsFromContent) * 100) / 100;
+            addedPieces = setsFromContent;
+          }
         }
         variant.stock = variantSpecContent(variant);
-        // 套数/每套含是「购买记录」，补货按份数累加进明细即可，不覆盖（否则价格行变"67套×45.34"的矛盾显示）
+        // 套餐数是「购买记录」，补货累加到套餐数上；构成（specs）不动
         if (!variant.specsFolded) variant.specsFolded = true;
         variant.packUnit = (spR[0].unit || variant.packUnit);
         variant.usedUp = false;   // 又补上了 → 不再是「用完」状态
@@ -5281,8 +5377,8 @@ function openItemForm(itemId) {
         packWeightUnit: v.packWeightUnit || '',
         noRestock: !!v.noRestock,
         specsFolded: !!v.specsFolded,
-        specPerPack: !v.specsFolded,   // 存量数据明细=全部总量(不勾)；只有未折算过的新明细默认按「每套构成」
-        specs: (v.specs || []).map(function (s) { return { name: s.name || '', packCount: (s.packCount !== undefined && s.packCount !== null) ? s.packCount : '', packQty: (s.packQty !== undefined && s.packQty !== null && s.packQty !== '') ? s.packQty : '', qty: +s.qty || 0, content: +s.content || 0, unit: s.unit || '' }; }),
+        packsLeft: undefined,   // v1.6 起已废弃：剩余量由 specs[i].openPacks 承载
+        specs: (v.specs || []).map(function (s) { return { name: s.name || '', packCount: (s.packCount !== undefined && s.packCount !== null) ? s.packCount : '', packQty: (s.packQty !== undefined && s.packQty !== null && s.packQty !== '') ? s.packQty : '', qty: +s.qty || 0, content: +s.content || 0, unit: s.unit || '', openPacks: specOpenPacks(s) }; }),
         photos: (v.photos||[]).slice()
       };
     });
@@ -5415,31 +5511,41 @@ function renderConsumableVariantRows() {
     html += vCell('总价', '<input type="number" class="form-input" placeholder="填总价→算单价" value="' + (cTotal||'') + '" oninput="onConsumablePriceInput(' + i + ',\'total\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'total\',this.value)" step="0.01">', 'flex:1;min-width:0');
     html += '</div>';
     // 行3：规格（=套餐内包数，适中）+ 单位（瓶/包/个）+ 容量（=单包规格，稍大）+ 单位（ml/g）
-    html += '<div style="display:flex;gap:8px;margin-bottom:8px">';
-    html += vCell('规格', '<input type="number" class="form-input" placeholder="套餐内几包/瓶" value="' + (cPackQty||'') + '" oninput="onConsumablePriceInput(' + i + ',\'packqty\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'packqty\',this.value)" step="1">', 'flex:1;min-width:0');
-    html += vCell('单位', '<input type="text" class="form-input" list="qty-unit-list" placeholder="瓶" value="' + escapeHtml(cQtyUnit) + '" onchange="onConsumableQtyUnitInput(' + i + ',this.value)">', 'flex:0 0 66px');
-    html += vCell('容量', '<input type="number" class="form-input" placeholder="每包/瓶多少" value="' + (cWeight||'') + '" oninput="onConsumablePriceInput(' + i + ',\'weight\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'weight\',this.value)" step="0.01">', 'flex:1.2;min-width:0');
-    html += vCell('单位', '<input type="text" class="form-input" list="spec-unit-list" placeholder="ml/g" value="' + escapeHtml(cWeightUnit || '') + '" onchange="onConsumableWeightUnitInput(' + i + ',this.value)">', 'flex:0 0 66px');
-    html += '</div>';
+    // ★ 已有规格明细时：明细就是「一套里装了什么」，父级规格行不再要求填写（自动隐藏/变灰，
+    //   也不参与计算）——只在套餐数仍生效（库存 = 套餐数 × 单套明细合计）
+    if (variantHasSpecs(v)) {
+      html += '<div style="margin-bottom:8px;padding:9px 11px;background:var(--bg);border:0.5px dashed var(--separator);border-radius:9px">';
+      html += '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:3px">规格 / 容量（已由下方明细定义，无需再填）</div>';
+      html += '<div style="font-size:12px;color:var(--text-secondary)">🧩 单套构成：' + escapeHtml(variantSpecText(v)) + '</div>';
+      html += '</div>';
+    } else {
+      html += '<div style="display:flex;gap:8px;margin-bottom:8px">';
+      html += vCell('规格', '<input type="number" class="form-input" placeholder="套餐内几包/瓶" value="' + (cPackQty||'') + '" oninput="onConsumablePriceInput(' + i + ',\'packqty\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'packqty\',this.value)" step="1">', 'flex:1;min-width:0');
+      html += vCell('单位', '<input type="text" class="form-input" list="qty-unit-list" placeholder="瓶" value="' + escapeHtml(cQtyUnit) + '" onchange="onConsumableQtyUnitInput(' + i + ',this.value)">', 'flex:0 0 66px');
+      html += vCell('容量', '<input type="number" class="form-input" placeholder="每包/瓶多少" value="' + (cWeight||'') + '" oninput="onConsumablePriceInput(' + i + ',\'weight\',this.value)" onblur="onConsumablePriceBlur(' + i + ',\'weight\',this.value)" step="0.01">', 'flex:1.2;min-width:0');
+      html += vCell('单位', '<input type="text" class="form-input" list="spec-unit-list" placeholder="ml/g" value="' + escapeHtml(cWeightUnit || '') + '" onchange="onConsumableWeightUnitInput(' + i + ',this.value)">', 'flex:0 0 66px');
+      html += '</div>';
+    }
+
     // ===== 计算结果（七行填完自动算） =====
     html += '<div id="packstock-' + i + '" class="vcalc">' + packHintOf(v) + '</div>';
-    // ===== 规格明细（🧩 展开/收起；组合消耗型④按子规格记录用） =====
+    // ===== 规格明细（🧩 展开/收起）=====
+    // 语义：明细 = 「一套里装了什么」（单套构成）。库存 = 套餐数 × 单套合计，明细本身永不被折算写回。
     if (specsOpen) {
       html += '<div style="margin-top:10px;padding-top:8px;border-top:0.5px dashed var(--separator)">';
-      html += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">🧩 规格明细（选填，如 日用/夜用 分开记）</div>';
-      html += '<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:' + (v.specPerPack ? 'var(--accent)' : 'var(--text-tertiary)') + ';cursor:pointer;margin-bottom:6px"><input type="checkbox" ' + (v.specPerPack ? 'checked' : '') + ' onchange="onSpecPerPackToggle(' + i + ',this.checked)"> 明细是一套的量（×套餐数）</label>';
+      html += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">🧩 规格明细 <span style="color:var(--text-tertiary)">（= 一套里装了什么；库存自动按套餐数倍增）</span></div>';
       html += '<div style="display:flex;gap:4px;margin:4px 0 2px;font-size:10px;color:var(--text-tertiary)">';
-      html += '<span style="flex:1.4;min-width:0">名称</span><span style="flex:.85;min-width:0">包数</span><span style="flex:.85;min-width:0">每包含量</span><span style="width:52px;flex-shrink:0">单位</span><span style="width:30px;flex-shrink:0"></span>';
+      html += '<span style="flex:1.4;min-width:0">名称</span><span style="flex:.85;min-width:0">单套包数</span><span style="flex:.85;min-width:0">每包含量</span><span style="width:52px;flex-shrink:0">单位</span><span style="width:30px;flex-shrink:0"></span>';
       html += '</div>';
       (v.specs || []).forEach(function (s, k) {
         html += '<div style="display:flex;gap:4px;margin-bottom:4px">';
-        html += '<input type="text" class="form-input" style="font-size:12px;flex:1.4;min-width:0;padding:5px 6px" placeholder="日用" value="' + escapeHtml(s.name || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'name\',this.value)">';
+        html += '<input type="text" class="form-input" style="font-size:12px;flex:1.4;min-width:0;padding:5px 6px" placeholder="A品牌小样" value="' + escapeHtml(s.name || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'name\',this.value)">';
         html += '<input type="number" class="form-input" style="font-size:12px;flex:.85;min-width:0;padding:5px 6px" placeholder="3" value="' + (specPackCountRaw(s) || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'packCount\',this.value)">';
-        html += '<input type="number" class="form-input" style="font-size:12px;flex:.85;min-width:0;padding:5px 6px" placeholder="5" value="' + (specPackQtyRaw(s) || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'packQty\',this.value)">';
-        html += '<input type="text" class="form-input" style="font-size:12px;width:52px;flex-shrink:0;padding:5px 4px" placeholder="片" value="' + escapeHtml(s.unit || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'unit\',this.value)" list="spec-unit-list">';
+        html += '<input type="number" class="form-input" style="font-size:12px;flex:.85;min-width:0;padding:5px 6px" placeholder="15" value="' + (specPackQtyRaw(s) || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'packQty\',this.value)">';
+        html += '<input type="text" class="form-input" style="font-size:12px;width:52px;flex-shrink:0;padding:5px 4px" placeholder="ml" value="' + escapeHtml(s.unit || '') + '" onchange="setVariantSpec(' + i + ',' + k + ',\'unit\',this.value)" list="spec-unit-list">';
         html += '<button class="btn btn-danger btn-sm" style="flex-shrink:0;padding:5px 7px" onclick="removeVariantSpec(' + i + ',' + k + ')">✕</button>';
         html += '</div>';
-        // 该规格的算式预览（如 日用 3包×5片 = 15片）
+        // 该规格的算式预览（如 A品牌小样 3包×15ml/包 = 45ml）
         html += '<div style="font-size:11px;color:var(--text-tertiary);margin:-2px 0 4px 2px">' + escapeHtml(specLineText(s)) + '</div>';
       });
       html += '<button class="btn btn-outline btn-sm" style="width:100%;padding:5px;margin-bottom:4px" onclick="addVariantSpec(' + i + ')">＋ 添加规格</button>';
@@ -5468,18 +5574,14 @@ function toggleVariantNoRestock(i) {
 function addVariantSpec(i) {
   var v = (window._editVariants || [])[i]; if (!v) return;
   if (!v.specs) v.specs = [];
-  v.specs.push({ name: '', qty: '', content: '', unit: (v.specs[0] ? v.specs[0].unit : (v.packWeightUnit || '')) }); // 全选填，不预填数字
+  // 明细 = 单套构成：新行不预填数字，只继承单位（优先用已有明细的单位，其次容量单位）
+  var u0 = v.specs[0] ? v.specs[0].unit : (v.packWeightUnit || '');
+  v.specs.push({ name: '', qty: '', content: '', unit: u0 || '' });
   window._specsOpen = window._specsOpen || {};
   window._specsOpen[i] = true;   // 点了添加规格 → 自动展开明细区
   renderVariantList();
 }
-// 勾选/取消「明细是一套的量」→ 只影响保存时的折算与预览
-function onSpecPerPackToggle(i, checked) {
-  var v = (window._editVariants || [])[i]; if (!v) return;
-  v.specPerPack = !!checked;
-  // 重新渲染整行以更新勾选颜色与折算预览
-  renderVariantList();
-}
+// 勾选/取消「明细是一套的量」已随 v1.6 语义统一删除：明细恒为「单套构成」
 function removeVariantSpec(i, k) {
   var v = (window._editVariants || [])[i]; if (!v || !v.specs) return;
   v.specs.splice(k, 1);
@@ -5589,21 +5691,25 @@ function onConsumablePriceBlur(idx, which, val) {
 function packHintOf(v, plain) {
   var MUL = plain ? ' × ' : ' <span style="color:var(--text-tertiary)">×</span> ';
   var DIM = plain ? function (x) { return x; } : function (x) { return '<i style="color:var(--text-tertiary)">' + x + '</i>'; };
-  // 混合规格：直接列出每种规格的件数与含量，再汇总
+  // 混合规格：明细 = 单套构成 → 库存 = Σ 各规格(套餐数 × 单套包数 − 已开包数) × 每包含量 × 每份规格
   var sp = variantSpecsOf(v);
   if (sp.length) {
+    var u0 = variantSpecUnit(v);
     var parts = sp.map(function (s) {
       var nm = String(s.name || '').trim();
       var u = s.unit || '';
-      return (nm ? nm + ' ' : '') + trimNum(specPackCount(s)) + '包' + MUL + trimNum(specPackQty(s)) + u + '/包 = ' + trimNum(specTotalOf(s)) + u;
+      return (nm ? nm + ' ' : '') + trimNum(specPackCount(s)) + '包' + MUL + trimNum(specPackQty(s)) + u + '/包';
     });
-    var base = parts.join(' + ') + ' = ' + trimNum(variantSpecContent(v)) + variantSpecUnit(v);
-    // 勾了「明细是一套的量」：显示 ×套餐数 的折算预览（如 67片/套 × 2套 = 134片）
-    var pcH = parseFloat(v.packCount) || 0;
-    if (v.specPerPack && pcH > 1) {
-      return '📦 库存 = (' + base + ')' + MUL + pcH + '套 = ' + trimNum(variantSpecContent(v) * pcH) + variantSpecUnit(v) + '（共 ' + trimNum(variantSpecPacks(v) * pcH) + ' 包）';
-    }
-    return '📦 库存 = ' + base + '（共 ' + trimNum(variantSpecPacks(v)) + ' 包）';
+    var perSet = variantSpecPerSet(v);
+    var pcS = variantPacksBought(v);
+    var leftSets = variantPacksLeftCalc(v);
+    var total = variantSpecStockCalc(v);
+    var line = '单套 = ' + parts.join(' + ') + ' = ' + trimNum(perSet) + u0;
+    var head = '📦 库存 = (' + line + ')' + MUL + trimNum(pcS) + '套';
+    if (leftSets < pcS) head += '（剩 ' + trimNum(leftSets) + ' 套）';
+    var stockTxt = ' = ' + trimNum(total) + u0;
+    var piecesTxt = '（共 ' + trimNum(variantSpecPiecesCalc(v)) + ' 件）';
+    return head + stockTxt + piecesTxt;
   }
   // 主结构：总套餐数 × 套餐内包数 × 单包规格 = 库存
   var pcRaw = (v.packCount === '' || v.packCount === undefined || v.packCount === null) ? '' : String(v.packCount);
@@ -5659,7 +5765,7 @@ function onConsumableQtyUnitInput(idx, val) {
 function addConsumableVariantRow() {
   window._editVariants = window._editVariants || [];
   window._editVariantPhotos = window._editVariantPhotos || [];
-  window._editVariants.push({ id: genId(), brand: '', stock: 0, price: 0, totalPrice: 0, packCount: '', packPrice: '', packQty: '', packQtyUnit: '', packUnit: '包', packWeight: '', packWeightUnit: '', specPerPack: true, specs: [], photos: [] });
+  window._editVariants.push({ id: genId(), brand: '', stock: 0, price: 0, totalPrice: 0, packCount: '', packPrice: '', packQty: '', packQtyUnit: '', packUnit: '包', packWeight: '', packWeightUnit: '', specs: [], photos: [] });
   window._editVariantPhotos.push([]);
   document.getElementById('variant-list').innerHTML = renderConsumableVariantRows();
 }
@@ -5925,6 +6031,9 @@ function saveItem() {
   if (zone.type === 'consumable') {
     // 从品牌变体编辑器读取
     var editVariants = window._editVariants || [];
+    // 旧变体快照：用于把「已开包数」从旧数据带过来（按名称+单位匹配）
+    var _oldItem = editingItemId ? getItem(currentZoneId, editingItemId) : null;
+    var oldVariantsForLeft = (_oldItem && _oldItem.variants) ? _oldItem.variants : [];
     data.variants = editVariants.map(function(ev, i) {
       // 留空 = 1，填 0 = 0：所有数量类字段统一按此语义归一
       function normQty(x) { var s = String(x == null ? '' : x).trim(); if (s === '') return 1; return parseFloat(s) || 0; }
@@ -5949,43 +6058,56 @@ function saveItem() {
       nv.packQtyUnit = String(ev.packQtyUnit || '').trim();   // 件数单位（瓶/包/个…）
       nv.packUnit = (ev.packUnit && !isContentUnitText(ev.packUnit)) ? ev.packUnit : nv.packQtyUnit; // 旧字段兼容；含量单位一律不收
       nv.packWeight = normQty(ev.packWeight);
-      // 混合规格（本品牌可选）：库存按含量口径汇总，件数仅作参考
-      // 规格两层结构：packCount(包数) × packQty(每包含量) × content(每份规格)；留空 = 1，填 0 = 0
+      // 混合规格（本品牌可选）：specs = 「一套里装了什么」（单套构成），永不被套餐数折算写回
+      // 库存 = Σ 各规格(套餐数 × 单套包数 − 已开包数) × 每包含量 × 每份规格；消耗记在 specs[i].openPacks
+      // 规格两层结构：packCount(单套内包数) × packQty(每包含量) × content(每份规格)；留空 = 1，填 0 = 0
       nv.specs = (ev.specs || []).map(function (s) {
         var spc_ = (s.packCount !== undefined && s.packCount !== null && s.packCount !== '') ? (parseFloat(s.packCount) || 0) : ((+s.qty || 0) > 0 ? +s.qty : 1);
         var spq_ = (s.packQty !== undefined && s.packQty !== null && s.packQty !== '') ? (parseFloat(s.packQty) || 0) : 1;
         var sct_ = (s.content !== undefined && s.content !== null && s.content !== '') ? (+s.content || 0) : 1;
-        return { name: (s.name || '').trim(), packCount: spc_, packQty: spq_, content: sct_, unit: (s.unit || '').trim(), qty: Math.round(spc_ * spq_ * 100) / 100 };
+        return { name: (s.name || '').trim(), packCount: spc_, packQty: spq_, content: sct_, unit: (s.unit || '').trim(), qty: Math.round(spc_ * spq_ * 100) / 100, openPacks: specOpenPacks(s) };
       }).filter(function (s) { return +s.packCount > 0; });
       if (nv.specs.length) {
-        // 运算规则：勾选「明细是一套的量」时，specs = 单套构成 × 套餐数 = 全量库存
-        // （每套 39+8+20=67片 × 2套 = 134片）；不勾选则 specs 本身就是全部总量，不乘套餐数
-        // 折算一次后 specsFolded=true，之后编辑保存不会重复折算
-        var packsN = parseFloat(nv.packCount); if (!isFinite(packsN)) packsN = 1;
-        if (nv.specPerPack && packsN !== 1) {
-          nv.specs.forEach(function (s) { s.packCount = Math.round((+s.packCount || 0) * packsN * 100) / 100; });
-        }
-        var sc = 0, spc = 0;
-        nv.specs.forEach(function (s) {
-          spc += specPiecesOf(s);
-          sc += specTotalOf(s);
-          s.qty = Math.round(specPiecesOf(s) * 100) / 100; // 兼容字段：包数 × 每包含量
+        // ① 套餐数：用户填多少就存多少（留空 = 1）；不做任何折算写回（消灭「横跳」）
+        var packsN = variantPacksBought(nv);
+        nv.packCount = packsN;
+        // ② 明细归一：补齐 content=1、同步 qty；已开包数由表单原样带回（openPacks）
+        var oldV = null;
+        (oldVariantsForLeft || []).forEach(function (x) { if (x && x.id === nv.id) oldV = x; });
+        var oldSpecs = (oldV && oldV.specs) ? oldV.specs : [];
+        nv.specs.forEach(function (s, si) {
           if (!(+s.content > 0)) s.content = 1;
+          // 已开包数：优先用表单带回的值；为 0 时按「名称+单位」从旧数据补（防止表单未初始化）
+          var keep = specOpenPacks(s);
+          if (!(keep > 0)) {
+            oldSpecs.forEach(function (os) {
+              if (keep > 0) return;
+              var sameName = String(os.name || '').trim() === String(s.name || '').trim();
+              var sameUnit = String(os.unit || '').trim() === String(s.unit || '').trim();
+              if (sameName && sameUnit) keep = specOpenPacks(os);
+            });
+          }
+          if (!(keep > 0) && oldSpecs[si]) keep = specOpenPacks(oldSpecs[si]);
+          // 已开包数不能超过「套餐数 × 单套包数」
+          var maxOpen = packsN * specPackCount(s);
+          s.openPacks = Math.round(Math.min(keep, maxOpen) * 100) / 100;
+          s.qty = Math.round(specPackCount(s) * specPackQty(s) * 100) / 100; // 兼容字段：单套内包数 × 每包含量
         });
-        nv.stock = Math.round(sc * 100) / 100;          // 库存（小单位总数，如 134片）
-        // 保持「套数 × 每套含 = 库存」自洽：2套 × 67片/套 = 134片
-        if (nv.specPerPack && packsN !== 1) {
-          nv.packCount = packsN;
-          nv.packQty = Math.round((spc / packsN) * 100) / 100;
-        } else {
-          // 明细=全部总量 → 记成 1 批（价格行显示 1 套 × 总价，不再出现份数当套数的矛盾）
-          nv.packCount = 1;
-          nv.packQty = Math.round(spc * 100) / 100;
-        }
+        // ③ 库存 = Σ 各规格剩余包数 × 每包含量 × 每份规格
+        nv.stock = variantSpecStockCalc(nv);
+        // ④ 父级规格行已被明细接管：不再从明细反写 packQty（避免「套数 × 每套含」的旧矛盾）
         nv.specsFolded = true;
-        nv.packUnit = nv.specs[0].unit || nv.packUnit;
+        nv.packsLeft = undefined;   // 计数改由 specs[i].openPacks 承载        nv.packUnit = nv.specs[0].unit || nv.packUnit;
         nv.packWeight = 1;
         nv.packWeightUnit = nv.specs[0].unit || nv.packWeightUnit;
+        // ⑤ 重启消费状态：库存还有 → 不是「用完」；仍有未结束的开封记录 → 保持「使用中」
+        if (nv.stock > 0) {
+          nv.usedUp = false; nv.finishDate = null;
+          nv.opened = !!(_oldItem && (_oldItem.usageRecords || []).some(function (r) { return r.variantId === nv.id && !r.endDate; }));
+          nv.openDate = nv.opened ? ((oldV && oldV.openDate) || new Date().toISOString()) : null;
+        }
+      } else {
+        nv.specs = [];
       }
       return nv;
     });
@@ -6672,12 +6794,14 @@ function openStockAuditForm(itemId) {
       if (isInUse) {
         html += '<div style="font-size:12px;color:var(--text-tertiary);flex-shrink:0">—</div>';
       } else if (spA) {
-        html += '<div style="flex-shrink:0;width:170px">';
+        html += '<div style="flex-shrink:0;width:190px">';
         spA.forEach(function (s, si) {
+          var pqA = specPackQty(s), uA = s.unit || '';
+          var remainA = specPacksRemaining(v, s);
           html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">';
           html += '<span style="font-size:12px;color:var(--text-secondary);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(s.name || ('规格' + (si + 1))) + '</span>';
-          html += '<input type="number" class="form-input audit-spec-input" data-vi="' + i + '" data-si="' + si + '" data-content="' + (+s.content || 0) + '" data-recorded-qty="' + (+s.qty || 0) + '" value="' + (+s.qty || 0) + '" min="0" step="1" style="width:64px;text-align:center;font-weight:600" oninput="updateAuditTotal()">';
-          html += '<span style="font-size:11px;color:var(--text-tertiary)">份</span>';
+          html += '<input type="number" class="form-input audit-spec-input" data-vi="' + i + '" data-si="' + si + '" data-content="' + (+s.content || 0) + '" data-packqty="' + pqA + '" data-recorded-packs="' + remainA + '" value="' + remainA + '" min="0" step="1" style="width:70px;text-align:center;font-weight:600" oninput="updateAuditTotal()">';
+          html += '<span style="font-size:11px;color:var(--text-tertiary)">包' + (pqA !== 1 ? '(' + trimNum(pqA) + uA + ')' : '') + '</span>';
           html += '</div>';
         });
         html += '</div>';
@@ -6710,11 +6834,12 @@ function updateAuditTotal() {
     total += parseFloat(el.value) || 0;
     recorded += parseFloat(el.getAttribute('data-recorded')) || 0;
   });
-  // 多规格：份数 × 每份含量
+  // 多规格：剩余包数 × 每包含量 × 每份规格
   document.querySelectorAll('.audit-spec-input').forEach(function(el) {
     var c = parseFloat(el.getAttribute('data-content')) || 0;
-    total += (parseFloat(el.value) || 0) * c;
-    recorded += (parseFloat(el.getAttribute('data-recorded-qty')) || 0) * c;
+    var pq = parseFloat(el.getAttribute('data-packqty')) || 1;
+    total += (parseFloat(el.value) || 0) * pq * c;
+    recorded += (parseFloat(el.getAttribute('data-recorded-packs')) || 0) * pq * c;
   });
   total = Math.round(total * 100) / 100;
   recorded = Math.round(recorded * 100) / 100;
@@ -6749,22 +6874,24 @@ function saveStockAudit(itemId) {
     variants.forEach(function(v, i) {
       var spS = (v.specs && v.specs.length) ? v.specs : null;
       if (spS) {
-        // 多规格：按规格份数落账，库存由明细重算；盘出库存后自动解除「用完」
+        // 多规格：按「剩余包数」落账（构成与套餐数不动，只校正剩余量）
         var touched = false;
+        var allBad = false;
         spS.forEach(function (s, si) {
           var el = document.querySelector('.audit-spec-input[data-vi="' + i + '"][data-si="' + si + '"]');
           if (!el) return;
           var n = parseFloat(el.value);
-          if (isNaN(n) || n < 0) { toast('请输入有效份数'); ok = false; return; }
-          // 两层落账：盘点填的是「剩几份」→ packCount = 份数（每包含量归 1）
-          s.packCount = n;
-          s.packQty = 1;
-          s.qty = n; // 兼容字段同步
+          if (isNaN(n) || n < 0) { toast('请输入有效的剩余包数'); ok = false; allBad = true; return; }
+          // 剩余包数 → 反算已开包数：openPacks = 套餐数 × 单套包数 − 剩余包数
+          var total = variantPacksBought(v) * specPackCount(s);
+          s.openPacks = Math.round(Math.max(0, total - n) * 100) / 100;
+          s.qty = Math.round(specPackCount(s) * specPackQty(s) * 100) / 100; // 兼容字段：构成口径
           touched = true;
         });
+        if (allBad) { actual += v.stock || 0; return; }
         if (touched) {
           v.stock = variantSpecContent(v);
-          // 套数/每套含是「购买记录」，盘点只校正明细与库存，不覆盖（否则套数被写成份数总和）
+          // 套餐数是「购买记录」，盘点只校正剩余量，不覆盖
           if (!v.specsFolded) v.specsFolded = true;
           if (v.stock > 0) {
             v.usedUp = false; v.finishDate = null;
