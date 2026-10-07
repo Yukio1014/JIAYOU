@@ -2384,7 +2384,14 @@ function syncItemFromVariants(item) {
     item.opened = item.variants.some(function(v) { return v.opened && !v.usedUp; });
     item.usedUp = item.variants.length > 0 && item.variants.every(function(v) { return v.usedUp; });
     var active = item.variants.find(function(v) { return v.opened && !v.usedUp; });
-    if (active) { item.openDate = active.openDate; item.openQty = active.openQty; }
+    if (active) {
+      item.openDate = active.openDate;
+      item.openQty = active.openQty;
+    } else {
+      // 没有使用中的品牌 → 顶层开封时间同步清空（杜绝幽灵残留）
+      item.openDate = null;
+      item.openQty = null;
+    }
   }
 }
 
@@ -2828,6 +2835,8 @@ function stockBarClass(item, status) {
 // 有效周期记录：必须有起止日期，且不是 0 天（开始=结束）——0 天记录会拉垮速率平均
 function validPeriodRecords(item) {
   return (item && item.usageRecords ? item.usageRecords : []).filter(function (r) {
+    if (!r) return false;
+    if (r.type === 'surplus') return false; // 盘盈入库是进货不是消耗，绝不进速率
     return r.startDate && r.endDate && !isZeroDayRecord(r);
   });
 }
@@ -3766,6 +3775,21 @@ function hasOpenRecordOf(item, variantId) {
     return !r.endDate;
   });
 }
+// 开封时间唯一真源 = 使用记录：取该品牌最早一条记录的开始日期。
+// 卡片绝不自己硬存「开封时间」——删了记录，时间自然消失，绝不出现数据打架。
+function variantOpenDateOf(item, v) {
+  if (!item || !v) return null;
+  var best = null;
+  (item.usageRecords || []).forEach(function (r) {
+    if (!r || r.variantId !== v.id || r.instant) return;
+    if (r.type === 'surplus') return; // 盘盈入库不是开封，不算
+    if (!r.startDate) return;
+    var t = new Date(r.startDate).getTime();
+    if (isNaN(t)) return;
+    if (best === null || t < best) best = t;
+  });
+  return best !== null ? new Date(best).toISOString() : null;
+}
 function reconcileItemState(item) {
   if (!item) return;
   ensureVariants(item);
@@ -3781,14 +3805,13 @@ function reconcileItemState(item) {
       v.opened = true;
       v.usedUp = false;
       v.finishDate = null;
-      if (!v.openDate) {
-        var openDates = (item.usageRecords || [])
-          .filter(function (r) { return r.variantId === v.id && !r.instant && r.startDate; })
-          .map(function (r) { return new Date(r.startDate); });
-        if (openDates.length) v.openDate = new Date(Math.min.apply(null, openDates)).toISOString();
-      }
+      // 开封时间以使用记录为准（最早一条开始日期），记录缺失时才沿用旧值兜底
+      var recOpen = variantOpenDateOf(item, v);
+      v.openDate = recOpen || v.openDate || null;
     } else {
       // 没有未结束的记录 → 绝不残留「使用中」
+      // 幽灵开封时间修复：记录已删/已结束 → 开封时间必须同步清空（动态真源是使用记录）
+      v.openDate = null;
       // 判定是否已用完：多规格看规格是否全部开光；普通品牌看该品牌是否已被标记用完
       var allGone = false;
       if (specs.length) {
@@ -3920,15 +3943,30 @@ function rollbackRecordConsumption(item, r) {
   var v = (item.variants || []).find(function (x) { return x.id === r.variantId; });
   if (!v) return;
   var specs = variantSpecsOf(v);
-  if (!specs.length) return; // 普通变体：开封时已扣 stock，删记录不自动回补库存（用户可另行盘点/补货）
+  if (!specs.length) {
+    // 普通变体：盘点流水（盘亏/盘盈）删除时必须退回差额，保持「删记录=撤销这笔流水」
+    if (r.isAudit) {
+      var qA = Math.round((parseFloat(r.qty) || 0) * 100) / 100;
+      if (qA > 0) {
+        if (r.type === 'surplus') v.stock = Math.max(0, Math.round(((parseFloat(v.stock) || 0) - qA) * 100) / 100);
+        else v.stock = Math.round(((parseFloat(v.stock) || 0) + qA) * 100) / 100;
+      }
+    }
+    return; // 其余普通变体记录：开封时已扣 stock，删记录不自动回补（用户可另行盘点/补货）
+  }
   // 多规格：按记录里的规格名把已开包数减回去
   var nm = String(r.specName || '');
   var s = specs.find(function (x) { return String(x.name || '') === nm; });
   if (!s) return;
   var pq = specPackQty(s);
   var back = 1;
-  // 记录 qty 是「份」时换算回包数；纯开包记录 qty 即 1 包
-  if (pq > 0 && (parseFloat(r.qty) || 0) > pq) back = Math.max(1, Math.ceil((parseFloat(r.qty) || pq) / pq - 1e-9));
+  if (r.isAudit) {
+    // 盘点流水：按生成时记录的包数精确回滚；盘盈删除则反向加回已开包数
+    if (r.type === 'surplus') back = -(parseFloat(r.auditPacks) || 0);
+    else back = parseFloat(r.auditPacks) || 1;
+  } else if (pq > 0 && (parseFloat(r.qty) || 0) > pq) {
+    back = Math.max(1, Math.ceil((parseFloat(r.qty) || pq) / pq - 1e-9));
+  }
   s.openPacks = Math.max(0, Math.round((specOpenPacks(s) - back) * 100) / 100);
   s.qty = Math.round(specPackCount(s) * pq * 100) / 100;
   v.stock = variantSpecContent(v);
@@ -4155,19 +4193,20 @@ function renderCardBack(item, zone) {
           var wu = weightUnitOf(v);
           html += '<div class="vc-meta-item"><div class="vc-meta-label">单包容量</div><div class="vc-meta-value">' + round1(v.packWeight) + ' ' + wu + '</div></div>';
         }
-        if (v.openDate) {
+        var vOpenDate = variantOpenDateOf(item, v); // 开封时间动态真源 = 使用记录
+        if (vOpenDate) {
           var dateTxt;
           if (isDone && v.finishDate) {
-            dateTxt = formatDate(v.openDate) + ' → ' + formatDate(v.finishDate) + '（' + daysBetween(new Date(v.openDate), new Date(v.finishDate)) + '天）';
+            dateTxt = formatDate(vOpenDate) + ' → ' + formatDate(v.finishDate) + '（' + daysBetween(new Date(vOpenDate), new Date(v.finishDate)) + '天）';
           } else if (isDone) {
-            dateTxt = formatDate(v.openDate) + ' 起';
-          } else if (!isUsing && v.openDate) {
+            dateTxt = formatDate(vOpenDate) + ' 起';
+          } else if (!isUsing) {
             // 「本份用完但还有剩余」：显示上一批的起止，而不是无限增长的「已用 X 天」
             var lastEndD = null;
             (item.usageRecords || []).forEach(function(r) { if (r.variantId === v.id && r.endDate) lastEndD = r.endDate; });
-            dateTxt = lastEndD ? ('上批 ' + formatDate(v.openDate) + ' → ' + formatDate(lastEndD)) : (formatDate(v.openDate) + ' 起');
+            dateTxt = lastEndD ? ('上批 ' + formatDate(vOpenDate) + ' → ' + formatDate(lastEndD)) : (formatDate(vOpenDate) + ' 起');
           } else {
-            dateTxt = formatDate(v.openDate) + ' 起 · 已用 ' + daysBetween(new Date(v.openDate), new Date()) + ' 天';
+            dateTxt = formatDate(vOpenDate) + ' 起 · 已用 ' + daysBetween(new Date(vOpenDate), new Date()) + ' 天';
           }
           html += '<div class="vc-meta-item' + (hasWeight ? '' : ' wide') + '"><div class="vc-meta-label">开封时间</div><div class="vc-meta-value">' + dateTxt + '</div></div>';
         }
@@ -4351,7 +4390,11 @@ function renderCardBack(item, zone) {
           }
         }
         var recTxt;
-        if (r.instant) {
+        if (r.type === 'surplus') {
+          // 盘盈入库：只进流水，不进消耗速率（进货不是消耗）
+          var spU = (vR0 ? (vR0.packUnit || mainPackUnit(item)) : mainPackUnit(item)) || '份';
+          recTxt = '📥 ' + (vR0 ? escapeHtml(vR0.brand) + ' · ' : '') + '盘盈入库 +' + trimNum(r.qty) + ' ' + escapeHtml(spU) + (startStr ? ' · ' + startStr : '');
+        } else if (r.instant) {
           // 模型③ 打卡记录：只显示「✨ 累计消耗 N 份 · 最近日期」
           var iu = (vR0 ? (vR0.packUnit || mainPackUnit(item)) : mainPackUnit(item)) || '份';
           recTxt = '✨ ' + (vR0 ? escapeHtml(vR0.brand) + ' · ' : '') + '累计消耗 ' + trimNum(r.qty) + ' ' + escapeHtml(iu) + (startStr ? ' · 最近 ' + startStr : '');
@@ -4852,8 +4895,8 @@ function manualRefresh() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791356918 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791356918';
+// deploy.py 部署时会把 1791358025 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791358025';
 
 function checkAppUpdate(manual) {
   try {
@@ -7240,6 +7283,55 @@ function undoFinishVariant(itemId, variantId) {
 }
 
 // ========== 库存盘点（方案A） ==========
+// 盘点时间锚点：这笔「盘点差额流水」从哪天开始算？
+// 规则：取「最近一条消耗记录的结束日期」与「最近一次盘点日期」中更晚的那个；
+//      都没有 → 30 天前兜底。保证盘亏的量落在一段真实空窗期里，不污染之前的记录。
+function auditAnchorDate(item) {
+  var latest = null;
+  (item && item.usageRecords || []).forEach(function (r) {
+    if (!r || !r.endDate) return;
+    var t = new Date(r.endDate).getTime();
+    if (!isNaN(t) && (latest === null || t > latest)) latest = t;
+  });
+  (item && item.auditHistory || []).forEach(function (a) {
+    if (!a || !a.date) return;
+    var t = new Date(a.date).getTime();
+    if (!isNaN(t) && (latest === null || t > latest)) latest = t;
+  });
+  if (latest === null) return new Date(Date.now() - 30 * 86400000);
+  var d = new Date(latest);
+  if (d.getTime() >= Date.now()) return new Date(Date.now() - 86400000); // 锚点不能落在今天及以后
+  return d;
+}
+// 盘点流水工厂：盘亏 → 消耗记录（进速率）；盘盈 → 入库记录（不进速率，只进流水）
+// 口径与开封记录对齐：qty=份数（多规格）、contentUsed=含量、specText=展示文本、auditPacks=包数（精确回滚用）
+function makeAuditRecord(anchor, now, v, specName, qty, contentUsed, diffPacks, isSurplus) {
+  var rec = {
+    qty: Math.round(Math.abs(qty) * 100) / 100,
+    variantId: v ? v.id : null,
+    brand: (v && v.brand) || '',
+    isAudit: true,
+    note: isSurplus ? '盘盈入库' : '盘点盘亏'
+  };
+  if (specName) {
+    rec.specName = specName;
+    rec.specText = specName + '×' + trimNum(Math.abs(diffPacks)) + '包';
+  }
+  if (contentUsed) rec.contentUsed = Math.round(Math.abs(contentUsed) * 100) / 100;
+  if (diffPacks) rec.auditPacks = Math.round(Math.abs(diffPacks) * 100) / 100;
+  if (isSurplus) {
+    rec.type = 'surplus';
+    rec.date = now.toISOString();
+  } else {
+    // 防御：锚点与盘点日同天（如一天内盘点两次）→ 起点退到昨天，
+    // 绝不让盘亏记录变成 0 天记录被速率过滤掉
+    var a2 = anchor;
+    if (daysBetween(a2, now) <= 0) a2 = new Date(now.getTime() - 86400000);
+    rec.startDate = a2.toISOString();
+    rec.endDate = now.toISOString();
+  }
+  return rec;
+}
 function openStockAuditForm(itemId) {
   var item = getItem(currentZoneId, itemId);
   if (!item) return;
@@ -7357,6 +7449,10 @@ function saveStockAudit(itemId) {
   var recorded = 0;
   (item.variants || []).forEach(function(v) { if (!(isSetPackMode(item) && v.opened && !v.usedUp)) recorded += (v.stock || 0); });
   var actual = 0;
+  // 盘点流水容器：盘亏/盘盈都先收集，落账后统一写入 usageRecords
+  var auditFlows = [];
+  var anchorA = auditAnchorDate(item);   // 起点：上次记录结束日 / 上次盘点日
+  var nowA = new Date();
 
   if (variants.length > 0) {
     var ok = true;
@@ -7371,10 +7467,23 @@ function saveStockAudit(itemId) {
           if (!el) return;
           var n = parseFloat(el.value);
           if (isNaN(n) || n < 0) { toast('请输入有效的剩余包数'); ok = false; allBad = true; return; }
+          var remainBefore = specPacksRemaining(v, s);
+          var sDiff = Math.round((remainBefore - n) * 100) / 100; // >0 盘亏包数；<0 盘盈包数
           // 剩余包数 → 反算已开包数：openPacks = 套餐数 × 单套包数 − 剩余包数
           var total = variantPacksBought(v) * specPackCount(s);
           s.openPacks = Math.round(Math.max(0, total - n) * 100) / 100;
           s.qty = Math.round(specPackCount(s) * specPackQty(s) * 100) / 100; // 兼容字段：构成口径
+          // 盘点差额 → 自动转化为流水（用户要求：绝不悄悄覆盖数字）
+          if (sDiff !== 0) {
+            var pqS = specPackQty(s), cS = specContentOf(s);
+            auditFlows.push(makeAuditRecord(
+              anchorA, nowA, v, (s.name || ('规格' + (si + 1))),
+              sDiff * pqS,                    // qty = 份数（包数 × 每包含量）
+              Math.abs(sDiff) * pqS * cS,     // 含量（与开封记录 contentUsed 同口径）
+              Math.abs(sDiff),                // 包数（精确回滚用）
+              sDiff < 0
+            ));
+          }
           touched = true;
         });
         if (allBad) { actual += v.stock || 0; return; }
@@ -7396,7 +7505,14 @@ function saveStockAudit(itemId) {
       if (!input) return; // 使用中跳过盘点，保留原 stock
       var val = parseFloat(input.value);
       if (isNaN(val) || val < 0) { toast('请输入有效数量'); ok = false; return; }
-      v.stock = val;
+      // 普通变体：差额 → 流水（盘亏=消耗记录；盘盈=入库记录），绝不悄悄覆盖
+      var oldStock = Math.round((parseFloat(v.stock) || 0) * 100) / 100;
+      var nv = Math.round(val * 100) / 100;
+      v.stock = nv;
+      var vDiff = Math.round((oldStock - nv) * 100) / 100;
+      if (vDiff !== 0) {
+        auditFlows.push(makeAuditRecord(anchorA, nowA, v, null, vDiff, null, null, vDiff < 0));
+      }
       actual += val;
     });
     if (!ok) return;
@@ -7404,7 +7520,12 @@ function saveStockAudit(itemId) {
     var input = document.getElementById('audit-stock');
     actual = parseFloat(input ? input.value : NaN);
     if (isNaN(actual) || actual < 0) { toast('请输入有效数量'); return; }
+    var oldItemStock = Math.round((parseFloat(item.stock) || 0) * 100) / 100;
     item.stock = actual;
+    var iDiff = Math.round((oldItemStock - actual) * 100) / 100;
+    if (iDiff !== 0) {
+      auditFlows.push(makeAuditRecord(anchorA, nowA, null, null, iDiff, null, null, iDiff < 0));
+    }
   }
 
   var diff = recorded - actual; // 正数=实际用得更快
@@ -7414,47 +7535,34 @@ function saveStockAudit(itemId) {
     date: new Date().toISOString(),
     recorded: recorded,
     actual: actual,
-    diff: diff
+    diff: diff,
+    flows: auditFlows.length
   });
 
-  // 校正库存：把差异记成一条使用记录
-  // 场景：出差/家人代用 → 中间没写记录，盘点时消失的那部分也是被用掉了
-  // 规则：起点 = 上一条记录的结束日（没有则用 30 天前兜底），终点 = 今天
-  // 这样「这一段」才会作为一条真实使用记录参与速率计算
-  if (diff > 0) {
+  // 盘点差额流水落账：盘亏 → 消耗记录（自动参与速率/年度消耗）；盘盈 → 入库记录（只进流水）
+  if (auditFlows.length) {
     if (!item.usageRecords) item.usageRecords = [];
-    var nowA = new Date();
-    // 找最近一条已结束记录的 endDate 作为起点（按日期不按数组顺序，防止乱序）
-    var lastEndMs = null;
-    item.usageRecords.forEach(function (r) {
-      if (!r.endDate) return;
-      var t = new Date(r.endDate).getTime();
-      if (isNaN(t)) return;
-      if (lastEndMs === null || t > lastEndMs) lastEndMs = t;
-    });
-    var startA = lastEndMs !== null ? new Date(lastEndMs) : new Date(nowA.getTime() - 30 * 86400000);
-    // 起点不能晚于今天
-    if (startA.getTime() > nowA.getTime()) startA = new Date(nowA.getTime() - 86400000);
-    item.usageRecords.push({
-      startDate: startA.toISOString(),
-      endDate: nowA.toISOString(),
-      qty: diff,
-      variantId: null,
-      brand: '盘点差异(共用)',
-      isAudit: true
-    });
+    auditFlows.forEach(function (f) { item.usageRecords.push(f); });
   }
 
-  syncItemFromVariants(item);
+  // 状态对账：按新库存量重算开封/用完状态 + 顶层汇总（日均消耗/年度建议随后自动重算）
+  reconcileItemState(item);
   saveDB();
   closeModal();
+  refreshItemViews(item);
   openCardDetail(currentZoneId, itemId);
-  if (diff === 0) {
+  var lossN = auditFlows.filter(function (f) { return f.type !== 'surplus'; }).length;
+  var gainN = auditFlows.length - lossN;
+  if (diff === 0 && !auditFlows.length) {
     toast('盘点完成，数量一致');
-  } else if (diff > 0) {
-    toast('盘点完成，差异 ' + diff + mainPackUnit(item) + '（实际用得更快）已校正');
+  } else if (lossN && gainN) {
+    toast('📋 盘点完成：' + lossN + ' 条盘亏消耗 + ' + gainN + ' 条盘盈入库已记账');
+  } else if (lossN) {
+    toast('📋 盘点完成：差额已记为 ' + lossN + ' 条消耗记录（年度消耗自动更新）');
+  } else if (gainN) {
+    toast('📋 盘点完成：多出的量已记为 ' + gainN + ' 条盘盈入库（不计入消耗）');
   } else {
-    toast('盘点完成，实际比记录多 ' + Math.abs(diff) + mainPackUnit(item));
+    toast('盘点完成，数量一致');
   }
 }
 
