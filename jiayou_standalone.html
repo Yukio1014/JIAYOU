@@ -842,6 +842,12 @@ body {
 }
 .open-record:last-child { border-bottom: none; }
 
+/* 历史归档台账折叠块 */
+.ledger-fold > summary { -webkit-user-select: none; user-select: none; }
+.ledger-fold > summary::-webkit-details-marker { display: none; }
+.ledger-fold > summary::marker { display: none; content: ''; }
+.ledger-fold[open] > summary { background: rgba(0,122,255,0.08); color: var(--primary); }
+
 </style>
 </head>
 <body>
@@ -3889,6 +3895,20 @@ function openUsageEdit(itemId, idx) {
   var fmt = function(s) { return s ? String(s).slice(0, 10) : ''; };
   var html = '<div class="modal-handle"></div><div class="modal-title">✏️ 编辑使用记录</div>';
   html += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px">' + escapeHtml(item.name) + ' · 可修正数量与日期（历史记录若按套餐误记，请按实际' + rateUnitName(item) + '数修正）</div>';
+  if (r.instant) {
+    var iuU = (function () { var v0 = (item.variants || []).find(function (x) { return x.id === r.variantId; }); return (v0 && v0.packUnit) || mainPackUnit(item) || '份'; })();
+    html += '<div style="font-size:12px;color:var(--orange);margin-bottom:10px">✨ 即时打卡记录' + (r.batch ? '（批量）' : '') + ' · 修改数量会自动同步剩余库存</div>';
+    html += '<div class="form-group"><label class="form-label">本次消耗数量（' + iuU + '）</label><input type="number" class="form-input" id="ur-qty" step="1" min="1" value="' + (r.qty || 1) + '"></div>';
+    html += '<div class="form-group"><label class="form-label">消耗日期</label><input type="date" class="form-input" id="ur-start" value="' + fmt(r.startDate) + '"></div>';
+    html += '<div style="display:flex;gap:10px;margin-top:14px">';
+    html += '<button class="btn btn-danger" style="flex:1" onclick="deleteInstantRecord(\'' + itemId + '\',' + idx + ')">🗑️ 删除</button>';
+    html += '<button class="btn btn-primary" style="flex:2" onclick="saveInstantRecordEdit(\'' + itemId + '\',' + idx + ')">保存</button>';
+    html += '</div>';
+    html += '<button class="btn btn-ghost btn-full" style="margin-top:8px;color:var(--red)" onclick="clearAllUsageRecords(\'' + itemId + '\')">🗑️ 清空全部使用记录</button>';
+    document.getElementById('modal-content').innerHTML = html;
+    document.getElementById('modal-overlay').classList.add('show');
+    return;
+  }
   html += '<div class="form-group"><label class="form-label">消耗数量（' + rateUnitName(item) + '）</label><input type="number" class="form-input" id="ur-qty" step="0.01" min="0" value="' + (r.qty || 1) + '"></div>';
   html += '<div class="form-group"><label class="form-label">开始日期</label><input type="date" class="form-input" id="ur-start" value="' + fmt(r.startDate) + '"></div>';
   html += '<div class="form-group"><label class="form-label">结束日期（留空 = 使用中）</label><input type="date" class="form-input" id="ur-end" value="' + fmt(r.endDate) + '"></div>';
@@ -3902,6 +3922,37 @@ function openUsageEdit(itemId, idx) {
   html += '<button class="btn btn-ghost btn-full" style="margin-top:8px;color:var(--red)" onclick="clearAllUsageRecords(\'' + itemId + '\')">🗑️ 清空全部使用记录</button>';
   document.getElementById('modal-content').innerHTML = html;
   document.getElementById('modal-overlay').classList.add('show');
+}
+// 即时打卡记录编辑：改数量时把差额同步回库存（改多 → 库存再减；改少 → 库存退回）
+function saveInstantRecordEdit(itemId, idx) {
+  var item = findItemByIdGlobal(itemId);
+  if (!item || !item.usageRecords || !item.usageRecords[idx]) { closeModal(); return; }
+  var r = item.usageRecords[idx];
+  if (!r.instant) { closeModal(); return; }
+  var q = parseFloat(document.getElementById('ur-qty').value);
+  if (isNaN(q) || q <= 0) { toast('请输入大于 0 的数量'); return; }
+  q = Math.floor(q);
+  if (q < 1) { toast('数量至少为 1'); return; }
+  var v = (item.variants || []).find(function (x) { return x.id === r.variantId; });
+  var u = (v && v.packUnit) || mainPackUnit(item) || '份';
+  var oldQ = parseFloat(r.qty) || 0;
+  var delta = Math.round((q - oldQ) * 100) / 100;   // >0 需再扣；<0 需退回
+  if (v) {
+    var stock = parseFloat(v.stock) || 0;
+    var newStock = Math.round((stock - delta) * 100) / 100;
+    if (newStock < 0) { toast('⚠️ 库存不足：最多只能改成 ' + trimNum(stock + oldQ) + u); return; }
+    v.stock = newStock;
+    if (v.stock > 0 && v.usedUp) { v.usedUp = false; v.finishDate = null; }
+    else if (v.stock <= 0 && !v.usedUp) { v.usedUp = true; v.finishDate = new Date().toISOString(); }
+  }
+  r.qty = q;
+  var s = document.getElementById('ur-start').value;
+  if (s) { r.startDate = s; r.endDate = s; }
+  syncItemFromVariants(item);
+  saveDB();
+  closeModal();
+  refreshItemViews(item);
+  toast('✅ 打卡记录已更新，库存已同步');
 }
 function saveUsageEdit(itemId, idx) {
   var item = findItemByIdGlobal(itemId);
@@ -3983,6 +4034,22 @@ function clearAllUsageRecords(itemId) {
   var n = (item.usageRecords || []).length;
   if (!n) { toast('这个产品还没有使用记录'); return; }
   if (!window.confirm('确定清空「' + (item.name || '') + '」的全部 ' + n + ' 条使用记录吗？\n清空后该产品的消耗速率与采购建议将从头重新推算。')) return;
+  // 即时消耗型：清空记录必须把已打卡扣掉的库存全部退回，否则「记录没了、库存却少了」
+  if (consumeModelOf(item) === 'instant') {
+    (item.usageRecords || []).forEach(function (r) {
+      if (!r || !r.instant) return;
+      var vI = (item.variants || []).find(function (x) { return x.id === r.variantId; });
+      if (vI) vI.stock = Math.round(((parseFloat(vI.stock) || 0) + (parseFloat(r.qty) || 0)) * 100) / 100;
+    });
+    (item.variants || []).forEach(function (v) { if (v.stock > 0) { v.usedUp = false; v.finishDate = null; } });
+    item.usageRecords = [];
+    syncItemFromVariants(item);
+    saveDB();
+    closeModal();
+    refreshItemViews(item);
+    toast('🧹 已清空 ' + n + ' 条打卡记录，库存已退回');
+    return;
+  }
   item.usageRecords = [];
   // 清空记录 = 撤回所有开封/开包动作 → 品牌回到未开封（库存不动，因为开包时已扣）
   (item.variants || []).forEach(function (v) {
@@ -4093,8 +4160,35 @@ function renderCardFront(item, zone) {
   }
 
   html += '<div class="detail-tap-hint">👆 点击翻面查看全部</div>';
+  // === 卡片正面：快捷「✏️ 修改」（改开封日期 / 数量，不必删了重开） ===
+  if (zone.type === 'consumable') {
+    var editIdxF = lastEditableRecordIdx(item);
+    if (editIdxF >= 0) {
+      var editLabelF = (consumeModelOf(item) === 'instant') ? '✏️ 修改最近打卡' : '✏️ 修改使用中记录';
+      html += '<button class="btn btn-outline btn-sm" style="width:100%;margin-top:10px;font-size:12px" onclick="openUsageEdit(\'' + item.id + '\',' + editIdxF + ')">' + editLabelF + '</button>';
+    }
+  }
   html += '</div></div>';
   document.getElementById('flip-front').innerHTML = html;
+}
+// 卡片正面「修改」按钮指向哪条记录：即时型 → 最近一条打卡；其余 → 最新一条「使用中」记录
+function lastEditableRecordIdx(item) {
+  var recs = (item && item.usageRecords) || [];
+  if (!recs.length) return -1;
+  if (consumeModelOf(item) === 'instant') {
+    for (var i = recs.length - 1; i >= 0; i--) {
+      if (recs[i] && recs[i].instant) return i;
+    }
+    return -1;
+  }
+  for (var j = recs.length - 1; j >= 0; j--) {
+    var r = recs[j];
+    if (r && !r.endDate && !r.instant && !r.isAudit && r.startDate) return j;
+  }
+  for (var k = recs.length - 1; k >= 0; k--) {
+    if (recs[k] && !recs[k].instant) return k;
+  }
+  return -1;
 }
 
 function renderCardBack(item, zone) {
@@ -4116,10 +4210,11 @@ function renderCardBack(item, zone) {
     var cModel = consumeModelOf(item);
     html += '<div class="sticky-actions">';
     if (cModel === 'instant') {
-      // 模型③：纯打卡，主按钮 = 消耗一份（可反复点），副按钮 = 撤销一次
+      // 模型③：主按钮 = 消耗一份（严格只扣 1）；副按钮 = 批量消耗（自填数量）/ 盘点 / 补货
       html += '<button class="btn btn-primary btn-sm" style="flex:1.6" onclick="punchInstant(\'' + item.id + '\',\'' + instantTargetVariant(item) + '\')">✨ 消耗一份</button>';
-      html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="unpunchInstant(\'' + item.id + '\',\'' + instantTargetVariant(item) + '\')">↩️ 撤销</button>';
-      html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="openRestockForm(\'' + item.id + '\')">📦 补货</button>';
+      html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="batchPunchInstant(\'' + item.id + '\',\'' + instantTargetVariant(item) + '\')">🔢 批量</button>';
+      html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="openStockAuditForm(\'' + item.id + '\')">📦 盘点</button>';
+      html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="openRestockForm(\'' + item.id + '\')">📥 补货</button>';
     } else {
       html += '<button class="btn btn-primary btn-sm" style="flex:1" onclick="openItem(\'' + item.id + '\')">🔓 开封</button>';
       html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="openRestockForm(\'' + item.id + '\')">📦 补货</button>';
@@ -4381,8 +4476,11 @@ function renderCardBack(item, zone) {
     // === 使用记录 ===
     if (item.usageRecords && item.usageRecords.length > 0) {
       var cModelR = consumeModelOf(item);
+      var actNowR = typeof variantActiveOpenRecs === 'function'
+        ? (item.variants || []).reduce(function (s, vv) { return s + variantActiveOpenRecs(item, vv).length; }, 0)
+        : 0;
       html += '<div class="back-section">';
-      html += '<div class="back-section-title">使用记录 (' + item.usageRecords.length + '次)</div>';
+      html += '<div class="back-section-title">📊 消耗概览</div>';
       var rate = calcUsageRate(item);
       if (cModelR === 'instant') {
         // 模型③：只展示「今年已用 N 份」，不做周期速率（打卡没有起止周期概念）
@@ -4404,6 +4502,12 @@ function renderCardBack(item, zone) {
           if (aq0 > 1) html += '<div class="back-row"><span class="back-label">年需求容量</span><span class="back-value">≈ ' + round1(rate*12*aq0) + escapeHtml(mainPackUnit(item)) + '/年</span></div>';
         }
       }
+      // === 历史归档台账（默认收起，避免与卡片上的「使用中」信息重复） ===
+      html += '<details class="ledger-fold" style="margin-top:10px">';
+      html += '<summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;padding:9px 12px;border-radius:10px;background:var(--bg-secondary);font-size:13px;font-weight:600;color:var(--text-secondary)">';
+      html += '<span style="font-size:14px">📒</span><span style="flex:1">历史归档台账 (' + item.usageRecords.length + ' 条)</span>';
+      if (actNowR > 0) html += '<span style="font-size:11px;color:var(--orange);font-weight:700">' + actNowR + ' 件使用中</span>';
+      html += '<span style="font-size:11px;color:var(--text-tertiary)">点击展开 ▾</span></summary>';
       html += '<div class="usage-log" style="margin-top:8px">';
       var aqR = avgPackQtyOf(item);
       // 并行场景：未结束的「使用中」记录必须全部展示（不能因为超出 5 条被截断），
@@ -4439,9 +4543,9 @@ function renderCardBack(item, zone) {
           var spU = (vR0 ? (vR0.packUnit || mainPackUnit(item)) : mainPackUnit(item)) || '份';
           recTxt = '📥 ' + (vR0 ? escapeHtml(vR0.brand) + ' · ' : '') + '盘盈入库 +' + trimNum(r.qty) + ' ' + escapeHtml(spU) + (startStr ? ' · ' + startStr : '');
         } else if (r.instant) {
-          // 模型③ 打卡记录：只显示「✨ 累计消耗 N 份 · 最近日期」
+          // 模型③ 打卡记录：每次打卡独立一条 → 显示「本次消耗 N 份 · 日期」
           var iu = (vR0 ? (vR0.packUnit || mainPackUnit(item)) : mainPackUnit(item)) || '份';
-          recTxt = '✨ ' + (vR0 ? escapeHtml(vR0.brand) + ' · ' : '') + '累计消耗 ' + trimNum(r.qty) + ' ' + escapeHtml(iu) + (startStr ? ' · 最近 ' + startStr : '');
+          recTxt = '✨ ' + (vR0 ? escapeHtml(vR0.brand) + ' · ' : '') + (r.batch ? '批量 ' : '') + '消耗 ' + trimNum(r.qty) + ' ' + escapeHtml(iu) + (startStr ? ' · ' + startStr : '');
         } else if (r.endDate) {
           var days = daysBetween(new Date(r.startDate), new Date(r.endDate));
           recTxt = '📅 ' + startStr + ' → ' + formatDate(r.endDate) + ' · ' + days + '天 · ' + qtyTxt;
@@ -4452,7 +4556,7 @@ function renderCardBack(item, zone) {
         } else {
           recTxt = '📅 记录 · ' + qtyTxt;
         }
-        html += '<div class="open-record" style="cursor:pointer" onclick="openUsageEdit(\'' + item.id + '\',' + w.oi + ')">' + recTxt + '<span style="float:right;font-size:11px;color:var(--text-tertiary)">✏️</span></div>';
+        html += '<div class="open-record" style="cursor:pointer;display:flex;align-items:center;gap:8px" onclick="openUsageEdit(\'' + item.id + '\',' + w.oi + ')"><span style="flex:1;min-width:0">' + recTxt + '</span><button class="btn btn-outline btn-sm" style="flex-shrink:0;font-size:11px;padding:2px 8px" onclick="event.stopPropagation();openUsageEdit(\'' + item.id + '\',' + w.oi + ')">✏️ 修改</button></div>';
       });
       html += '</div>';
       var zeroCnt = (item.usageRecords || []).filter(isZeroDayRecord).length;
@@ -4460,6 +4564,21 @@ function renderCardBack(item, zone) {
         html += '<div style="margin-top:8px;padding:8px 10px;border-radius:8px;background:rgba(255,149,0,0.10);font-size:12px;color:var(--orange);font-weight:600">⚠️ 检测到 ' + zeroCnt + ' 条 0 天记录（开始=结束），已自动剔除出消耗速率统计 · <span style="text-decoration:underline;cursor:pointer" onclick="purgeZeroRecords(\'' + item.id + '\')">一键清理</span></div>';
       }
       html += '<button class="btn btn-outline btn-sm" style="width:100%;margin-top:8px;color:var(--red);border-color:rgba(255,59,48,0.35)" onclick="clearAllUsageRecords(\'' + item.id + '\')">🗑️ 清空全部使用记录</button>';
+      html += '</div>';
+      html += '</details>';
+      html += '</div>';
+    } else if (consumeModelOf(item) === 'instant') {
+      // 即时消耗型即使还没有打卡记录，也要露出「历史归档台账」入口（模型完整性）
+      html += '<div class="back-section">';
+      html += '<div class="back-section-title">📊 消耗概览</div>';
+      var iuU0 = (item.variants && item.variants[0] ? (item.variants[0].packUnit || mainPackUnit(item)) : mainPackUnit(item)) || '份';
+      html += '<div class="back-row"><span class="back-label">今年已用</span><span class="back-value" style="color:var(--accent);font-weight:700">0 ' + escapeHtml(iuU0) + '</span></div>';
+      html += '<div class="back-row"><span class="back-label">剩余</span><span class="back-value">' + trimNum(getTotalStock(item)) + ' ' + escapeHtml(iuU0) + '</span></div>';
+      html += '<details class="ledger-fold" style="margin-top:10px">';
+      html += '<summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;padding:9px 12px;border-radius:10px;background:var(--bg-secondary);font-size:13px;font-weight:600;color:var(--text-secondary)">';
+      html += '<span style="font-size:14px">📒</span><span style="flex:1">历史归档台账 (0 条)</span><span style="font-size:11px;color:var(--text-tertiary)">点击展开 ▾</span></summary>';
+      html += '<div class="usage-log" style="margin-top:8px"><div style="font-size:12px;color:var(--text-tertiary);padding:8px 0">还没有打卡记录。点上方「✨ 消耗一份」记一次消耗，这里就会逐条留痕。</div></div>';
+      html += '</details>';
       html += '</div>';
     }
 
@@ -4941,8 +5060,8 @@ function manualRefresh() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791360300 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791360300';
+// deploy.py 部署时会把 1791362150 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791362150';
 
 function checkAppUpdate(manual) {
   try {
@@ -5081,10 +5200,14 @@ function openVariantItem(itemId, variantId) {
     html += '<div style="font-size:14px;color:var(--accent)">' + escapeHtml(v.brand) + '</div>';
     html += '<div style="font-size:13px;color:var(--text-secondary)">剩 ' + trimNum(iuStock) + iuUnit + ' · 今年已用 ' + trimNum(iuUsed) + iuUnit + '</div>';
     html += '</div>';
-    html += '<div style="font-size:12px;color:var(--text-secondary);text-align:center;margin-bottom:12px">点一次扣一份，可反复点；扣到 0 自动归入「已用完」</div>';
+    html += '<div style="font-size:12px;color:var(--text-secondary);text-align:center;margin-bottom:12px">点一次只扣 <b>1</b> 份（绝不整批清零）；要一次扣多份请用「🔢 批量消耗」自己填数量</div>';
     html += '<div style="display:flex;gap:8px">';
     html += '<button class="btn btn-primary btn-full" ' + (iuStock > 0 ? '' : 'disabled style="opacity:.5"') + ' onclick="punchInstant(\'' + itemId + '\',\'' + variantId + '\');closeModal()">✨ 消耗一份</button>';
     html += '<button class="btn btn-outline btn-full" ' + (iuUsed > 0 ? '' : 'disabled style="opacity:.5"') + ' onclick="unpunchInstant(\'' + itemId + '\',\'' + variantId + '\');closeModal()">↩️ 撤销一次</button>';
+    html += '</div>';
+    html += '<div style="display:flex;gap:8px;margin-top:8px">';
+    html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="batchPunchInstant(\'' + itemId + '\',\'' + variantId + '\')">🔢 批量消耗</button>';
+    html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="closeModal();openStockAuditForm(\'' + itemId + '\')">📦 盘点</button>';
     html += '</div>';
     html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">关闭</button>';
     document.getElementById('modal-content').innerHTML = html;
@@ -5420,45 +5543,42 @@ function confirmOpen(itemId, variantId, markAsUsed) {
 }
 
 // ========== 模型③ 即时消耗型：纯打卡扣减 ==========
-// 语义：点一次 = 消耗一份，可反复点；不设 opened/finishDate，也不进「本批用完」流程；
-//      扣到 0 才自动折叠进「已用完」。记录标记 instant:true，便于和周期型区分统计。
+// 语义铁律（第 8 轮统一）：
+//   ① 点一次「消耗一份」= 只扣 1 个库存，绝不整批清零；
+//   ② 每一次打卡 = 一条**独立记录**（绝不 rec.qty += 合并成滚动批次），
+//      这样历史台账才能回答「什么时候消耗了多少」；
+//   ③ 批量扣减必须走独立入口 batchPunchInstant（用户自己输入数量），
+//      任何默认路径都不许一次扣光整批；
+//   ④ 扣到 0 才自动折叠进「已用完」。
 function punchInstant(itemId, variantId, delta) {
   var item = getItem(currentZoneId, itemId);
   if (!item) return;
   var v = item.variants.find(function (x) { return x.id === variantId; });
   if (!v) return;
-  var d = (delta === undefined) ? 1 : parseFloat(delta);
-  if (!(d > 0)) return;
+  // 【铁律①】未显式传 delta 时，永远只扣 1；即使传了也强制夹到 [1, stock]
+  var d = (delta === undefined || delta === null || delta === '') ? 1 : parseFloat(delta);
+  if (!(d > 0)) d = 1;
+  d = Math.floor(d);                 // 件数是整数，杜绝 0.5 之类误传
+  if (!(d > 0)) d = 1;
   var stock = parseFloat(v.stock) || 0;
   if (stock <= 0) { toast('已经用完了'); return; }
   var take = Math.min(d, stock);
   var u = v.packUnit || mainPackUnit(item) || '份';
 
   v.stock = Math.round((stock - take) * 100) / 100;
-  // 即时消耗不区分「开封/用完」两态，只保留一个滚动中的批次（用不完就一直累积为一条）
-  var rec = null;
-  if (item.usageRecords) {
-    for (var i = item.usageRecords.length - 1; i >= 0; i--) {
-      var r = item.usageRecords[i];
-      if (r.variantId === variantId && r.instant) { rec = r; break; }
-    }
-  }
   if (!item.usageRecords) item.usageRecords = [];
   var nowISO = new Date().toISOString();
-  if (rec) {
-    rec.qty = Math.round(((rec.qty || 0) + take) * 100) / 100;
-    rec.endDate = nowISO;
-  } else {
-    item.usageRecords.push({
-      startDate: nowISO, endDate: nowISO, qty: take,
-      variantId: variantId, brand: v.brand, instant: true
-    });
-  }
+  // 【铁律②】每次打卡独立落一条记录（qty = 本次扣减量），不再合并成滚动批次。
+  //   保留 `instant:true` 便于统计口径区分；`note` 记录是否批量操作。
+  item.usageRecords.push({
+    startDate: nowISO, endDate: nowISO, qty: take,
+    variantId: variantId, brand: v.brand, instant: true,
+    batch: take > 1 ? true : undefined
+  });
   // 扣到 0 才算真正用完 → 折叠
   if (v.stock <= 0) {
     v.usedUp = true;
     v.finishDate = nowISO;
-    if (rec) rec.endDate = nowISO;
     syncItemFromVariants(item);
     saveDB();
     openCardDetail(currentZoneId, itemId);
@@ -5468,7 +5588,80 @@ function punchInstant(itemId, variantId, delta) {
   syncItemFromVariants(item);
   saveDB();
   openCardDetail(currentZoneId, itemId);
-  toast('打卡 -' + trimNum(take) + u + '，剩 ' + trimNum(v.stock) + u);
+  toast('✨ 消耗 -' + trimNum(take) + u + '，剩 ' + trimNum(v.stock) + u);
+}
+
+// 【批量消耗入口】用户自己输入数量 —— 唯一允许一次扣多份的路径。
+// 绝不默认清零整批：输入框默认值恒为 1，超过库存时按库存封顶并明确提示。
+function batchPunchInstant(itemId, variantId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  var v = item.variants.find(function (x) { return x.id === variantId; });
+  if (!v) { v = item.variants.find(function (x) { return (parseFloat(x.stock) || 0) > 0; }); }
+  if (!v) { toast('没有可消耗的品牌'); return; }
+  var u = v.packUnit || mainPackUnit(item) || '份';
+  var stock = parseFloat(v.stock) || 0;
+  if (stock <= 0) { toast('已经用完了'); return; }
+  var html = '<div class="modal-handle"></div>';
+  html += '<div class="modal-title">✨ 批量消耗</div>';
+  html += '<div style="text-align:center;margin-bottom:14px">';
+  html += '<div style="font-size:16px;font-weight:700">' + escapeHtml(item.name) + '</div>';
+  html += '<div style="font-size:13px;color:var(--accent)">' + escapeHtml(v.brand || '') + '</div>';
+  html += '<div style="font-size:13px;color:var(--text-secondary);margin-top:4px">当前剩余 ' + trimNum(stock) + u + '</div>';
+  html += '</div>';
+  if (item.variants && item.variants.length > 1) {
+    html += '<div class="form-group"><label class="form-label">扣减品牌</label><select class="form-select" id="bp-variant">';
+    item.variants.forEach(function (x) {
+      html += '<option value="' + x.id + '"' + (x.id === v.id ? ' selected' : '') + '>' + escapeHtml(x.brand || '') + '（剩 ' + trimNum(parseFloat(x.stock) || 0) + u + '）</option>';
+    });
+    html += '</select></div>';
+  }
+  html += '<div class="form-group"><label class="form-label">本次消耗数量（' + u + '）</label>';
+  html += '<input type="number" class="form-input" id="bp-qty" min="1" step="1" value="1" max="' + stock + '" style="font-size:22px;text-align:center;font-weight:700"></div>';
+  html += '<div style="font-size:12px;color:var(--text-tertiary);margin-bottom:12px">⚠️ 只能扣除 1 ~ ' + trimNum(stock) + u + '；系统不会自动清空整批，请输入你想扣的实际数量。</div>';
+  html += '<button class="btn btn-primary btn-full" onclick="confirmBatchPunch(\'' + item.id + '\')">确认消耗</button>';
+  html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">取消</button>';
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('show');
+}
+function confirmBatchPunch(itemId) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  var selEl = document.getElementById('bp-variant');
+  var variantId = selEl ? selEl.value : '';
+  var v = item.variants.find(function (x) { return x.id === variantId; });
+  if (!v) { v = item.variants.find(function (x) { return (parseFloat(x.stock) || 0) > 0; }); }
+  if (!v) { toast('没有可消耗的品牌'); return; }
+  var qEl = document.getElementById('bp-qty');
+  var q = parseFloat(qEl ? qEl.value : 1);
+  var u = v.packUnit || mainPackUnit(item) || '份';
+  var stock = parseFloat(v.stock) || 0;
+  if (!(q > 0)) { toast('请输入大于 0 的数量'); return; }
+  q = Math.floor(q);
+  if (q < 1) { toast('请输入大于 0 的整数'); return; }
+  if (q > stock) { toast('最多只能扣 ' + trimNum(stock) + u + '，已按库存封顶'); q = Math.floor(stock); }
+  if (!(q > 0)) { toast('已经用完了'); return; }
+  closeModal();
+  punchInstant(itemId, v.id, q);
+}
+
+// 删除单条即时打卡记录（即时型记录不进 rollbackRecordConsumption，需单独回退库存）
+function deleteInstantRecord(itemId, idx) {
+  var item = findItemByIdGlobal(itemId);
+  if (!item || !item.usageRecords || !item.usageRecords[idx]) { closeModal(); return; }
+  var r = item.usageRecords[idx];
+  if (!r.instant) { closeModal(); return; }
+  var v = (item.variants || []).find(function (x) { return x.id === r.variantId; });
+  if (v) {
+    v.stock = Math.round(((parseFloat(v.stock) || 0) + (parseFloat(r.qty) || 0)) * 100) / 100;
+    if (v.stock > 0 && v.usedUp) { v.usedUp = false; v.finishDate = null; }
+  }
+  item.usageRecords.splice(idx, 1);
+  syncItemFromVariants(item);
+  saveDB();
+  closeModal();
+  refreshItemViews(item);
+  toast('🗑️ 已删除该次打卡并退回库存');
 }
 // 某变体本年的即时消耗量（按记录年份汇总）
 function instantUsedQty(item, variantId, year) {
@@ -5482,7 +5675,8 @@ function instantUsedQty(item, variantId, year) {
     })
     .reduce(function (s, r) { return s + (parseFloat(r.qty) || 0); }, 0);
 }
-// 模型③改数量：点「−」回落 / 点错撤销（不允许低于 0，也不超过购买总量）
+// 模型③撤销：回退**最近一条**打卡记录（整条撤销，退回其全部 qty）
+// 与「一次只扣 1」对称：单次打卡撤销 1，批量打卡撤销那一批（用户可再逐条删）
 function unpunchInstant(itemId, variantId) {
   var item = getItem(currentZoneId, itemId);
   if (!item) return;
@@ -5492,18 +5686,18 @@ function unpunchInstant(itemId, variantId) {
   var rec = null;
   for (var i = item.usageRecords.length - 1; i >= 0; i--) {
     var r = item.usageRecords[i];
-    if (r.variantId === variantId && r.instant && (r.qty || 0) > 0) { rec = r; break; }
+    if (r.variantId === variantId && r.instant && (parseFloat(r.qty) || 0) > 0) { rec = r; break; }
   }
   if (!rec) { toast('没有可撤销的打卡'); return; }
   var u = v.packUnit || mainPackUnit(item) || '份';
-  rec.qty = Math.round(((rec.qty || 0) - 1) * 100) / 100;
-  if (rec.qty <= 0) item.usageRecords.splice(item.usageRecords.indexOf(rec), 1);
-  v.stock = Math.round(((parseFloat(v.stock) || 0) + 1) * 100) / 100;
+  var back = parseFloat(rec.qty) || 0;
+  item.usageRecords.splice(item.usageRecords.indexOf(rec), 1);
+  v.stock = Math.round(((parseFloat(v.stock) || 0) + back) * 100) / 100;
   if (v.stock > 0 && v.usedUp) { v.usedUp = false; v.finishDate = null; }
   syncItemFromVariants(item);
   saveDB();
   openCardDetail(currentZoneId, itemId);
-  toast('已撤销 1' + u + '，剩 ' + trimNum(v.stock) + u);
+  toast('↩️ 已撤销最近一次打卡 ' + trimNum(back) + u + '，剩 ' + trimNum(v.stock) + u);
 }
 
 // 即时消耗型：点「消耗一份」时作用在哪个品牌上
