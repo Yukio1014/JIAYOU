@@ -4241,6 +4241,25 @@ function deleteVariant(itemId, variantId) {
   }
 }
 
+// v1.7 强制归属迁移：给历史委托补父级物品 ID，给方案明细补「性质」默认值。
+// 保守策略：只补空缺，绝不改写已有数据（旧变体历史不动）。
+function migrateTaskParent() {
+  var fixed = 0;
+  (DB.tasks || []).forEach(function (t) {
+    if (!t.sourceItemId) {
+      var found = null;
+      (t.plans || []).forEach(function (p) { if (!found && p && p.sourceItemId) found = p.sourceItemId; });
+      if (found && findItemByIdGlobal(found)) { t.sourceItemId = found; fixed++; }
+    }
+    (t.plans || []).forEach(function (p) {
+      if (!p) return;
+      if (!p.sourceItemId && t.sourceItemId) p.sourceItemId = t.sourceItemId;
+      (p.subItems || []).forEach(function (s) { if (!s.kind) s.kind = 'normal'; });
+    });
+  });
+  return fixed;
+}
+
 // 点击正面翻面
 document.addEventListener('DOMContentLoaded', async function() {
   await loadDB();
@@ -4249,6 +4268,7 @@ document.addEventListener('DOMContentLoaded', async function() {
   migrateSpecPacks();
   migrateSpecTwoLayer();
   migratePackUnit();
+  migrateTaskParent();
   // 立即用本地数据渲染首页（不等待网络，秒开）
   showPage('home');
   // 立即更新云端状态 UI（避免卡在静态"初始化..."文字）
@@ -4268,6 +4288,7 @@ document.addEventListener('DOMContentLoaded', async function() {
           migrateSpecPacks();
           migrateSpecTwoLayer();
           migratePackUnit();
+          migrateTaskParent();
           renderAll();
         }
       }
@@ -4312,8 +4333,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791342386 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791342386';
+// deploy.py 部署时会把 1791348213 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791348213';
 
 function checkAppUpdate(manual) {
   try {
@@ -7160,7 +7181,7 @@ function deleteZone(zoneId) {
 }
 
 // ========== 任务委托（原「目标锁定」完全重写） ==========
-var taskState = { tab: '待接', searchOpen: false, search: '', sel: null, formPlans: [], batchIds: [] };
+var taskState = { tab: '待接', searchOpen: false, search: '', sel: null, formPlans: [], batchIds: [], parentItemId: null };
 
 var TASK_TABS = [
   { key: '待接',   color: '#007AFF', label: '委托待接' },
@@ -7181,8 +7202,63 @@ function findPlan(t, pid) { if (!t.plans) return null; var s = String(pid); for 
 function cheapestPlan(t) { var best = null; (t.plans || []).forEach(function (p) { var a = +p.amount || 0; if (a > 0 && (!best || a < best.amount)) best = p; }); return best; }
 
 // ---------- 混合套餐：一个方案可含多种规格（如 44粒装×3盒 + 70粒装×2盒 = 272粒）----------
+// v1.7：明细带「性质」kind —— normal 正装 / refill 替换装 / gift 赠品。
+// 库存只认「实物件数与含量」，性质仅用于结算页与展示区分，绝不影响库存计算口径。
+var SPEC_KINDS = [
+  { k: 'normal', label: '正装', icon: '🫙' },
+  { k: 'refill', label: '替换装', icon: '♻️' },
+  { k: 'gift', label: '赠品', icon: '🎁' }
+];
+function specKindOf(s) {
+  var k = String((s && s.kind) || '').trim();
+  return (k === 'refill' || k === 'gift') ? k : 'normal';
+}
+function specKindLabel(k) {
+  for (var i = 0; i < SPEC_KINDS.length; i++) { if (SPEC_KINDS[i].k === k) return SPEC_KINDS[i].label; }
+  return '正装';
+}
+function specKindIcon(k) {
+  for (var i = 0; i < SPEC_KINDS.length; i++) { if (SPEC_KINDS[i].k === k) return SPEC_KINDS[i].icon; }
+  return '🫙';
+}
 function planSubList(p) {
   return (p.subItems || []).filter(function (s) { return (+s.spec > 0) && (+s.count > 0); });
+}
+// ---------- v1.7 强制归属：委托必须有父级物品，方案一律继承父级 ----------
+// 父级 = 库存里的「物品」（如 面霜），是仓库；方案里的各品牌 = 仓库下的货架。
+function taskParentIdOf(t) {
+  if (!t) return null;
+  if (t.sourceItemId) return t.sourceItemId;
+  // 兼容历史数据：从任一方案里回溯来源物品
+  var found = null;
+  (t.plans || []).forEach(function (p) { if (!found && p && p.sourceItemId) found = p.sourceItemId; });
+  return found;
+}
+function taskParentItem(t) {
+  var pid = taskParentIdOf(t);
+  return pid ? findItemByIdGlobal(pid) : null;
+}
+function taskParentLabel(t) {
+  var it = taskParentItem(t);
+  if (it) return it.name;
+  var pid = taskParentIdOf(t);
+  return pid ? '(已删除的物品)' : '';
+}
+// 该委托是否具备凯旋资格（必须挂父级）
+function taskCanWin(t) {
+  return !!taskParentIdOf(t);
+}
+// 在父级物品下按品牌名找变体（去掉首尾空白、忽略大小写）
+function findVariantByName(item, brandName) {
+  if (!item || !item.variants) return null;
+  var nm = String(brandName || '').trim().toLowerCase();
+  if (!nm) return null;
+  var hit = null;
+  item.variants.forEach(function (v) {
+    if (hit) return;
+    if (String(v.brand || '').trim().toLowerCase() === nm) hit = v;
+  });
+  return hit;
 }
 function planSubSpec(p) { // 每套（一份套餐）的总含量
   var subs = planSubList(p);
@@ -7191,13 +7267,15 @@ function planSubSpec(p) { // 每套（一份套餐）的总含量
   subs.forEach(function (s) { per += (+s.spec || 0) * (+s.count || 0); });
   return Math.round(per * 100) / 100;
 }
-function planSpecText(p) { // "44粒装×3 + 70粒装×2 = 272粒"
+function planSpecText(p) { // "44粒装×3 + 70粒装×2 = 272粒"；带性质图标（🫙正装/♻️替换装/🎁赠品）
   var subs = planSubList(p);
   if (!subs.length) return '';
   var u0 = subs[0].unit || '';
   var parts = subs.map(function (s) {
     var nm = String(s.name || '').trim() || (trimNum(+s.spec) + (s.unit || ''));
-    return nm + '×' + trimNum(+s.count);
+    var kd = specKindOf(s);
+    var ic = (kd !== 'normal') ? (specKindIcon(kd) + ' ') : '';
+    return ic + nm + '×' + trimNum(+s.count);
   });
   return parts.join(' + ') + ' = ' + trimNum(planSubSpec(p)) + u0;
 }
@@ -7502,7 +7580,11 @@ function taskActionButtons(t) {
     h += '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation();taskAbandon(\'' + t.id + '\')">放弃</button>';
     h += '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation();taskDestroy(\'' + t.id + '\')">🗑️</button>';
   } else if (t.status === '进行中') {
-    h += '<button class="btn btn-success btn-sm" style="flex:1" onclick="event.stopPropagation();taskWin(\'' + t.id + '\')">🏆 凯旋</button>';
+    // v1.7：未绑定父级物品 → 凯旋按钮禁用（点不动），并给出原因
+    var canWin = taskCanWin(t);
+    h += '<button class="btn btn-success btn-sm" style="flex:1' + (canWin ? '' : ';opacity:.45') + '" '
+      + (canWin ? ('onclick="event.stopPropagation();taskWin(\'' + t.id + '\')"') : 'onclick="event.stopPropagation();toast(\'⚠️ 请先编辑本委托，从库存引用一个父级物品\')"')
+      + '>' + (canWin ? '🏆 凯旋' : '🏆 凯旋（需先绑父级）') + '</button>';
     h += '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation();taskAbandon(\'' + t.id + '\')">放弃</button>';
     h += '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation();taskDestroy(\'' + t.id + '\')">🗑️</button>';
   } else {
@@ -7646,185 +7728,356 @@ function findItemByIdGlobal(itemId) {
   return null;
 }
 
-// 混合套餐凯旋：每个规格落成独立变体（套餐价按用户选择不分摊，整体记在第一个规格上）
-function winMultiSpec(t, plan, totalPrice) {
-  var d = planDerived(plan);
-  var qty = d.qty > 0 ? d.qty : 1;
-  var subs = planSubList(plan);
-  var specTxt = planSpecText(plan);
-  // 上次凯旋若已自动建过物品，这次继续累加到同一个物品（否则会重复建新品）
-  var item = findItemByIdGlobal(plan.sourceItemId || plan.syncedItemId || '');
-  if (!item) {
-    if (!t.zoneId) return false;
-    var zone = getZone(t.zoneId); if (!zone) return false;
-    var u0 = subs[0].unit || (zone.type === 'durable' ? '件' : '个');
-    var note0 = (t.note || '');
-    note0 += (note0 ? '\n' : '') + '套餐规格：' + specTxt + ' · 套餐价 ¥' + trimNum(totalPrice) + '（多规格，价格未分摊）';
-    item = {
-      id: genId(), name: plan.name || t.name, categoryId: t.categoryId || null,
-      consumeMode: 'pack', variants: [], unit: u0, stock: 0, currentPrice: 0,
-      channel: '', location: '', notes: note0,
-      photos: (plan.photos ? plan.photos.slice() : []), usageRecords: [], priceHistory: [], createdAt: new Date().toISOString()
-    };
-    if (zone.type === 'consumable') { item.shelfLife = null; item.productionDate = null; item.stockThreshold = 1; }
-    zone.items.push(item);
-    plan.syncedItemId = item.id;
-  }
-  if (!item.variants) item.variants = [];
-  subs.forEach(function (s) {
-    var perSpec = +s.spec || 0;
-    var addCount = (+s.count || 0) * qty; // 该规格的份数（盒数）
-    var u = s.unit || '';
-    var nm = String(s.name || '').trim() || (trimNum(perSpec) + u);
+// v1.7：旧的 doWin / winMultiSpec（会「凭空建独立物品」）已被 doWinSettle 全面取代。
+// ===== v1.7 凯旋回填：智能归位（不覆盖，只新增）=====
+// 铁律：
+//   ① 只在父级物品（仓库）下操作，绝不新建独立物品；
+//   ② 品牌名匹配到已有变体 → 合并；匹配不到 → 在父级下新建货架；
+//   ③ 旧变体（哪怕库存为 0）的历史数据一字不动；
+//   ④ 价格只写「实付金额」与价格历史，绝不参与库存数量/消耗计算。
+function doWinSettle(ws) {
+  var rows = ws.rows || [];
+  var createdVariants = 0, mergedVariants = 0;
+  // 按 任务|方案|目标变体 聚合：同一方案的多条明细（正装/替换装/赠品）落到同一个变体的 specs 里
+  var groups = {};
+  rows.forEach(function (r) {
+    var gk = r.taskId + '|' + r.planId + '|' + (r.targetVariantId || r._defaultTarget || '__new__');
+    if (!groups[gk]) {
+      groups[gk] = {
+        taskId: r.taskId, planId: r.planId, parentId: r.parentId,
+        targetVariantId: r.targetVariantId || r._defaultTarget || '__new__',
+        rows: [], amount: Math.round((+r.amount || 0) * 100) / 100,
+        comboPrice: r.comboPrice || 0, brand: r.name
+      };
+    }
+    groups[gk].rows.push(r);
+  });
+  Object.keys(groups).forEach(function (gk) {
+    var g = groups[gk];
+    g.brand = g.rows[0].name;
+  });
+
+  Object.keys(groups).forEach(function (gk) {
+    var g = groups[gk];
+    // ① 父级物品（仓库）必须存在 —— 否则跳过（绝不凭空建物品）
+    var item = findItemByIdGlobal(g.parentId);
+    if (!item) return;
+    if (!item.variants) item.variants = [];
+
+    // ② 确定目标变体：显式指定 > 品牌名匹配 > 新建
     var v = null;
-    (item.variants || []).forEach(function (vv) { if (String(vv.brand || '').trim() === nm) v = vv; });
+    if (g.targetVariantId && g.targetVariantId !== '__new__') {
+      item.variants.forEach(function (x) { if (x.id === g.targetVariantId) v = x; });
+    }
+    if (!v) v = findVariantByName(item, g.brand);
+    var isNewVariant = false;
     if (!v) {
+      // 新建货架：初始为空，明细与库存随后填入（不碰任何旧变体）
       v = {
-        id: genId(), brand: nm, packCount: 0, packPrice: 0, packQty: perSpec, packUnit: u || '个',
-        packWeight: 0, packWeightUnit: 'kg', stock: 0, price: 0, totalPrice: 0,
-        photos: (plan.photos || []).slice(), notes: '含于套餐：' + specTxt,
-        opened: false, usedUp: false, openQty: 0, feeling: null, shelfLife: null, productionDate: null
+        id: genId(), brand: g.brand || '新品牌',
+        packCount: 0, packPrice: 0, packQty: 1, packUnit: (g.rows[0].unit || '个'),
+        packWeight: 0, packWeightUnit: 'kg',
+        specs: [], stock: 0, price: 0, totalPrice: 0,
+        photos: [], notes: '', opened: false, usedUp: false, openQty: 0,
+        feeling: null, shelfLife: null, productionDate: null,
+        createdAt: new Date().toISOString()
       };
       item.variants.push(v);
+      isNewVariant = true;
+      createdVariants++;
+    } else {
+      mergedVariants++;
     }
-    v.packQty = perSpec;
-    if (u) v.packUnit = u;
-    v.packCount = (v.packCount || 0) + addCount;
-    v.stock = (v.stock || 0) + addCount * perSpec;
-    delete v.noRestock;
-    // 价格不分摊：变体只记数量，金额统一由套餐价 × 套餐数得出
-    v.packPrice = 0; v.price = 0; v.totalPrice = 0;
+
+    // ③ 本次到货明细 → 该变体的「单套构成」specs（v1.6 语义）
+    //    本次凯旋 = 又买了 1 套（含若干件）：明细按实际写，套餐数 +1
+    if (!v.specs) v.specs = [];
+    var u0 = g.rows[0].unit || '';
+    g.rows.forEach(function (r) {
+      var cnt = +r.actCount || 0, sp = +r.actSpec || 0;
+      if (!(cnt > 0)) return;
+      // 同一变体内，按「名称+性质」视为同一规格（避免重复堆行）
+      var hit = null;
+      v.specs.forEach(function (s) {
+        if (hit) return;
+        if (String(s.name || '').trim() === String(r.name || '').trim() && specKindOf(s) === r.kind) hit = s;
+      });
+      if (hit) {
+        hit.packCount = Math.round(((+hit.packCount || 0) + cnt) * 100) / 100;
+        hit.packQty = sp;
+        if (!hit.unit) hit.unit = r.unit || '';
+        hit.kind = r.kind;
+        hit.qty = Math.round((+hit.packCount || 0) * sp * 100) / 100;
+      } else {
+        v.specs.push({
+          id: genId(), name: r.name, kind: r.kind,
+          packCount: cnt,                       // 单套内该规格件数
+          packQty: sp,                          // 每件容量
+          content: 1,                           // 每份规格（默认 1）
+          unit: r.unit || '',
+          qty: Math.round(cnt * sp * 100) / 100,
+          openPacks: 0
+        });
+      }
+    });
+    // 套餐数 +1（本次买到 1 套）；构成永不被折算写回
+    v.packCount = Math.round(((+v.packCount || 0) + 1) * 100) / 100;
+    if (u0) v.packUnit = u0;
+    var firstUnit = (v.specs[0] && v.specs[0].unit) || '';
+    if (firstUnit) v.packWeightUnit = firstUnit;
+    var perSetPieces = variantSpecPerSetPieces(v);
+    if (perSetPieces > 0) v.packQty = perSetPieces;
+    // 库存 = Σ 剩余包数 × 每包含量 × 每份规格（自动含本次新增）
+    v.stock = variantSpecStockCalc(v);
+    if (v.stock > 0) { v.usedUp = false; v.finishDate = null; }
+    delete v.noRestock;   // 又买回来了 → 恢复计入补货提醒
+    // ④ 价格只记账
+    var amt = Math.round((+g.amount || 0) * 100) / 100;
+    if (amt > 0) {
+      v.totalPrice = Math.round(((+v.totalPrice || 0) + amt) * 100) / 100;
+      if (g.comboPrice > 0) v.packPrice = g.comboPrice;
+      v.price = v.stock > 0 ? Math.round((v.totalPrice / v.stock) * 100) / 100 : (v.price || 0);
+    }
+    // ⑤ 价格历史（含完整明细文字）
+    if (!item.priceHistory) item.priceHistory = [];
+    var specTxt = v.specs.map(function (s) {
+      return specKindIcon(specKindOf(s)) + (s.name || '') + '×' + trimNum(s.packCount) + (s.unit || '');
+    }).join(' + ');
+    item.priceHistory.push({
+      date: new Date().toISOString(), channel: '', quantity: 1,
+      totalPrice: amt, unitPrice: 0,
+      notes: '任务委托·凯旋结算' + (isNewVariant ? '（新建货架 ' + v.brand + '）' : '（并入货架 ' + v.brand + '）') + '：' + specTxt,
+      brand: v.brand || '', attachments: []
+    });
+    // ⑥ 物品级汇总（其它变体不受影响）
+    syncItemFromVariants(item);
+    item.currentPrice = (item.variants || []).reduce(function (s, x) {
+      return s + (x.totalPrice || ((x.price || 0) * (x.stock || 0)));
+    }, 0);
   });
-  // 套餐价不分摊：记在第一个规格变体上，保证物品账面总额正确
-  var firstV = item.variants.filter(function (x) { return subs.some(function (s) { return String(s.name || '').trim() === String(x.brand || '').trim(); }); })[0];
-  if (firstV) {
-    firstV.packPrice = plan.comboPrice || 0;
-    firstV.totalPrice = totalPrice;
-    firstV.price = firstV.stock > 0 ? Math.round((totalPrice / firstV.stock) * 100) / 100 : 0;
+
+  // ⑦ 实付金额覆盖（仅记账，不影响库存数量）
+  if (ws.amountOverride !== undefined && ws.amountOverride !== null && ws.amountOverride !== '') {
+    Object.keys(groups).forEach(function (gk) {
+      var g = groups[gk];
+      var it = findItemByIdGlobal(g.parentId);
+      if (!it || !it.priceHistory || !it.priceHistory.length) return;
+      var last = it.priceHistory[it.priceHistory.length - 1];
+      last.totalPrice = Math.round((parseFloat(ws.amountOverride) || 0) * 100) / 100;
+      last.notes += '（实付 ' + trimNum(parseFloat(ws.amountOverride) || 0) + '）';
+    });
   }
-  item.currentPrice = item.variants.reduce(function (s2, x) { return s2 + (x.totalPrice || ((x.price || 0) * (x.stock || 0))); }, 0);
-  if (!item.priceHistory) item.priceHistory = [];
-  item.priceHistory.push({ date: new Date().toISOString(), channel: '', quantity: qty, totalPrice: totalPrice, unitPrice: d.unitPrice || 0, notes: '任务委托·凯旋补货（混合套餐 ' + specTxt + '，价格未分摊）', brand: '', attachments: (plan.photos || []).slice() });
-  return true;
+
+  // ⑧ 任务状态流转
+  (ws.taskIds || []).forEach(function (tid) {
+    var t = taskById(tid);
+    if (!t) return;
+    t.status = '凯旋';
+    t.lockedPlanId = null;
+    (t.plans || []).forEach(function (p) { if (p.buy !== false) p.status = 'done'; });
+  });
+
+  var sum = '';
+  if (createdVariants) sum += '新建 ' + createdVariants + ' 个货架';
+  if (mergedVariants) sum += (sum ? '，' : '') + '并入 ' + mergedVariants + ' 个货架';
+  return { createdVariants: createdVariants, mergedVariants: mergedVariants, summary: sum };
 }
 
-// 凯旋：按勾选的「本次购买」方案逐条回写库存
-function doWin(t) {
-  var buys = (t.plans || []).filter(function (p) { return p.buy !== false; });
-  if (buys.length === 0) return false;
-  var anyOk = false;
-  buys.forEach(function (plan) {
-    var d = planDerived(plan);
-    var qty = d.qty > 0 ? d.qty : 1;
-    var totalPrice = Math.round((+plan.amount || 0) * 100) / 100;
-    // ⓪ 混合套餐（多种规格）：每种规格落成独立变体，套餐价不分摊
-    if (planSubList(plan).length) {
-      if (winMultiSpec(t, plan, totalPrice)) anyOk = true;
-      return;
-    }
-    if (plan.sourceVariantId && plan.sourceItemId) {
-      // ① 已有品牌：直接给原物品变体加库存
-      var item = findItemByIdGlobal(plan.sourceItemId);
-      if (item) {
-        var v = null;
-        (item.variants || []).forEach(function (vv) { if (vv.id === plan.sourceVariantId) v = vv; });
-        if (v) {
-          // 容量数：以本次采购为准（线上套餐内含若变化，同步更新）
-          var isWV = /kg|公斤|千克/i.test(plan.unit || '');
-          var pcW = parseUnitContent(plan.unit);
-          var vPackQty = (+plan.spec > 0) ? +plan.spec : (v.packQty || 1);
-          v.packQty = vPackQty;
-          // 单位文本可解析含量（"1kg"/"3kg"/"500g"）→ 每包重量按解析值记录，不再写死 1kg
-          if (pcW && +plan.spec > 0) {
-            v.packWeight = pcW.v; v.packWeightUnit = pcW.u;
-            if (pcW.name && (!v.packUnit || v.packUnit === '个')) v.packUnit = pcW.name; // "1kg/包"→包
-          } else if (isWV && +plan.spec > 0) { v.packWeight = 1; v.packWeightUnit = 'kg'; }
-          if (plan.unit && !pcW) v.packUnit = plan.unit; // 非重量文本才作为小单位名覆盖
-          delete v.noRestock; // 又买回来了 → 自动恢复计入补货提醒
-          v.packCount = (v.packCount || 0) + qty;
-          v.stock = (v.stock || 0) + qty * vPackQty;
-          if (plan.comboPrice > 0) v.packPrice = plan.comboPrice;
-          if (plan.amount > 0) { v.totalPrice = totalPrice; v.price = v.stock > 0 ? Math.round((totalPrice / v.stock) * 100) / 100 : plan.amount; }
-          if (plan.photos && plan.photos.length) v.photos = plan.photos.slice();
-          if (!item.variants) item.variants = [];
-          item.currentPrice = item.variants.reduce(function (s, x) { return s + (x.totalPrice || ((x.price || 0) * (x.stock || 0))); }, 0);
-          if (!item.priceHistory) item.priceHistory = [];
-          item.priceHistory.push({ date: new Date().toISOString(), channel: '', quantity: qty, totalPrice: totalPrice, unitPrice: d.unitPrice || 0, notes: '任务委托·凯旋补货', brand: v.brand || '', attachments: (plan.photos || []).slice() });
-          anyOk = true;
-        }
-      }
-    } else if (plan.sourceItemId) {
-      // ② 引用产品 + 新品牌：在该物品下自动新建变体并加库存（无需手动再添加）
-      var item2 = findItemByIdGlobal(plan.sourceItemId);
-      if (item2) {
-        if (!item2.variants) item2.variants = [];
-        var isW = /kg|公斤|千克/i.test(plan.unit || '');
-        var pcN = parseUnitContent(plan.unit);
-        var nvSpec = plan.spec || 1;
-        var nvPackQty = nvSpec;
-        var nvPackWeight = pcN ? pcN.v : (isW ? 1 : 0);
-        var nvPackUnit = pcN ? (pcN.name || '包') : (plan.unit || '个');
-        var nvStock = qty * nvPackQty;
-        var nv = {
-          id: genId(), brand: plan.name || '新品牌',
-          packCount: qty, packPrice: plan.comboPrice || 0, packQty: nvPackQty, packUnit: nvPackUnit, packWeight: nvPackWeight, packWeightUnit: pcN ? pcN.u : 'kg',
-          stock: nvStock, price: nvStock > 0 ? Math.round((totalPrice / nvStock) * 100) / 100 : (plan.amount || 0), totalPrice: totalPrice,
-          photos: (plan.photos || []).slice(), notes: (plan.note || ''), opened: false, usedUp: false, openQty: 0, feeling: null, shelfLife: null, productionDate: null
-        };
-        item2.variants.push(nv);
-        item2.currentPrice = item2.variants.reduce(function (s, x) { return s + (x.totalPrice || ((x.price || 0) * (x.stock || 0))); }, 0);
-        if (!item2.priceHistory) item2.priceHistory = [];
-        item2.priceHistory.push({ date: new Date().toISOString(), channel: '', quantity: qty, totalPrice: totalPrice, unitPrice: d.unitPrice || 0, notes: '任务委托·凯旋补货', brand: nv.brand, attachments: (plan.photos || []).slice() });
-        anyOk = true;
-      }
-    } else {
-      // ③ 纯新：在绑定领地/分类下新建物品
-      if (!t.zoneId) return;
-      var zone = getZone(t.zoneId); if (!zone) return;
-      var unit = plan.unit || (zone.type === 'durable' ? '件' : '个');
-      var note3 = (t.note || '');
-      var tc3 = planTotalContent(plan);
-      if (tc3) note3 += (note3 ? '\n' : '') + '规格总量：≈' + trimNum(tc3.total) + tc3.u + '（' + trimNum(d.qty) + ' 套 × ' + trimNum(d.spec) + (pc3 ? pc3.v + pc3.u : '') + '/套）';
-      else if (d.totalSpec > 0) note3 += (note3 ? '\n' : '') + '规格总量：' + trimNum(d.totalSpec) + ' ' + unit;
-      var isW3 = /kg|公斤|千克/i.test(unit || '');
-      var pc3 = parseUnitContent(unit);
-      var spec3 = plan.spec || 1;
-      var packQty3 = spec3;
-      var packWeight3 = pc3 ? pc3.v : (isW3 ? 1 : 0);
-      var packUnit3 = pc3 ? (pc3.name || '包') : unit;
-      var stock3 = qty * packQty3;
-      var newItem = {
-        id: genId(), name: plan.name || t.name, categoryId: t.categoryId || null,
-        consumeMode: 'pack', packCount: qty, packPrice: plan.comboPrice || 0, packQty: packQty3, packUnit: packUnit3, packWeight: packWeight3, packWeightUnit: pc3 ? pc3.u : 'kg',
-        stock: stock3, unit: unit, currentPrice: plan.amount || 0,
-        channel: '', location: '', notes: note3,
-        photos: (plan.photos ? plan.photos.slice() : []),
-        usageRecords: [], priceHistory: [], createdAt: new Date().toISOString()
-      };
-      if (zone.type === 'consumable') { newItem.shelfLife = null; newItem.productionDate = null; newItem.stockThreshold = 1; }
-      zone.items.push(newItem);
-      plan.syncedItemId = newItem.id;
-      anyOk = true;
-    }
-  });
-  t.status = '凯旋';
-  t.lockedPlanId = null;
-  (t.plans || []).forEach(function (p) { if (p.buy !== false) p.status = 'done'; });
-  return anyOk;
+// ===== v1.7 凯旋结算页 =====
+// 抗现实波动：预估 ≠ 实际。凯旋第一步永远是打开结算页，核对「实付金额 / 实际件数 / 实际规格 / 归属变体」，
+// 用户点「确认入库」后，右侧实际数据才会写进库存。绝不再直接自动入库。
+var _winSettle = null;   // { taskIds:[], rows:[...], mode:'single'|'batch', idx }
+
+// 每行 = 一个「方案 × 明细性质」，是结算与入库的最小单位
+function settleRowsOf(t, plan) {
+  var rows = [];
+  var subs = planSubList(plan);
+  var d = planDerived(plan);
+  var qty = d.qty > 0 ? d.qty : 1;
+  if (subs.length) {
+    // 有明细：逐条明细 → 一行（正装/替换装/赠品各自独立核对）
+    subs.forEach(function (s, k) {
+      rows.push({
+        key: String(plan.id) + '#' + k,
+        planId: plan.id, subIdx: k,
+        kind: specKindOf(s),
+        name: String(s.name || '').trim() || (trimNum(+s.spec) + (s.unit || '')),
+        planCount: (+s.count || 0) * qty,        // 预估件数（单套件数 × 套数）
+        planSpec: +s.spec || 0,                   // 预估单件容量
+        unit: s.unit || '',
+        actCount: (+s.count || 0) * qty,          // 实际件数（默认=预估，可改）
+        actSpec: +s.spec || 0,                    // 实际单件容量（可改）
+        _c: String((+s.count || 0) * qty), _s: String(+s.spec || 0)
+      });
+    });
+  } else {
+    // 无明细：整条方案 → 一行
+    rows.push({
+      key: String(plan.id) + '#-1',
+      planId: plan.id, subIdx: -1,
+      kind: 'normal',
+      name: String(plan.name || '').trim() || '（未命名）',
+      planCount: qty, planSpec: +plan.spec || 1, unit: plan.unit || '',
+      actCount: qty, actSpec: +plan.spec || 1,
+      _c: String(qty), _s: String(+plan.spec || 1)
+    });
+  }
+  return rows;
 }
+// 打开结算页：单个或批量（批量时逐个确认）
 function taskWin(id) {
   var t = taskById(id); if (!t) return;
+  if (!taskCanWin(t)) { toast('⚠️ 这个委托没有绑定父级物品，无法凯旋入库'); return; }
   var buys = (t.plans || []).filter(function (p) { return p.buy !== false; });
   if (buys.length === 0) { toast('请先勾选「本次购买」方案'); return; }
-  var hasNew = buys.some(function (p) { return !p.sourceItemId; });
-  if (hasNew && !t.zoneId) { toast('纯新方案需先编辑选择归类领地'); return; }
-  if (doWin(t)) {
-    saveDB(); renderTasks();
-    toast('🏆 凯旋！库存已按勾选同步');
-  } else {
-    toast('凯旋失败，检查方案来源与领地');
+  openWinSettle([t], 'single');
+}
+function openWinSettle(tasks, mode) {
+  var rows = [], order = [];
+  tasks.forEach(function (t) {
+    (t.plans || []).forEach(function (p) {
+      if (p.buy === false) return;
+      settleRowsOf(t, p).forEach(function (r) {
+        r.taskId = t.id; r.taskName = t.name;
+        r.amount = Math.round((+p.amount || 0) * 100) / 100;   // 该方案预估金额（记在方案级）
+        r.comboPrice = +p.comboPrice || 0;
+        r.parentId = taskParentIdOf(t);
+        rows.push(r);
+      });
+    });
+    order.push(t.id);
+  });
+  if (!rows.length) { toast('没有可入库的方案'); return; }
+  // 归属：默认父级物品；已有变体默认选中（按方案来源 or 品牌名匹配）
+  _winSettle = { taskIds: order, rows: rows, mode: mode || 'single' };
+  renderWinSettle();
+  document.getElementById('modal-overlay').classList.add('show');
+  taskHaptic();
+}
+// 结算页一行的归属目标：返回可选项列表 + 默认值
+function settleTargetsOf(row) {
+  var item = findItemByIdGlobal(row.parentId);
+  var opts = [{ v: '__new__', label: '➕ 新建货架「' + row.name + '」' }];
+  if (item) {
+    (item.variants || []).forEach(function (v) {
+      opts.push({ v: v.id, label: (v.brand || '未命名') + '（库存 ' + trimNum(v.stock || 0) + (v.packWeightUnit || '') + '）' });
+    });
+  }
+  return { item: item, opts: opts };
+}
+function renderWinSettle() {
+  if (!_winSettle) return;
+  var rows = _winSettle.rows;
+  var totalPlan = 0, totalAct = 0;
+  rows.forEach(function (r) { totalPlan += (+r.amount || 0); totalAct += (+r.amount || 0); });
+  var html = '<div class="modal-handle"></div>';
+  html += '<div class="modal-title">🏆 凯旋结算</div>';
+  html += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px;line-height:1.6">核对实际到手的数据。<b>左边是计划，右边是实际</b>；只有点「确认入库」，右边的实际数据才会写进库存。</div>';
+
+  rows.forEach(function (r, i) {
+    var item = findItemByIdGlobal(r.parentId);
+    var tg = settleTargetsOf(r);
+    html += '<div style="border:1px solid var(--separator);border-radius:var(--radius-sm);padding:11px;margin-bottom:10px;background:var(--bg)">';
+    // 抬头：仓库 + 明细名
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
+    html += '<div style="font-weight:700;font-size:14px">' + specKindIcon(r.kind) + ' ' + escTask(r.name) + '</div>';
+    html += '<div style="font-size:11px;color:var(--text-tertiary)">🏷 ' + escTask(item ? item.name : '(父级缺失)') + '</div>';
+    html += '</div>';
+    // 计划 vs 实际 两栏
+    html += '<div style="display:flex;gap:8px;align-items:flex-end">';
+    html += '<div style="flex:1;padding:8px 10px;background:var(--card-bg);border-radius:8px;font-size:12px;color:var(--text-secondary)">';
+    html += '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:4px">预估（计划）</div>';
+    html += trimNum(r.planCount) + ' 件 × ' + trimNum(r.planSpec) + (r.unit || '') + '<br><b style="color:var(--text);font-size:13px">≈ ' + trimNum(Math.round(r.planCount * r.planSpec * 100) / 100) + (r.unit || '') + '</b>';
+    html += '</div>';
+    html += '<div style="flex:1.25;padding:8px 10px;background:rgba(52,199,89,.08);border:1px solid rgba(52,199,89,.3);border-radius:8px">';
+    html += '<div style="font-size:11px;color:var(--green);margin-bottom:4px">实际到手</div>';
+    html += '<div style="display:flex;gap:5px">';
+    html += '<input type="number" class="form-input" inputmode="decimal" style="flex:1;min-width:0;padding:7px 8px;font-size:13px;font-weight:700" value="' + escTask(r._c) + '" placeholder="件数" onchange="winSettleSet(' + i + ',\'actCount\',this.value)">';
+    html += '<span style="align-self:center;color:var(--text-tertiary);font-size:12px">件 ×</span>';
+    html += '<input type="number" class="form-input" inputmode="decimal" style="flex:1;min-width:0;padding:7px 8px;font-size:13px;font-weight:700" value="' + escTask(r._s) + '" placeholder="容量" onchange="winSettleSet(' + i + ',\'actSpec\',this.value)">';
+    html += '</div>';
+    html += '<div style="font-size:11px;color:var(--text-tertiary);margin-top:4px">' + (r.unit || '') + '　实际合计 <b style="color:var(--green)">' + trimNum(Math.round((+r.actCount || 0) * (+r.actSpec || 0) * 100) / 100) + (r.unit || '') + '</b></div>';
+    html += '</div>';
+    html += '</div>';
+    // 归属确认
+    html += '<div style="margin-top:9px">';
+    html += '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:4px">这批货进入哪个货架？</div>';
+    var cur = r.targetVariantId || '';
+    if (!cur) {
+      // 默认：优先按方案来源变体，其次按品牌名匹配，最后新建
+      if (r._defaultTarget === undefined) {
+        var match = findVariantByName(item, r.name);
+        r._defaultTarget = match ? match.id : '__new__';
+      }
+      cur = r._defaultTarget;
+    }
+    html += '<select class="form-select" style="font-size:12px;padding:8px 10px" onchange="winSettleSet(' + i + ',\'targetVariantId\',this.value)">';
+    tg.opts.forEach(function (o) {
+      html += '<option value="' + o.v + '"' + (String(cur) === String(o.v) ? ' selected' : '') + '>' + escTask(o.label) + '</option>';
+    });
+    html += '</select>';
+    html += '</div>';
+    html += '</div>';
+  });
+
+  // 实付金额（方案级，仅记账用，不进库存计算）
+  var planIds = [];
+  rows.forEach(function (r) { if (planIds.indexOf(r.planId) < 0) planIds.push(r.planId); });
+  if (planIds.length === 1 && _winSettle.mode === 'single') {
+    html += '<div class="form-group" style="margin-top:4px"><label class="form-label">实付金额（凑单/优惠后，仅记账，不影响库存数量）</label>';
+    html += '<input type="number" inputmode="decimal" class="form-input" id="win-settle-amount" placeholder="如 280" value="' + (rows[0].amount || '') + '" onchange="winSettleSetAmount(this.value)"></div>';
+  } else if (planIds.length > 1) {
+    html += '<div style="padding:10px 12px;background:var(--bg);border-radius:8px;font-size:12px;color:var(--text-secondary);margin-bottom:10px">本次结算含 <b>' + planIds.length + '</b> 个方案，实付金额将按原预估逐方案记账（金额不影响库存数量）。</div>';
+  }
+
+  var ccTotal = 0;
+  rows.forEach(function (r) { ccTotal += (+r.actCount || 0) * (+r.actSpec || 0); });
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0 10px">';
+  html += '<span style="font-size:13px;color:var(--text-secondary)">共 <b style="color:var(--text)">' + rows.length + '</b> 条明细待入库</span>';
+  html += '<span style="font-size:13px;color:var(--text-secondary)">实物合计 <b style="color:var(--text);font-size:15px">' + trimNum(Math.round(ccTotal * 100) / 100) + '</b></span>';
+  html += '</div>';
+  html += '<button class="btn btn-primary btn-full" onclick="confirmWinSettle()">🏆 确认入库</button>';
+  html += '<button class="btn btn-outline btn-full" style="margin-top:8px" onclick="closeModal()">取消</button>';
+  document.getElementById('modal-content').innerHTML = html;
+}
+function winSettleSet(i, field, val) {
+  if (!_winSettle || !_winSettle.rows[i]) return;
+  var r = _winSettle.rows[i];
+  if (field === 'actCount') { r._c = val; r.actCount = parseFloat(val) || 0; }
+  else if (field === 'actSpec') { r._s = val; r.actSpec = parseFloat(val) || 0; }
+  else if (field === 'targetVariantId') { r.targetVariantId = val; }
+  // 重绘结算页（保留输入框焦点，避免打字中断）
+  renderWinSettleKeepFocus(i);
+}
+// 重绘但保护焦点：记录当前焦点索引后恢复
+function renderWinSettleKeepFocus(idx) {
+  var act = document.activeElement;
+  var tag = act ? act.tagName : '', val = act ? act.value : '';
+  var all = document.querySelectorAll('#modal-content input, #modal-content select');
+  var pos = -1;
+  for (var i = 0; i < all.length; i++) { if (all[i] === act) { pos = i; break; } }
+  renderWinSettle();
+  if (pos >= 0) {
+    var na = document.querySelectorAll('#modal-content input, #modal-content select');
+    if (na[pos]) { na[pos].focus(); try { na[pos].setSelectionRange(val.length, val.length); } catch (e) {} }
   }
 }
+function winSettleSetAmount(v) { if (_winSettle) _winSettle.amountOverride = v; }
+function confirmWinSettle() {
+  if (!_winSettle) return;
+  var rows = _winSettle.rows;
+  var bad = null;
+  rows.forEach(function (r) { if (!(+r.actCount > 0)) bad = r; });
+  if (bad) { toast('「' + bad.name + '」的实际件数需大于 0（没有到货请直接取消凯旋）'); return; }
+  var r = doWinSettle(_winSettle);
+  closeModal();
+  _winSettle = null;
+  saveDB();
+  try { renderTasks(); } catch (e) {}
+  try { renderHome(); } catch (e) {}
+  toast('🏆 凯旋！' + (r.summary || '库存已按实际数据同步'));
+}
+
 function taskAbandon(id) {
   var t = taskById(id); if (!t) return;
   if (!(t.status === '待接' || t.status === '进行中')) { toast('该状态不能放弃'); return; }
@@ -7861,9 +8114,13 @@ function taskBatchStrike() {
 }
 function taskBatchWin() {
   var ts = getSelTasks().filter(function (t) { return t.status === '进行中'; });
-  var ok = 0, skip = 0;
-  ts.forEach(function (t) { if (!t.zoneId) { skip++; return; } if (doWin(t)) ok++; else skip++; });
-  afterBatch('🏆 凯旋 ' + ok + ' 项' + (skip ? ('，' + skip + ' 项缺领地未同步') : ''));
+  if (!ts.length) { toast('没有「进行中」的委托'); return; }
+  var ok = ts.filter(function (t) { return taskCanWin(t) && (t.plans || []).some(function (p) { return p.buy !== false; }); });
+  var skip = ts.length - ok.length;
+  if (!ok.length) { toast('选中的委托都没有绑定父级物品，无法凯旋入库'); return; }
+  // v1.7：批量凯旋也走结算页 —— 逐条核对实际数据，绝不静默入库
+  openWinSettle(ok, 'batch');
+  if (skip) toast('⚔️ 将结算 ' + ok.length + ' 项（' + skip + ' 项因缺父级被跳过）');
 }
 function taskBatchAbandon() {
   var ts = getSelTasks().filter(function (t) { return t.status === '待接' || t.status === '进行中'; });
@@ -7924,9 +8181,13 @@ function doTaskClear() {
 function taskOpenForm(id) {
   var editing = id ? taskById(id) : null;
   taskState.refPreset = null;
+  // v1.7 强制归属：父级物品（仓库）。编辑既有委托时从任务/方案回溯；新建时为空，引用库存后自动带上。
+  taskState.parentItemId = editing ? taskParentIdOf(editing) : null;
   taskState.formPlans = editing
     ? (editing.plans || []).map(function (p) { return Object.assign({}, p); })
     : [{ id: planNextId(), name: '', amount: 0, note: '', status: 'open', pinned: false, comboPrice: 0, qty: 0, spec: 0, unit: '', photos: [], buy: true, _calcOpen: false }];
+  // 新建时若已有父级（不可能，兜底）→ 把父级补到所有方案的来源上
+  taskSyncParentToPlans();
   var html = '<div class="modal-handle"></div>';
   html += '<div class="modal-title">' + (editing ? '编辑委托' : '新增委托') + '</div>';
   html += '<div class="form-group"><label class="form-label">名称</label><input type="text" class="form-input" id="task-name" maxlength="40" placeholder="如：面霜 / 洗牙 / 医美" value="' + escTask(editing ? editing.name : '') + '"></div>';
@@ -7942,6 +8203,8 @@ function taskOpenForm(id) {
   html += '</div>';
   html += '<div id="ref-results" style="max-height:220px;overflow-y:auto;margin-top:8px"></div>';
   html += '</div>';
+  // 归属条：凯旋时货最终落进哪个「仓库」
+  html += '<div id="task-parent-bar">' + taskParentBarHtml() + '</div>';
   html += '<div class="form-group"><label class="form-label" id="task-range"></label><div id="task-plan-list">' + taskPlanRows() + '</div><button class="btn btn-outline btn-sm" style="width:100%;margin-top:4px" onclick="taskAddPlan()">＋ 添加备选方案</button></div>';
   html += '<div class="form-group"><label class="form-label">绑定领地（引用产品会自动锁定，无需手选）</label><select class="form-select" id="task-zone" onchange="taskUpdateCategories()"><option value="">不绑定</option>';
   DB.zones.forEach(function (z) { html += '<option value="' + z.id + '" ' + (editing && editing.zoneId === z.id ? 'selected' : '') + '>' + z.icon + ' ' + escTask(z.name) + '</option>'; });
@@ -7960,6 +8223,39 @@ function taskOpenForm(id) {
     taskRefreshLockInfo();
   }
   taskUpdateRange();
+}
+// ---------- v1.7 强制归属：父级同步与展示 ----------
+// 把父级物品 ID 补到所有方案上（引用过的方案保留自身来源，手写方案继承父级）
+function taskSyncParentToPlans() {
+  var pid = taskState.parentItemId;
+  if (!pid) return;
+  (taskState.formPlans || []).forEach(function (p) { if (!p.sourceItemId) p.sourceItemId = pid; });
+}
+// 归属条：让用户在录入阶段就看清「凯旋后货落进哪个仓库」
+function taskParentBarHtml() {
+  var pid = taskState.parentItemId;
+  if (!pid) {
+    return '<div style="padding:10px 12px;background:rgba(255,149,0,.1);border:1px solid rgba(255,149,0,.35);border-radius:var(--radius-sm);font-size:12px;color:var(--orange);margin-bottom:12px;line-height:1.6">'
+      + '⚠️ <b>尚未绑定父级物品</b><br>请先在上方「从已有产品引用」里点选一个物品（如「面霜」）。<br>凯旋时系统只会在父级物品下新增/合并品牌变体，不会凭空建独立物品。</div>';
+  }
+  var it = findItemByIdGlobal(pid);
+  if (!it) {
+    return '<div style="padding:10px 12px;background:rgba(255,59,48,.1);border:1px solid rgba(255,59,48,.35);border-radius:var(--radius-sm);font-size:12px;color:var(--red);margin-bottom:12px">'
+      + '❌ 父级物品已不存在，请重新引用一个物品。</div>';
+  }
+  var brands = (it.variants || []).map(function (v) { return v.brand || '未命名'; }).filter(Boolean);
+  var h = '<div style="padding:10px 12px;background:rgba(52,199,89,.1);border:1px solid rgba(52,199,89,.35);border-radius:var(--radius-sm);font-size:12px;color:var(--green);margin-bottom:12px;line-height:1.7">';
+  h += '🏷 <b>归属（仓库）：' + escTask(it.name) + '</b>';
+  h += '<br><span style="color:var(--text-secondary)">下面所有方案（含手写的新品牌）凯旋时都会落进这个仓库；'
+    + '品牌名匹配到已有货架就合并，匹配不到就在本仓库下新建货架。</span>';
+  if (brands.length) h += '<br><span style="color:var(--text-tertiary)">现有货架：' + escTask(brands.join(' / ')) + '</span>';
+  else h += '<br><span style="color:var(--text-tertiary)">现有货架：暂无（凯旋时自动新建）</span>';
+  h += '</div>';
+  return h;
+}
+function taskRefreshParentBar() {
+  var el = document.getElementById('task-parent-bar');
+  if (el) el.innerHTML = taskParentBarHtml();
 }
 function taskPlanRows() {
   var html = '';
@@ -7985,19 +8281,25 @@ function taskPlanRows() {
     html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="number" class="form-input" placeholder="每份规格" value="' + (p.spec || '') + '" onchange="taskFormPlanCalc(' + i + ',\'spec\',parseFloat(this.value)||0)"></div>';
     html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="text" class="form-input" placeholder="单位(kg/ml)" value="' + escTask(p.unit || '') + '" onchange="taskFormPlanCalc(' + i + ',\'unit\',this.value)"></div>';
     html += '</div>';
-    // 混合套餐：一个套餐含多种不同规格（如 44粒装×3盒 + 70粒装×2盒），凯旋后各自落成独立变体
+    // v1.7 规格明细：一套套餐里装了什么（正装 / 替换装 / 赠品各自一行）——凯旋时逐行核对
     var subs = (p.subItems || []);
-    html += '<div style="font-size:12px;color:var(--text-secondary);margin:2px 0 6px">🧩 混合套餐规格（一个套餐含几种不同规格时填，只有一种就留空）</div>';
+    html += '<div style="font-size:12px;color:var(--text-secondary);margin:2px 0 6px">🧩 规格明细 <span style="color:var(--text-tertiary)">（= 一套里装了什么；正装/替换装/赠品各一行，凯旋时逐行核对）</span></div>';
     subs.forEach(function (s, k) {
-      html += '<div style="display:flex;gap:4px;margin-bottom:6px">';
-      html += '<input type="text" class="form-input" style="flex:1.5;min-width:0;padding:6px 8px;font-size:12px" placeholder="名称(44粒装)" value="' + escTask(s.name || '') + '" onchange="taskPlanSubSet(' + i + ',' + k + ',\'name\',this.value)">';
-      html += '<input type="number" class="form-input" style="flex:1;min-width:0;padding:6px 8px;font-size:12px" placeholder="每份含量" value="' + (s.spec || '') + '" onchange="taskPlanSubSet(' + i + ',' + k + ',\'spec\',parseFloat(this.value)||0)">';
-      html += '<input type="text" class="form-input" style="flex:.7;min-width:0;padding:6px 8px;font-size:12px" placeholder="单位" value="' + escTask(s.unit || '') + '" onchange="taskPlanSubSet(' + i + ',' + k + ',\'unit\',this.value)">';
-      html += '<input type="number" class="form-input" style="flex:.7;min-width:0;padding:6px 8px;font-size:12px" placeholder="份数" value="' + (s.count || '') + '" onchange="taskPlanSubSet(' + i + ',' + k + ',\'count\',parseFloat(this.value)||0)">';
+      var kd = specKindOf(s);
+      html += '<div style="display:flex;gap:4px;margin-bottom:6px;align-items:center">';
+      html += '<select class="form-select" style="flex:.9;min-width:0;padding:6px 4px;font-size:11px" onchange="taskPlanSubSet(' + i + ',' + k + ',\'kind\',this.value)">';
+      SPEC_KINDS.forEach(function (o) {
+        html += '<option value="' + o.k + '"' + (kd === o.k ? ' selected' : '') + '>' + o.icon + o.label + '</option>';
+      });
+      html += '</select>';
+      html += '<input type="text" class="form-input" style="flex:1.3;min-width:0;padding:6px 8px;font-size:12px" placeholder="名称(正装)" value="' + escTask(s.name || '') + '" onchange="taskPlanSubSet(' + i + ',' + k + ',\'name\',this.value)">';
+      html += '<input type="number" class="form-input" style="flex:.8;min-width:0;padding:6px 8px;font-size:12px" placeholder="含量" value="' + (s.spec || '') + '" onchange="taskPlanSubSet(' + i + ',' + k + ',\'spec\',parseFloat(this.value)||0)">';
+      html += '<input type="text" class="form-input" style="flex:.6;min-width:0;padding:6px 8px;font-size:12px" placeholder="单位" value="' + escTask(s.unit || '') + '" onchange="taskPlanSubSet(' + i + ',' + k + ',\'unit\',this.value)">';
+      html += '<input type="number" class="form-input" style="flex:.6;min-width:0;padding:6px 8px;font-size:12px" placeholder="件数" value="' + (s.count || '') + '" onchange="taskPlanSubSet(' + i + ',' + k + ',\'count\',parseFloat(this.value)||0)">';
       html += '<button class="btn btn-danger btn-sm" style="flex-shrink:0;padding:6px 8px" onclick="taskPlanSubRemove(' + i + ',' + k + ')">✕</button>';
       html += '</div>';
     });
-    html += '<button class="btn btn-outline btn-sm" style="width:100%;margin-bottom:6px" onclick="taskPlanSubAdd(' + i + ')">＋ 添加规格</button>';
+    html += '<button class="btn btn-outline btn-sm" style="width:100%;margin-bottom:6px" onclick="taskPlanSubAdd(' + i + ')">＋ 添加规格明细</button>';
     if (planSubSpec(p) > 0) html += '<div style="font-size:12px;color:var(--accent);font-weight:600;margin-bottom:6px">' + escTask(planSpecText(p)) + '</div>';
     html += '<div id="task-plan-calc-' + i + '" style="font-size:12px;color:var(--text-secondary)">' + taskCalcOutHtml(p) + '</div>';
     html += '</div>';
@@ -8032,7 +8334,17 @@ function taskPlanRefreshCalc(i) {
   var lbl = document.querySelector('[onclick="taskToggleCalc(' + i + ')"]'); if (lbl) lbl.innerHTML = taskCalcLabel(p);
   taskUpdateRange();
 }
-function taskAddPlan() { taskState.formPlans.push({ id: planNextId(), name: '', amount: 0, note: '', status: 'open', pinned: false, comboPrice: 0, qty: 0, spec: 0, unit: '', photos: [], buy: true, _calcOpen: false }); document.getElementById('task-plan-list').innerHTML = taskPlanRows(); taskUpdateRange(); }
+function taskAddPlan() {
+  // v1.7：新方案自动继承父级（仓库），手写品牌名即可，凯旋时归到父级下
+  taskState.formPlans.push({
+    id: planNextId(), name: '', amount: 0, note: '', status: 'open', pinned: false,
+    comboPrice: 0, qty: 0, spec: 0, unit: '', photos: [], buy: true, _calcOpen: false,
+    sourceItemId: taskState.parentItemId || null, sourceVariantId: null
+  });
+  taskSyncParentToPlans();
+  document.getElementById('task-plan-list').innerHTML = taskPlanRows();
+  taskUpdateRange();
+}
 function taskRemovePlan(i) { taskState.formPlans.splice(i, 1); document.getElementById('task-plan-list').innerHTML = taskPlanRows(); taskUpdateRange(); }
 function taskToggleCalc(i) { if (taskState.formPlans[i]) { taskState.formPlans[i]._calcOpen = !taskState.formPlans[i]._calcOpen; var el = document.getElementById('task-calc-' + i); if (el) el.style.display = taskState.formPlans[i]._calcOpen ? 'block' : 'none'; } }
 function taskCalcLabel(p) {
@@ -8151,6 +8463,8 @@ function taskRefPick(zoneId, itemId) {
   var zone = getZone(zoneId); if (!zone) return;
   var item = getItem(zoneId, itemId); if (!item) { toast('未找到产品'); return; }
   taskState.refPreset = null;
+  // v1.7 强制归属：这个物品成为本次委托的「仓库（父级）」
+  taskState.parentItemId = item.id;
   // 自动锁定领地 / 分类（用户无需手选）
   var zSel = document.getElementById('task-zone');
   if (zSel) { zSel.value = zoneId; taskUpdateCategories(); }
@@ -8158,6 +8472,8 @@ function taskRefPick(zoneId, itemId) {
   if (cSel && item.categoryId) cSel.value = item.categoryId;
   var nEl = document.getElementById('task-name');
   if (nEl && !nEl.value.trim()) nEl.value = item.name;
+  // 已有方案（可能夹着上次引用的来源 / 手写方案）统一继承父级
+  (taskState.formPlans || []).forEach(function (p) { if (!p.sourceItemId) p.sourceItemId = item.id; });
   var pid = planNextId();
   if (item.variants && item.variants.length) {
     item.variants.forEach(function (v) {
@@ -8179,9 +8495,10 @@ function taskRefPick(zoneId, itemId) {
   var box = document.getElementById('ref-results'); if (box) box.innerHTML = '';
   var kwEl = document.getElementById('ref-kw'); if (kwEl) kwEl.value = '';
   document.getElementById('task-plan-list').innerHTML = taskPlanRows();
+  taskRefreshParentBar();
   taskUpdateRange();
   taskRefreshLockInfo();
-  toast('🔗 已引用「' + item.name + '」，领地已自动锁定，请补填数量/价格');
+  toast('🏷 已引用「' + item.name + '」，它将成为本委托的仓库；现在加的 C/D 等新品牌都会归到这里');
 }
 // 绑定领地的确认信息：让用户看到"凯旋会同步到哪"
 function taskRefreshLockInfo() {
@@ -8276,6 +8593,15 @@ function taskOpenFormFromCategory(zoneId, categoryId) {
 function taskFormSave(id) {
   var name = document.getElementById('task-name').value.trim();
   if (!name) { toast('请输入名称'); return; }
+  // v1.7 强制归属：必须有父级物品（仓库），否则不允许保存 —— 从源头堵住「凭空造仓库」
+  var parentId = taskState.parentItemId || null;
+  if (!parentId) {
+    toast('⚠️ 请先从库存引用一个父级物品（如「面霜」）——委托不能凭空建物品');
+    var rb = document.getElementById('ref-results');
+    if (rb) rb.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
+  if (!findItemByIdGlobal(parentId)) { toast('⚠️ 引用的父级物品已不存在，请重新引用'); return; }
   var plans = taskState.formPlans.filter(function (p) { return (p.name || '').trim() !== ''; }).map(function (p) {
     return {
       id: p.id,
@@ -8285,7 +8611,8 @@ function taskFormSave(id) {
       status: p.status || 'open',
       pinned: !!p.pinned,
       buy: (p.buy !== false),
-      sourceItemId: p.sourceItemId || null,
+      // 手写的新品牌也挂父级：保证凯旋时一定落在父级仓库下
+      sourceItemId: p.sourceItemId || parentId || null,
       sourceVariantId: p.sourceVariantId || null,
       comboPrice: Math.round((+p.comboPrice || 0) * 100) / 100,
       qty: (+p.qty > 0) ? +p.qty : 0,
@@ -8293,7 +8620,7 @@ function taskFormSave(id) {
       unit: (p.unit || '').trim(),
       photos: (p.photos || []).slice(),
       subItems: (p.subItems || []).filter(function (s) { return (+s.spec > 0) && (+s.count > 0); }).map(function (s) {
-        return { id: s.id, name: (s.name || '').trim(), spec: +s.spec || 0, count: +s.count || 0, unit: (s.unit || '').trim() };
+        return { id: s.id, name: (s.name || '').trim(), spec: +s.spec || 0, count: +s.count || 0, unit: (s.unit || '').trim(), kind: specKindOf(s) };
       })
     };
   });
@@ -8309,7 +8636,7 @@ function taskFormSave(id) {
       t.plans = plans;
       t.zoneId = zoneId;
       t.categoryId = catId;
-      t.sourceItemId = t.sourceItemId || (plans[0] && plans[0].sourceItemId) || null;
+      t.sourceItemId = parentId;
     }
   } else {
     DB.tasks.push({
@@ -8318,7 +8645,7 @@ function taskFormSave(id) {
       note: document.getElementById('task-note').value.trim(),
       lockedPlanId: null, plans: plans,
       zoneId: zoneId, categoryId: catId, photos: [],
-      sourceItemId: (plans[0] && plans[0].sourceItemId) || null,
+      sourceItemId: parentId,
       date: new Date().toISOString()
     });
   }
