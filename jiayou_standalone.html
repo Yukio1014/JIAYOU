@@ -3286,7 +3286,7 @@ function calcUsageRate(item) {
 // 记录口径：pack 模式 qty=套 → 含量 = qty × 每套含 × 每小单位含量；unit 模式 qty=小单位 → 含量 = qty × 每小单位含量
 // 返回 { perMonth, unit }；任一记录无法换算（未配含量 / ml 混 kg）→ 返回 null，展示退回记录口径
 // 含量单位换算表：容量/重量可换算，计数类（粒/个/片/颗）按自身计，不写死单位
-var CONTENT_UNIT_TABLE = { ml: ['ml', 1], L: ['ml', 1000], g: ['g', 1], kg: ['g', 1000], 粒: ['粒', 1], 个: ['个', 1], 片: ['片', 1], 颗: ['颗', 1], 包: ['包', 1], 瓶: ['瓶', 1], 盒: ['盒', 1], 抽: ['抽', 1] };
+var CONTENT_UNIT_TABLE = { ml: ['ml', 1], L: ['ml', 1000], g: ['g', 1], kg: ['g', 1000], 粒: ['粒', 1], 个: ['个', 1], 片: ['片', 1], 颗: ['颗', 1], 包: ['包', 1], 瓶: ['瓶', 1], 盒: ['盒', 1], 抽: ['抽', 1], 条: ['条', 1], 支: ['支', 1], 套: ['套', 1], 卷: ['卷', 1], 只: ['只', 1], 枚: ['枚', 1], 张: ['张', 1], 贴: ['贴', 1], 袋: ['袋', 1], 罐: ['罐', 1], 管: ['管', 1], 副: ['副', 1], 对: ['对', 1], 台: ['台', 1], 本: ['本', 1], 瓶装: ['瓶装', 1] };
 function contentRateOf(item) {
   if (!item.usageRecords || !item.usageRecords.length) return null;
   var vs = item.variants || [];
@@ -3299,7 +3299,10 @@ function contentRateOf(item) {
     if ((parseFloat(vs[i].packWeight) || 0) > 0 && CONTENT_UNIT_TABLE[weightUnitOf(vs[i])]) { baseUnit = weightUnitOf(vs[i]); break; }
   }
   if (!baseUnit) return null;
-  var baseFactor = CONTENT_UNIT_TABLE[baseUnit][1];
+  // 第16轮防崩：未知单位（旧数据冷门单位）不得炸渲染 → 安全降级为记录口径
+  var baseEntry = CONTENT_UNIT_TABLE[baseUnit];
+  if (!baseEntry) return null;
+  var baseFactor = baseEntry[1];
   var total = 0, earliest = null, ok = true;
   recs.forEach(function(r) {
     var v = null;
@@ -3308,14 +3311,14 @@ function contentRateOf(item) {
     var m = v ? CONTENT_UNIT_TABLE[weightUnitOf(v)] : null;
     if (r.contentUsed > 0) {
       // 多规格开封记录：直接记了本次消耗的总含量
-      if (!m || m[0] !== CONTENT_UNIT_TABLE[baseUnit][0]) { ok = false; return; }
+      if (!m || m[0] !== baseEntry[0]) { ok = false; return; }
       total += r.contentUsed * m[1] / baseFactor;
       var s0 = new Date(r.startDate);
       if (!earliest || s0 < earliest) earliest = s0;
       return;
     }
     var w = v ? (parseFloat(v.packWeight) || 0) : 0;
-    if (!v || w <= 0 || !m || m[0] !== CONTENT_UNIT_TABLE[baseUnit][0]) { ok = false; return; }
+    if (!v || w <= 0 || !m || m[0] !== baseEntry[0]) { ok = false; return; }
     var mult = isSetPackMode(item) ? (parseFloat(v.packQty) || 1) : 1;
     total += (r.qty || 1) * w * mult * m[1] / baseFactor;
     var s = new Date(r.startDate);
@@ -5652,8 +5655,8 @@ function manualRefresh() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791385940 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791385940';
+// deploy.py 部署时会把 1791386666 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791386666';
 
 function checkAppUpdate(manual) {
   try {
