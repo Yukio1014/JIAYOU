@@ -1347,16 +1347,39 @@ async function retryCloudLogin() {
 function openCloudAccountForm() {
   var email = '';
   try { email = localStorage.getItem('jiayou_anon_email') || ''; } catch(e) {}
+  if (!email) { try { email = getDeviceId() + '@jiayou.app'; } catch(e) {} }
+  var suggestedPwd = 'Jiayou#2026';
+  var sql = "update auth.users set encrypted_password = crypt('" + suggestedPwd + "', gen_salt('bf')) where email = '" + email + "';";
   var html = '';
   html += '<div class="modal-handle"></div>';
   html += '<div class="modal-title">🔑 手动填入云端账号</div>';
-  html += '<div style="font-size:13px;line-height:1.7;color:var(--text-secondary);margin-bottom:12px">本机登录凭证丢失时用这个救活数据：<br>去 Supabase 控制台 → Authentication → Users 找到你的设备邮箱，把它重置为自定义密码，或到 Table Editor 直接导出数据用「导入数据」恢复。</div>';
+  html += '<div style="font-size:13px;line-height:1.7;color:var(--text-secondary);margin-bottom:10px">旧账号的密码是随机生成的、找不回来，需要先重置一次（约 2 分钟）：<br>① 用注册邮箱登录 <b>supabase.com</b> 控制台 → 左侧 <b>SQL Editor</b> → 粘贴下面这条 SQL → Run：</div>';
+  html += '<pre id="rescue-sql" style="background:#f5f5f5;border-radius:8px;padding:10px;font-size:11px;white-space:pre-wrap;word-break:break-all;color:#333">' + escapeHtml(sql) + '</pre>';
+  html += '<button class="btn btn-outline btn-sm" style="width:100%" onclick="copyRescueSql()">📋 复制这条 SQL</button>';
+  html += '<div style="font-size:13px;line-height:1.7;color:var(--text-secondary);margin:10px 0">② 执行成功后，下面会自动填好账号和建议密码，直接点「登录并取回云端数据」即可。</div>';
   html += '<div class="form-group"><label class="form-label">云端账号邮箱</label><input type="email" class="form-input" id="cloud-email" value="' + escapeHtml(email) + '" placeholder="例如 dev_xxx@jiayou.app"></div>';
-  html += '<div class="form-group"><label class="form-label">密码</label><input type="text" class="form-input" id="cloud-pwd" placeholder="Supabase 里设置的密码"></div>';
+  html += '<div class="form-group"><label class="form-label">密码</label><input type="text" class="form-input" id="cloud-pwd" value="' + escapeHtml(suggestedPwd) + '" placeholder="你在 SQL 里设置的密码"></div>';
   html += '<button class="btn btn-primary btn-full" style="margin-top:12px" onclick="saveCloudAccount()">登录并取回云端数据</button>';
   html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">取消</button>';
   document.getElementById('modal-content').innerHTML = html;
   document.getElementById('modal-overlay').classList.add('show');
+}
+
+// 复制救援 SQL（含 iOS Safari 兼容回退）
+function copyRescueSql() {
+  var t = '';
+  try { t = document.getElementById('rescue-sql').textContent; } catch(e) {}
+  function fallback() {
+    var ta = document.createElement('textarea');
+    ta.value = t; ta.style.cssText = 'position:fixed;opacity:0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); toast('已复制，去 Supabase SQL Editor 粘贴执行'); }
+    catch(e) { toast('复制失败，请长按 SQL 文字手动复制'); }
+    ta.remove();
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(t).then(function() { toast('已复制，去 Supabase SQL Editor 粘贴执行'); }, fallback);
+  } else fallback();
 }
 
 async function saveCloudAccount() {
@@ -1387,7 +1410,12 @@ async function saveCloudAccount() {
     var msg = (e && e.message) ? e.message : String(e);
     cloudSyncState.message = '手动登录失败: ' + msg;
     updateCloudUI();
-    toast('登录失败: ' + msg);
+    // 第 15 轮：把 Supabase 的原文翻译成人话，并直接给出下一步动作
+    if (/Invalid login credentials/i.test(msg)) {
+      toast('密码不匹配：这个云端账号的密码是旧版随机生成的，本机丢了吗就找不回了。请按弹窗里的说明去 Supabase 控制台重置密码后再来');
+    } else {
+      toast('登录失败: ' + msg);
+    }
   }
 }
 
@@ -2707,11 +2735,25 @@ function showPage(page) {
     t.classList.toggle('active', t.dataset.tab === page);
   });
 
-  if (page === 'home') renderHome();
-  else if (page === 'zone') renderZone();
-  else if (page === 'pool') renderTasks();
-  else if (page === 'settings') renderSettings();
-  else if (page === 'report') renderReport();
+  // 第 15 轮：页面渲染防御 —— 任何渲染崩溃都显示错误卡片，绝不留空白页
+  var renderers = { home: renderHome, zone: renderZone, pool: renderTasks, settings: renderSettings, report: renderReport };
+  try {
+    (renderers[page] || function(){})();
+  } catch (e) {
+    console.error('页面渲染失败: ' + page, e);
+    var box = document.getElementById(page + '-content');
+    if (box) {
+      var msg = (e && e.message) ? e.message : String(e);
+      var stack = (e && e.stack) ? String(e.stack).split('\n').slice(0, 4).join('\n') : '';
+      window.__errLog.push({ t: new Date().toLocaleTimeString(), msg: '页面' + page + '渲染失败: ' + msg, detail: stack });
+      box.innerHTML = '<div style="margin:20px 14px;padding:16px;background:#fff;border-radius:14px">'
+        + '<div style="font-weight:700;margin-bottom:8px">⚠️ 这个页面渲染失败了</div>'
+        + '<div style="font-size:13px;color:#666;line-height:1.6">' + escapeHtml(msg) + '</div>'
+        + '<pre style="font-size:11px;color:#999;margin-top:8px;white-space:pre-wrap">' + escapeHtml(stack) + '</pre>'
+        + '<button class="btn btn-outline btn-sm" style="margin-top:10px" onclick="manualRefresh()">🔄 重试</button>'
+        + '</div>';
+    }
+  }
 
   window.scrollTo(0, 0);
 }
@@ -2818,7 +2860,19 @@ function getItemsByCategory(zoneId, catId) {
 
 // ========== 首页渲染 ==========
 function renderHome() {
+  // 第 15 轮：分段渲染 —— 旧版把所有 HTML 拼完才一次性写入，
+  // 中间任何一句抛异常 home-content 就整页空白。现在每段独立容错，
+  // 崩了的段显示错误提示，其余内容照常显示。
   var html = '';
+  var errs = [];
+  function sec(fn) {
+    try { html += fn(); } catch (e) {
+      var m = (e && e.message) ? e.message : String(e);
+      errs.push(m);
+      html += '<div style="margin:8px 0;padding:10px 12px;background:#fff3f3;border-radius:10px;font-size:12px;color:#d32f2f">⚠️ 部分内容加载失败: ' + escapeHtml(m) + '</div>';
+    }
+  }
+
   var allItems = [];
   DB.zones.forEach(function(zone) {
     visibleItems(zone).forEach(function(it) {
@@ -2829,19 +2883,23 @@ function renderHome() {
   // === 消耗品预警 ===
   var expired = [], expiring = [], lowStock = [], lowStockSoft = [], stockUpList = [];
   var inUseItems = [], stockpileItems = [];
-  DB.zones.forEach(function(zone) {
-    if (zone.type !== 'consumable') return;
-    visibleItems(zone).forEach(function(it) {
-      var status = getItemStatus(it);
-      if (status.expired) expired.push({item: it, zone: zone});
-      if (status.expiring) expiring.push({item: it, zone: zone});
-      if (status.lowStock) lowStock.push({item: it, zone: zone});
-      else if (status.lowStockSoft) lowStockSoft.push({item: it, zone: zone});
-      if (status.stockUpAlert) stockUpList.push({item: it, zone: zone});
-      if (status.hasInUse) inUseItems.push({item: it, zone: zone});
-      if (status.allUnopened) stockpileItems.push({item: it, zone: zone});
+  try {
+    DB.zones.forEach(function(zone) {
+      if (zone.type !== 'consumable') return;
+      visibleItems(zone).forEach(function(it) {
+        var status = getItemStatus(it);
+        if (status.expired) expired.push({item: it, zone: zone});
+        if (status.expiring) expiring.push({item: it, zone: zone});
+        if (status.lowStock) lowStock.push({item: it, zone: zone});
+        else if (status.lowStockSoft) lowStockSoft.push({item: it, zone: zone});
+        if (status.stockUpAlert) stockUpList.push({item: it, zone: zone});
+        if (status.hasInUse) inUseItems.push({item: it, zone: zone});
+        if (status.allUnopened) stockpileItems.push({item: it, zone: zone});
+      });
     });
-  });
+  } catch (e) {
+    errs.push('状态统计: ' + ((e && e.message) || e));
+  }
 
   // === 预警条 ===
   html += '<div class="alert-strip">';
@@ -2891,48 +2949,57 @@ function renderHome() {
   html += '<div style="margin-bottom:14px"><button class="btn btn-outline btn-sm" style="width:100%" onclick="showPage(\'pool\')">📋 去「任务委托」规划补货</button></div>';
 
   // === 板块入口 ===
-  html += '<div class="section-title">领地分布<div class="section-action" onclick="openZoneManager()">管理</div></div>';
-  html += '<div>';
-  DB.zones.forEach(function(zone) {
-    var count;
-    // 耐用品：统计所有variant的实际件数总和；补给品：按物品卡片数量
-    if (zone.type === 'durable') {
-      count = visibleItems(zone).reduce(function(s, it) { return s + calcDurableItemCount(it); }, 0);
-    } else {
-      count = visibleItems(zone).length;
-    }
-    var themeClass = 'zone-theme-' + (zone.theme || (zone.type === 'consumable' ? 'consumable' : 'durable'));
-    html += '<div class="zone-card ' + themeClass + '" onclick="enterZone(\'' + zone.id + '\')">';
-    html += '<div class="zone-icon">' + zone.icon + '</div>';
-    html += '<div class="zone-info">';
-    html += '<div class="zone-name">' + escapeHtml(zone.name) + '</div>';
-    html += '<div class="zone-desc">' + (zone.categories.length + '个分类') + '</div>';
-    html += '</div>';
-    if (zone.type === 'durable') {
-      var totalPrice = calcZoneTotalPrice(zone);
-      html += '<div class="zone-count" style="text-align:right;line-height:1.4">';
-      html += '<div style="font-size:14px;font-weight:700;color:var(--text)">' + count + '件</div>';
-      html += '<div style="font-size:12px;color:var(--accent);font-weight:600">¥' + totalPrice.toFixed(2) + '</div>';
-      html += '</div>';
-    } else {
-      html += '<div class="zone-count">' + count + '件</div>';
-    }
-    html += '</div>';
+  sec(function() {
+    var s = '<div class="section-title">领地分布<div class="section-action" onclick="openZoneManager()">管理</div></div><div>';
+    DB.zones.forEach(function(zone) {
+      var count;
+      // 耐用品：统计所有variant的实际件数总和；补给品：按物品卡片数量
+      if (zone.type === 'durable') {
+        count = visibleItems(zone).reduce(function(s2, it) { return s2 + calcDurableItemCount(it); }, 0);
+      } else {
+        count = visibleItems(zone).length;
+      }
+      var themeClass = 'zone-theme-' + (zone.theme || (zone.type === 'consumable' ? 'consumable' : 'durable'));
+      s += '<div class="zone-card ' + themeClass + '" onclick="enterZone(\'' + zone.id + '\')">';
+      s += '<div class="zone-icon">' + (zone.icon || '📦') + '</div>';
+      s += '<div class="zone-info">';
+      s += '<div class="zone-name">' + escapeHtml(zone.name || '未命名领地') + '</div>';
+      s += '<div class="zone-desc">' + ((zone.categories || []).length + '个分类') + '</div>';
+      s += '</div>';
+      if (zone.type === 'durable') {
+        var totalPrice = calcZoneTotalPrice(zone);
+        s += '<div class="zone-count" style="text-align:right;line-height:1.4">';
+        s += '<div style="font-size:14px;font-weight:700;color:var(--text)">' + count + '件</div>';
+        s += '<div style="font-size:12px;color:var(--accent);font-weight:600">¥' + totalPrice.toFixed(2) + '</div>';
+        s += '</div>';
+      } else {
+        s += '<div class="zone-count">' + count + '件</div>';
+      }
+      s += '</div>';
+    });
+    s += '</div>';
+    return s;
   });
-  html += '</div>';
 
   // === 年报入口（消耗速率 + 建议采购，独立页面展开） ===
-  html += '<div class="report-entry" onclick="showPage(\'report\')">';
-  html += '<div class="report-entry-icon">📊</div>';
-  html += '<div class="report-entry-body">';
-  html += '<div class="report-entry-title">年报</div>';
-  html += '<div class="report-entry-sub">' + aiEntrySubText() + '</div>';
-  html += '</div>';
-  html += '<div class="report-entry-arrow">›</div>';
-  html += '</div>';
+  sec(function() {
+    var s = '<div class="report-entry" onclick="showPage(\'report\')">';
+    s += '<div class="report-entry-icon">📊</div>';
+    s += '<div class="report-entry-body">';
+    s += '<div class="report-entry-title">年报</div>';
+    s += '<div class="report-entry-sub">' + aiEntrySubText() + '</div>';
+    s += '</div>';
+    s += '<div class="report-entry-arrow">›</div>';
+    s += '</div>';
+    return s;
+  });
 
   // === AI分析 ===
-  html += renderAIAnalysis();
+  sec(function() { return renderAIAnalysis(); });
+
+  if (errs.length) {
+    window.__errLog.push({ t: new Date().toLocaleTimeString(), msg: '总览页有 ' + errs.length + ' 段渲染失败: ' + errs.join(' | '), detail: '' });
+  }
 
   document.getElementById('home-content').innerHTML = html;
 }
@@ -5422,6 +5489,46 @@ function migrateTaskParent() {
 }
 
 // 点击正面翻面
+// ========== 全局错误黑匣子（第 15 轮）==========
+// 任何 JS 报错不再无声吞掉：屏幕顶部弹红条，点按可展开详情并复制。
+// 远程排障用 —— 用户截图红条就能精确定位问题，不用再猜。
+window.__errLog = [];
+function showErrBar(msg, detail) {
+  try {
+    window.__errLog.push({ t: new Date().toLocaleTimeString(), msg: String(msg), detail: String(detail || '') });
+    if (window.__errLog.length > 10) window.__errLog.shift();
+    var bar = document.getElementById('err-bar');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'err-bar';
+      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#d32f2f;color:#fff;font-size:12px;line-height:1.4;padding:7px 12px;word-break:break-all;box-shadow:0 2px 8px rgba(0,0,0,.25)';
+      bar.onclick = function() {
+        var d = window.__errLog.map(function(e) { return '[' + e.t + '] ' + e.msg + (e.detail ? '\n' + e.detail : ''); }).join('\n\n');
+        var box = document.getElementById('err-bar-detail');
+        if (box) { box.remove(); return; }
+        box = document.createElement('pre');
+        box.id = 'err-bar-detail';
+        box.style.cssText = 'position:fixed;top:34px;left:0;right:0;z-index:99999;background:#fff;color:#333;font-size:11px;max-height:60vh;overflow:auto;padding:10px;white-space:pre-wrap;border-bottom:3px solid #d32f2f';
+        box.textContent = d + '\n\n（点此关闭）';
+        box.onclick = function() {
+          if (navigator.clipboard) navigator.clipboard.writeText(d).catch(function(){});
+          box.remove();
+        };
+        document.body.appendChild(box);
+      };
+      (document.body || document.documentElement).appendChild(bar);
+    }
+    bar.textContent = '⚠️ ' + String(msg).slice(0, 160) + '（点按看详情/复制）';
+  } catch (e) {}
+}
+window.addEventListener('error', function(ev) {
+  showErrBar(ev.message, (ev.filename || '').split('/').pop() + ':' + ev.lineno + ':' + ev.colno);
+});
+window.addEventListener('unhandledrejection', function(ev) {
+  var r = ev.reason;
+  showErrBar('未处理的Promise异常: ' + ((r && r.message) ? r.message : String(r)), r && r.stack ? String(r.stack).slice(0, 500) : '');
+});
+
 document.addEventListener('DOMContentLoaded', async function() {
   // 分段防崩（第 14 轮）：存储被 iOS 清空/损坏后，任何一步迁移抛异常都会
   // 中断整个回调 —— 表现为页面空白 + 云端状态永远卡在「初始化...」。
@@ -5545,8 +5652,8 @@ function manualRefresh() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791383565 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791383565';
+// deploy.py 部署时会把 1791385940 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791385940';
 
 function checkAppUpdate(manual) {
   try {
