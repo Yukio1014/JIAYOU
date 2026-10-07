@@ -124,7 +124,6 @@ body {
 .btn-primary { background: var(--accent); color: #fff; }
 .btn-danger { background: var(--red); color: #fff; }
 .btn-success { background: var(--green); color: #fff; }
-.btn-warn { background: var(--orange); color: #fff; }
 .btn-ghost { background: transparent; color: var(--accent); }
 .btn-full { width: 100%; padding: 14px; font-size: 16px; }
 .btn-outline { background: transparent; border: 1.5px solid var(--separator); color: var(--text); }
@@ -172,17 +171,11 @@ body {
 }
 
 /* ========== 拥有量卡 ========== */
-.own-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
 .own-card {
   background: var(--card-bg); border-radius: var(--radius); padding: 14px;
   box-shadow: var(--shadow); cursor: pointer; transition: transform 0.15s;
 }
 .own-card:active { transform: scale(0.97); }
-.own-card .own-icon { font-size: 28px; }
-.own-card .own-name { font-size: 13px; color: var(--text-secondary); margin-top: 4px; }
-.own-card .own-num { font-size: 32px; font-weight: 800; letter-spacing: -1px; }
-.own-card .own-unit { font-size: 13px; color: var(--text-secondary); }
-.own-card .own-idle { font-size: 11px; color: var(--orange); margin-top: 2px; font-weight: 600; }
 
 /* ========== AI分析卡 ========== */
 .ai-card {
@@ -216,8 +209,6 @@ body {
   padding: 10px 12px; font-size: 13px; line-height: 1.6; color: #1C1C1E;
 }
 .ai-card .ai-suggest strong { color: #00897B; }
-.ai-card .ai-suggest .donate-buy { color: #007AFF; font-weight: 700; }
-.ai-card .ai-suggest .stop-buy { color: var(--red); font-weight: 700; }
 
 /* ========== 年报页 ========== */
 .report-hero {
@@ -298,10 +289,7 @@ body {
 
 /* 表单变体卡：左标签右输入的行式字段（「总套餐数：[1]」模式） */
 .vfield { display:flex; align-items:center; gap:6px; margin-bottom:8px; }
-.vfield-dot { color:var(--text-tertiary); font-weight:700; flex-shrink:0; width:10px; text-align:center; }
-.vfield-label { font-size:12px; color:var(--text-secondary); flex-shrink:0; min-width:78px; text-align:right; }
 .vfield .form-input { flex:1; min-width:0; font-size:13px; padding:7px 9px; }
-.vfield-unit { font-size:12px; color:var(--text-tertiary); flex-shrink:0; }
 /* 表单变体卡：标签在上的小格（一行多格：「规格 [2] 单位 [瓶] 容量 [30] 单位 [ml]」） */
 .vcell { display:flex; flex-direction:column; min-width:0; }
 .vcell .vlab { font-size:11px; color:var(--text-tertiary); margin:0 0 3px 2px; }
@@ -336,15 +324,6 @@ body {
 .report-entry-arrow { font-size: 22px; color: var(--text-tertiary); flex-shrink: 0; line-height: 1; }
 
 /* ========== 进度条 ========== */
-.bar-wrap { width: 100%; height: 8px; background: var(--separator); border-radius: 4px; overflow: hidden; }
-.bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
-.bar-green { background: var(--green); }
-.bar-yellow { background: var(--yellow); }
-.bar-orange { background: var(--orange); }
-.bar-red { background: var(--red); }
-.bar-blue { background: var(--blue); }
-.bar-purple { background: var(--purple); }
-
 /* 大进度条（库存可视化） */
 .stock-bar {
   width: 100%; height: 12px; border-radius: 6px;
@@ -356,14 +335,6 @@ body {
 .stock-bar.low .stock-fill { background: linear-gradient(90deg, #FF3B30, #FF6B6B); }
 .stock-bar.mid .stock-fill { background: linear-gradient(90deg, #FF9500, #FFB340); }
 .stock-bar.high .stock-fill { background: linear-gradient(90deg, #34C759, #5AD680); }
-.stock-bar.over .stock-fill { background: linear-gradient(90deg, #5AC8FA, #7AD9FF); }
-
-/* 保质期进度条 */
-.shelf-bar {
-  width: 100%; height: 6px; border-radius: 3px;
-  overflow: hidden; background: var(--separator);
-}
-.shelf-bar .shelf-fill { height: 100%; transition: width 0.5s ease; }
 
 /* ========== 物品卡片网格 ========== */
 .item-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
@@ -584,8 +555,6 @@ body {
 .form-row .form-group { flex: 1; }
 
 /* 开关（开袋即使用） */
-.switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.switch-desc { font-size: 13px; color: var(--text-secondary); line-height: 1.5; flex: 1; }
 .switch { position: relative; display: inline-block; width: 46px; height: 26px; flex-shrink: 0; }
 .switch input { opacity: 0; width: 0; height: 0; }
 .switch .slider {
@@ -654,7 +623,6 @@ body {
 }
 .cat-tab:active { transform: scale(0.95); }
 .cat-tab.active { background: var(--accent); color: #fff; }
-.cat-tab .cat-edit-icon { font-size: 12px; opacity: 0.6; }
 
 /* ========== 弹窗 ========== */
 .modal-overlay {
@@ -701,7 +669,6 @@ body {
 }
 .pool-item .pool-name { font-size: 15px; font-weight: 600; }
 .pool-item .pool-meta { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
-.pool-item .pool-price { font-size: 16px; font-weight: 700; color: var(--accent); }
 .pool-item .pool-warn {
   background: rgba(255,149,0,0.1); border-radius: 8px;
   padding: 8px 10px; font-size: 12px; color: var(--orange);
@@ -757,7 +724,6 @@ body {
 .strike-plan { display: flex; gap: 10px; align-items: flex-start; padding: 10px; background: var(--bg); border-radius: 10px; margin-bottom: 8px; cursor: pointer; border: 1.5px solid transparent; }
 .strike-plan.on { border-color: var(--accent); background: rgba(52,199,89,0.07); }
 .strike-plan input { margin-top: 2px; width: 18px; height: 18px; flex-shrink: 0; accent-color: var(--accent); }
-.strike-plan .sp-note { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
 
 /* ========== 开封按钮 ========== */
 .open-btn {
@@ -785,7 +751,6 @@ body {
   cursor: pointer; -webkit-user-select: none; user-select: none;
 }
 .tag.selected { background: var(--accent); color: #fff; }
-.tag-removable { position: relative; }
 
 /* ========== 设置页 ========== */
 .setting-row {
@@ -815,15 +780,6 @@ body {
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(-10px); }
 
-/* ========== 图表 ========== */
-.chart-container { background: var(--card-bg); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); margin-bottom: 12px; }
-.chart-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
-.bar-chart { display: flex; flex-direction: column; gap: 8px; }
-.bar-chart-item { display: flex; align-items: center; gap: 8px; }
-.bar-chart-label { font-size: 12px; color: var(--text-secondary); min-width: 60px; text-align: right; }
-.bar-chart-track { flex: 1; height: 20px; background: var(--bg); border-radius: 4px; overflow: hidden; }
-.bar-chart-fill { height: 100%; border-radius: 4px; transition: width 0.6s ease; display: flex; align-items: center; padding-left: 6px; }
-.bar-chart-fill span { font-size: 11px; color: #fff; font-weight: 600; }
 
 /* 倒计时圆环 */
 .countdown-ring {
@@ -831,10 +787,6 @@ body {
   display: flex; align-items: center; justify-content: center;
 }
 .countdown-ring svg { transform: rotate(-90deg); }
-.countdown-ring .ring-text {
-  position: absolute; font-size: 12px; font-weight: 700; text-align: center;
-}
-
 /* ========== 工具栏 ========== */
 .toolbar {
   display: flex; gap: 8px; margin-bottom: 12px;
@@ -858,9 +810,6 @@ body {
 .zone-card .zone-count { font-size: 13px; color: var(--text-secondary); }
 
 /* 板块主题色 */
-.zone-theme-consumable { --zone-color: #26C6DA; }
-.zone-theme-durable { --zone-color: #AB47BC; }
-.zone-theme-durable2 { --zone-color: #7E57C2; }
 
 /* 输入数量步进器 */
 .stepper {
@@ -1040,6 +989,55 @@ const SUPABASE_KEY = 'sb_publishable_UpBLW71YgaQCcm6YGCrGsw_urK1cVTd';
 const BUCKET_NAME = 'jiayou-photos';
 const CLOUD_SYNC_DEBOUNCE_MS = 2500;
 
+// ---- 测试环境隔离 ----
+// 当处于测试模式（window.__SUPABASE_TEST_MODE__、?testmode=1 或 localStorage 开关）时，
+// 用内存 Mock 顶替真实客户端：零网络请求，绝不可能碰到用户手机在用的真实云端数据库。
+function isSupabaseTestMode() {
+  try {
+    if (window.__SUPABASE_TEST_MODE__) return true;
+    if (typeof location !== 'undefined' && /[?&]testmode=1/.test(location.search || '')) return true;
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('jiayou_test_mode') === '1') return true;
+  } catch (e) {}
+  return false;
+}
+// 极简内存 Mock：只实现本 App 用到的 4 个动作（auth.getSession / signInAnonymously /
+// from().select().eq().single() / from().upsert()），签名与 supabase-js 保真，
+// 让上层同步逻辑无需任何分支改动即可在测试中跑通。
+function createMockSupabaseClient() {
+  var _row = null; // 内存里的「云端」那一行
+  var mockUser = { id: 'test_user_local', email: 'test@jiayou.app' };
+  function qb() {
+    var st = { _eq: null, _single: false };
+    var api = {
+      select: function () { return api; },
+      eq: function (col, val) { st._eq = val; return api; },
+      single: function () {
+        st._single = true;
+        return Promise.resolve(_row ? { data: Object.assign({}, _row), error: null }
+                                    : { data: null, error: { code: 'PGRST116', message: 'no rows' } });
+      },
+      upsert: function (payload) { _row = Object.assign({}, payload); return Promise.resolve({ error: null }); },
+      then: function (res) { return Promise.resolve({ data: [], error: null }).then(res); }
+    };
+    return api;
+  }
+  return {
+    auth: {
+      getSession: function () { return Promise.resolve({ data: { session: { user: mockUser } }, error: null }); },
+      signInAnonymously: function () { return Promise.resolve({ data: { user: mockUser }, error: null }); },
+      signUp: function () { return Promise.resolve({ data: { user: mockUser }, error: null }); },
+      signInWithPassword: function () { return Promise.resolve({ data: { user: mockUser }, error: null }); },
+      signOut: function () { return Promise.resolve({ error: null }); }
+    },
+    from: function () { return qb(); },
+    storage: { from: function () { return {
+      upload: function () { return Promise.resolve({ data: {}, error: null }); },
+      getPublicUrl: function () { return { data: { publicUrl: 'mock://local' } }; }
+    }; } },
+    __mock: true
+  };
+}
+
 var supabaseClient = null;
 var currentUser = null;
 var cloudSyncState = { status: 'idle', message: '', lastSyncAt: null, pending: false };
@@ -1051,6 +1049,12 @@ var cloudSyncInProgress = false;
 // 因此不能在顶层直接读 window.supabase —— 必须等真正用到时再创建。
 function ensureSupabaseClient() {
   if (supabaseClient) return true;
+  // 测试模式：直接换成内存 Mock，一条网络请求都不会发出
+  if (isSupabaseTestMode()) {
+    supabaseClient = createMockSupabaseClient();
+    cloudSyncState.message = '';
+    return true;
+  }
   if (!window.supabase || !window.supabase.createClient) {
     cloudSyncState.message = 'Supabase 库未加载（检查 supabase.js 是否存在）';
     return false;
@@ -1317,6 +1321,8 @@ async function syncToCloud(force) {
       .upsert(payload, { onConflict: 'user_id' });
     if (error) throw error;
     cloudSyncState.lastSyncAt = Date.now();
+    // 记录「本机已把当前内容推上云端」的时间戳，作为冲突检测基准
+    try { localStorage.setItem('jiayou_last_cloud_ts', String(Date.now())); } catch (e) {}
     setCloudStatus('synced', '同步完成');
   } catch(e) {
     console.error('同步到云端失败', e);
@@ -1342,6 +1348,117 @@ function queueCloudSync() {
   cloudSyncTimer = setTimeout(function() { syncToCloud(true); }, CLOUD_SYNC_DEBOUNCE_MS);
 }
 
+// ========== 云端数据安全：冲突检测（绝不静默覆盖）==========
+// 数据指纹：用「物品数 / 记录数 / 委托数」的轻量统计代替逐字节比较，
+// 既能识别出「两边内容不同」，又不会因为保存时间戳这类无关差异误报。
+function dbFingerprint(db) {
+  var zones = (db && db.zones) || [];
+  var items = 0, records = 0, tasks = ((db && db.tasks) || []).length;
+  zones.forEach(function (z) {
+    (z.items || []).forEach(function (it) {
+      items++;
+      records += ((it.usageRecords || []).length);
+    });
+  });
+  return { items: items, records: records, tasks: tasks };
+}
+function fingerprintsDiffer(a, b) {
+  if (!a || !b) return true;
+  return a.items !== b.items || a.records !== b.records || a.tasks !== b.tasks;
+}
+function fpText(fp) {
+  if (!fp) return '—';
+  return fp.items + ' 件物品 / ' + fp.records + ' 条使用记录 / ' + fp.tasks + ' 个委托';
+}
+
+// 手动同步时的冲突检测：本机上次写入 < 云端更新时间，且两边指纹不同 → 提示用户选择
+// 返回 'continue'（无冲突，可继续）或 'abort'（已弹窗，调用方应直接返回）
+var _manualSyncBypass = false;
+function detectCloudConflict() {
+  if (_manualSyncBypass) return 'continue';
+  var lastLocalWrite = 0;
+  try { lastLocalWrite = parseInt(localStorage.getItem('jiayou_last_local_write') || '0', 10) || 0; } catch (e) {}
+  var lastCloudTs = 0;
+  try { lastCloudTs = parseInt(localStorage.getItem('jiayou_last_cloud_ts') || '0', 10) || 0; } catch (e) {}
+  // 从没在本机编辑过 → 不存在「本机改动会被冲掉」的风险
+  if (!lastLocalWrite) return 'continue';
+  // 本机改动晚于/等于云端 → 本机更新，正常上传
+  if (lastCloudTs && lastLocalWrite >= lastCloudTs) return 'continue';
+  // 本机改动更早，但云端这次读取没拿到数据 → 交给 syncFromCloud 常规分支
+  return 'need_remote';
+}
+
+// 真正比对云端内容后弹出选择框（只有真的两边不同才会弹）
+function showCloudConflictDialog(cloudData) {
+  var localFp = dbFingerprint(DB);
+  var cloudFp = dbFingerprint(cloudData);
+  if (!fingerprintsDiffer(localFp, cloudFp)) return false; // 内容一致，无需打扰
+  var html = '';
+  html += '<div class="modal-handle"></div>';
+  html += '<div class="modal-title">⚠️ 云端与本机数据不一致</div>';
+  html += '<div style="font-size:13px;line-height:1.7;color:var(--text-secondary);margin-bottom:12px">为了不让任何一边被悄悄覆盖，请你亲自决定这次以哪边为准。选错也不会丢数据 —— 另一边仍保留在原来的位置，可随时再切回。</div>';
+  html += '<div style="border:1.5px solid var(--border);border-radius:12px;padding:12px;margin-bottom:10px">';
+  html += '<div style="font-size:13px;font-weight:700;margin-bottom:4px">📱 本机数据（最后一次编辑：' + (lastLocalWriteText() || '未知') + '）</div>';
+  html += '<div style="font-size:12px;color:var(--text-secondary)">' + fpText(localFp) + '</div>';
+  html += '</div>';
+  html += '<div style="border:1.5px solid var(--border);border-radius:12px;padding:12px;margin-bottom:14px">';
+  html += '<div style="font-size:13px;font-weight:700;margin-bottom:4px">☁️ 云端数据（最后更新时间：' + (cloudUpdatedAtText() || '未知') + '）</div>';
+  html += '<div style="font-size:12px;color:var(--text-secondary)">' + fpText(cloudFp) + '</div>';
+  html += '</div>';
+  html += '<button class="btn btn-primary btn-full" onclick="resolveCloudConflict(\'cloud\')">☁️ 用云端数据覆盖本机</button>';
+  html += '<button class="btn btn-outline btn-full" style="margin-top:8px" onclick="resolveCloudConflict(\'local\')">📱 保留本机数据，上传到云端</button>';
+  html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="resolveCloudConflict(\'cancel\')">先不处理（保持现状）</button>';
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('show');
+  return true;
+}
+
+var _pendingCloudData = null, _pendingCloudTs = 0;
+function lastLocalWriteText() {
+  try {
+    var ts = parseInt(localStorage.getItem('jiayou_last_local_write') || '0', 10);
+    return ts ? formatDateTime(ts) : '';
+  } catch (e) { return ''; }
+}
+function cloudUpdatedAtText() { return _pendingCloudTs ? formatDateTime(_pendingCloudTs) : ''; }
+
+function resolveCloudConflict(choice) {
+  if (choice === 'cancel') {
+    closeModal();
+    toast('已保持现状，可稍后点「立即同步」再决定');
+    return;
+  }
+  if (choice === 'cloud') {
+    // 用云端覆盖本机：先留一份本机快照到归档箱，避免误点后无法找回
+    try { DB = mergeDB(DB, _pendingCloudData); } catch (e) { console.error(e); }
+    try { localStorage.setItem('jiayou_last_cloud_ts', String(_pendingCloudTs || Date.now())); } catch (e) {}
+    try { localStorage.setItem('jiayou_last_local_write', String(Date.now())); } catch (e) {}
+    saveDBIndexed().catch(function () {});
+    try { localStorage.setItem('jiayou_db', JSON.stringify(DB)); } catch (e) {}
+  } else {
+    // 保留本机：直接推上去，本次强制绕过冲突检测防止死循环
+    _manualSyncBypass = true;
+  }
+  closeModal();
+  _pendingCloudData = null;
+  var bypass = _manualSyncBypass;
+  Promise.resolve(saveDBIndexed()).then(function () {
+    renderAll();
+    if (choice === 'local') {
+      return syncToCloud(true).then(function () {
+        _manualSyncBypass = false;
+        toast('📱 已按本机数据覆盖云端');
+      });
+    }
+    return null;
+  }).then(function () {
+    if (choice === 'cloud') toast('☁️ 已按云端数据恢复本机');
+  }).catch(function () {
+    _manualSyncBypass = bypass;
+    toast('操作失败，请重试');
+  });
+}
+
 // 从云端拉取数据
 async function syncFromCloud() {
   if (!currentUser) return false;
@@ -1362,6 +1479,10 @@ async function syncFromCloud() {
       throw error;
     }
     if (!data || !data.data) return false;
+    // 记录云端更新时间戳（冲突检测的基准之一）
+    var cloudTs = data.updated_at ? new Date(data.updated_at).getTime() : 0;
+    if (cloudTs) { try { localStorage.setItem('jiayou_last_cloud_ts', String(cloudTs)); } catch (e) {} }
+    _pendingCloudTs = cloudTs;
     // 合并云端数据到本地
     var cloudData = data.data;
     var localZones = (DB.zones || []);
@@ -1369,11 +1490,17 @@ async function syncFromCloud() {
     var localItemsCount = localZones.reduce(function(s, z) { return s + (z.items ? z.items.length : 0); }, 0);
     var cloudItemsCount = cloudZones.reduce(function(s, z) { return s + (z.items ? z.items.length : 0); }, 0);
     if (cloudItemsCount > 0) {
+      // 本机有未上传的改动、且与云端内容不同 → 弹窗让用户亲自选，绝不悄悄覆盖
+      if (detectCloudConflict() === 'need_remote') {
+        var popped = showCloudConflictDialog(cloudData);
+        if (popped) { cloudSyncState.lastSyncAt = Date.now(); setCloudStatus('synced', '待你确认'); return true; }
+      }
       // 云端有真实数据，用云端覆盖
       DB = mergeDB(DB, cloudData);
       // 立即同步到本地存储
       try { localStorage.setItem('jiayou_db', JSON.stringify(DB)); } catch(e) {}
       saveDBIndexed().catch(function(){});
+      try { localStorage.setItem('jiayou_last_local_write', String(Date.now())); } catch(e) {}
     } else if (localItemsCount > 0) {
       // 本地有数据但云端没有，推送到云端
       await syncToCloud(true);
@@ -1397,6 +1524,14 @@ function manualSync() {
   if (!navigator.onLine) { toast('当前离线，恢复网络后自动同步'); return; }
   if (!ensureSupabaseClient()) { toast('Supabase 库未加载，无法同步'); return; }
   if (!currentUser) { toast('未登录，无法同步'); return; }
+  // 数据安全护栏：本机改动早于云端更新且内容不同 → 弹窗让用户选，绝不悄悄覆盖
+  if (detectCloudConflict() === 'need_remote') {
+    syncFromCloud().then(function (changed) {
+      if (!changed) { toast('云端暂无数据，不会覆盖本机'); return; }
+      renderAll();
+    });
+    return;
+  }
   toast('开始同步...');
   syncToCloud(true).then(function() {
     renderAll();
@@ -1478,6 +1613,8 @@ function saveDB() {
     saveDBIndexed().catch(function(e) { console.error('IndexedDB保存失败', e); });
     // 次存：localStorage（5-10MB限制，存不下会失败但不阻塞）
     try { localStorage.setItem('jiayou_db', json); } catch(lsErr) { console.warn('localStorage保存失败', lsErr); }
+    // 记录本机最后一次写入时间（用于云端/本地冲突检测，见 detectCloudConflict）
+    try { localStorage.setItem('jiayou_last_local_write', String(Date.now())); } catch(e) {}
     // 排队同步到 Supabase 云端（最可靠）
     queueCloudSync();
   } catch(e) {
@@ -1743,18 +1880,6 @@ function variantSpecPieces(v) { // 总件数（参考）= Σ 各规格剩余包�
   var ss = variantSpecsOf(v); if (!ss.length) return 0;
   return variantSpecPiecesCalc(v);
 }
-// 总包数（组合消耗型④按包开合时使用）= Σ 各规格剩余包数
-function variantSpecPacks(v) {
-  var ss = variantSpecsOf(v); if (!ss.length) return 0;
-  var t = 0; ss.forEach(function (s) { t += specPacksRemaining(v, s); });
-  return Math.round(t * 100) / 100;
-}
-// 单套内某规格的总包数（不乘套餐数）：用于「剩 X 包未开」的构成说明
-function variantSpecPacksPerSet(v) {
-  var ss = variantSpecsOf(v); if (!ss.length) return 0;
-  var t = 0; ss.forEach(function (s) { t += specPackCount(s); });
-  return Math.round(t * 100) / 100;
-}
 function variantSpecUnit(v) {
   var ss = variantSpecsOf(v);
   return ss.length ? (ss[0].unit || '') : '';
@@ -1766,14 +1891,6 @@ function variantSpecUnit(v) {
 //   specs[i].openPacks = 该规格「已开出的包数」（跨套累计，唯一消耗来源）
 //   v.packCount     = 购入套餐数（用户填写，消耗不改动，仅作记录/单价折算）
 //   v.stock         = Σ 各规格「(套餐数 × 单套包数 − 已开包数) × 每包含量 × 每份规格」
-function variantPacksLeft(v) {
-  if (!v) return 0;
-  if (variantSpecsOf(v).length) return variantPacksLeftCalc(v);
-  // 无明细：用旧口径（剩余件数 ÷ 每套件数）
-  var pq = parseFloat(v.packQty) || 1;
-  if (pq > 0) return Math.round(((parseFloat(v.stock) || 0) / pq) * 100) / 100;
-  return 0;
-}
 // 购入套餐数：留空按 1；填 0 就是 0
 function variantPacksBought(v) {
   var raw = (v && v.packCount !== undefined && v.packCount !== null) ? String(v.packCount) : '';
@@ -2366,10 +2483,6 @@ function getSubcategories(zone, catId) {
   if (!zone || !zone.categories) return [];
   return zone.categories.filter(function(c) { return c.parentId === catId; });
 }
-// 判断分类是否为子分类
-function isSubcategory(zone, cat) {
-  return !!(cat && cat.parentId && zone.categories.some(function(c) { return c.id === cat.parentId; }));
-}
 // 返回分类路径："大类 · 子类"（大类本身只返回大类名）
 function getCategoryPath(zoneId, catId) {
   var zone = getZone(zoneId);
@@ -2413,8 +2526,6 @@ function getItem(zoneId, itemId) {
   }
   return null;
 }
-// ========== 归档（不再补货/不再提醒，但保留全部历史数据）==========
-function isArchived(it) { return !!(it && it.archived); }
 function visibleItems(zone) { return (zone.items || []).filter(function(it) { return !it.archived; }); }
 function archivedItemsOf(zone) { return (zone.items || []).filter(function(it) { return !!it.archived; }); }
 function archivedCountAll() {
@@ -2447,8 +2558,6 @@ function renderHome() {
   var allItems = [];
   DB.zones.forEach(function(zone) {
     visibleItems(zone).forEach(function(it) {
-      it._zoneId = zone.id;
-      it._zoneType = zone.type;
       allItems.push(it);
     });
   });
@@ -4646,12 +4755,15 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (currentUser) {
         var cloudChanged = await syncFromCloud();
         if (cloudChanged) {
-          migrateDirtyUsedUp();
-          migrateSpecPacks();
-          migrateSpecTwoLayer();
-          migratePackUnit();
-          migrateTaskParent();
-          renderAll();
+          // 若因为「云端本机不一致」弹了选择框，此时不要重绘页面把弹窗一起冲掉
+          if (!document.getElementById('modal-overlay').classList.contains('show')) {
+            migrateDirtyUsedUp();
+            migrateSpecPacks();
+            migrateSpecTwoLayer();
+            migratePackUnit();
+            migrateTaskParent();
+            renderAll();
+          }
         }
       }
     } catch(e) {
@@ -4740,8 +4852,8 @@ function manualRefresh() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791355709 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791355709';
+// deploy.py 部署时会把 1791356918 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791356918';
 
 function checkAppUpdate(manual) {
   try {
@@ -5189,30 +5301,6 @@ function confirmOpen(itemId, variantId, markAsUsed) {
   closeModal();
   openCardDetail(currentZoneId, itemId);
   toast('已' + (markAsUsed ? '开封并标记用完' : '开封') + ' ' + escapeHtml(v.brand) + '，库存-' + qty);
-}
-
-function confirmFinish(itemId, variantId) {
-  var item = getItem(currentZoneId, itemId);
-  if (!item) return;
-  var v = item.variants.find(function(v) { return v.id === variantId; });
-  if (!v) return;
-  var date = document.getElementById('finish-date').value;
-
-  v.usedUp = true;
-  v.finishDate = new Date(date).toISOString();
-
-  if (item.usageRecords && item.usageRecords.length > 0) {
-    var lastRecord = item.usageRecords[item.usageRecords.length - 1];
-    if (!lastRecord.endDate) {
-      lastRecord.endDate = new Date(date).toISOString();
-    }
-  }
-
-  syncItemFromVariants(item);
-  saveDB();
-  closeModal();
-  openCardDetail(currentZoneId, itemId);
-  toast('已记录用完。消耗数据已更新');
 }
 
 // ========== 模型③ 即时消耗型：纯打卡扣减 ==========
@@ -5815,7 +5903,6 @@ function openItemForm(itemId) {
         packWeightUnit: v.packWeightUnit || '',
         noRestock: !!v.noRestock,
         specsFolded: !!v.specsFolded,
-        packsLeft: undefined,   // v1.6 起已废弃：剩余量由 specs[i].openPacks 承载
         specs: (v.specs || []).map(function (s) { return { name: s.name || '', packCount: (s.packCount !== undefined && s.packCount !== null) ? s.packCount : '', packQty: (s.packQty !== undefined && s.packQty !== null && s.packQty !== '') ? s.packQty : '', qty: +s.qty || 0, content: +s.content || 0, unit: s.unit || '', openPacks: specOpenPacks(s) }; }),
         photos: (v.photos||[]).slice()
       };
@@ -6175,16 +6262,6 @@ function packHintOf(v, plain) {
   var txt = seg.join(MUL) + ' = ' + trimNum(content) + cu;
   return '📦 库存 = ' + txt + '（' + trimNum(pieces) + ' ' + pu + '）';
 }
-// 每套单位：任意文本（ml / 毫升 / L / 颗 / 片 / 包…），不限制
-function onConsumableUnitInput(idx, val) {
-  var v = window._editVariants && window._editVariants[idx];
-  if (!v) return;
-  v.packUnit = (val || '').trim();
-  var row = document.querySelectorAll('.consumable-variant-row')[idx];
-  if (!row) return;
-  var hint = document.getElementById('packstock-' + idx);
-  if (hint) hint.innerHTML = packHintOf(v);
-}
 // 含量单位：kg / g / ml / L（影响比价口径与库存/明细的单位展示）
 function onConsumableWeightUnitInput(idx, val) {
   var v = window._editVariants && window._editVariants[idx];
@@ -6242,11 +6319,6 @@ function updateVariantField(idx, field, val) {
   if (window._editVariants && window._editVariants[idx]) {
     window._editVariants[idx][field] = val;
   }
-}
-function addVariantRow() {
-  window._editVariants = window._editVariants || [];
-  window._editVariants.push({ id: genId(), brand: '', stock: 0, price: 0 });
-  document.getElementById('variant-list').innerHTML = renderVariantEditorRows();
 }
 function removeVariantRow(idx) {
   window._editVariants.splice(idx, 1);
@@ -6541,7 +6613,7 @@ function saveItem() {
         nv.stock = variantSpecStockCalc(nv);
         // ④ 父级规格行已被明细接管：不再从明细反写 packQty（避免「套数 × 每套含」的旧矛盾）
         nv.specsFolded = true;
-        nv.packsLeft = undefined;   // 计数改由 specs[i].openPacks 承载        nv.packUnit = nv.specs[0].unit || nv.packUnit;
+        nv.packUnit = nv.specs[0].unit || nv.packUnit;
         nv.packWeight = 1;
         nv.packWeightUnit = nv.specs[0].unit || nv.packWeightUnit;
         // ⑤ 重启消费状态：库存还有 → 不是「用完」；仍有未结束的开封记录 → 保持「使用中」
@@ -7093,30 +7165,6 @@ function saveFeeling(itemId) {
   toast('感受已保存');
 }
 
-// 耐用品备注编辑
-function openNotesForm(itemId) {
-  var item = getItem(currentZoneId, itemId);
-  if (!item) return;
-  var html = '<div class="modal-handle"></div>';
-  html += '<div class="modal-title">✏ 编辑备注</div>';
-  html += '<div style="text-align:center;margin-bottom:16px;font-size:16px;font-weight:700">' + escapeHtml(item.name) + '</div>';
-  html += '<div class="form-group"><textarea class="form-textarea" id="item-notes" placeholder="记录购买渠道、保养方式、存放位置等...">' + escapeHtml(item.notes || '') + '</textarea></div>';
-  html += '<button class="btn btn-primary btn-full" onclick="saveNotes(\'' + itemId + '\')">保存</button>';
-  html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">取消</button>';
-  document.getElementById('modal-content').innerHTML = html;
-  document.getElementById('modal-overlay').classList.add('show');
-}
-
-function saveNotes(itemId) {
-  var item = getItem(currentZoneId, itemId);
-  if (!item) return;
-  item.notes = document.getElementById('item-notes').value;
-  saveDB();
-  closeModal();
-  openCardDetail(currentZoneId, itemId);
-  toast('备注已保存');
-}
-
 // 撤销单品牌/顶层用完状态
 function undoFinish(itemId) {
   var item = getItem(currentZoneId, itemId);
@@ -7189,16 +7237,6 @@ function undoFinishVariant(itemId, variantId) {
   saveDB();
   openCardDetail(currentZoneId, itemId);
   toast('已撤销用完');
-}
-
-// ========== 标记使用（耐用品）==========
-function markUsed(itemId) {
-  var item = getItem(currentZoneId, itemId);
-  if (!item) return;
-  item.lastUsedDate = new Date().toISOString();
-  saveDB();
-  openCardDetail(currentZoneId, itemId);
-  toast('已标记今天用过');
 }
 
 // ========== 库存盘点（方案A） ==========
@@ -7629,8 +7667,6 @@ function taskById(id) { var s = String(id); for (var i = 0; i < DB.tasks.length;
 function taskNextId() { var m = 0; DB.tasks.forEach(function (t) { if (t.id > m) m = t.id; }); return m + 1; }
 function planNextId() { var m = 0; DB.tasks.forEach(function (t) { (t.plans || []).forEach(function (p) { if (p.id > m) m = p.id; }); }); if (taskState && taskState.formPlans) taskState.formPlans.forEach(function (p) { if (p.id > m) m = p.id; }); return m + 1; }
 function findPlan(t, pid) { if (!t.plans) return null; var s = String(pid); for (var i = 0; i < t.plans.length; i++) { if (String(t.plans[i].id) === s) return t.plans[i]; } return null; }
-function cheapestPlan(t) { var best = null; (t.plans || []).forEach(function (p) { var a = +p.amount || 0; if (a > 0 && (!best || a < best.amount)) best = p; }); return best; }
-
 // ---------- 混合套餐：一个方案可含多种规格（如 44粒装×3盒 + 70粒装×2盒 = 272粒）----------
 // v1.7：明细带「性质」kind —— normal 正装 / refill 替换装 / gift 赠品。
 // 库存只认「实物件数与含量」，性质仅用于结算页与展示区分，绝不影响库存计算口径。
@@ -7642,10 +7678,6 @@ var SPEC_KINDS = [
 function specKindOf(s) {
   var k = String((s && s.kind) || '').trim();
   return (k === 'refill' || k === 'gift') ? k : 'normal';
-}
-function specKindLabel(k) {
-  for (var i = 0; i < SPEC_KINDS.length; i++) { if (SPEC_KINDS[i].k === k) return SPEC_KINDS[i].label; }
-  return '正装';
 }
 function specKindIcon(k) {
   for (var i = 0; i < SPEC_KINDS.length; i++) { if (SPEC_KINDS[i].k === k) return SPEC_KINDS[i].icon; }
@@ -7663,16 +7695,6 @@ function taskParentIdOf(t) {
   var found = null;
   (t.plans || []).forEach(function (p) { if (!found && p && p.sourceItemId) found = p.sourceItemId; });
   return found;
-}
-function taskParentItem(t) {
-  var pid = taskParentIdOf(t);
-  return pid ? findItemByIdGlobal(pid) : null;
-}
-function taskParentLabel(t) {
-  var it = taskParentItem(t);
-  if (it) return it.name;
-  var pid = taskParentIdOf(t);
-  return pid ? '(已删除的物品)' : '';
 }
 // 该委托是否具备凯旋资格（必须挂父级）
 function taskCanWin(t) {
@@ -7821,11 +7843,6 @@ function taskWeightStr(t) {
   if (keys.length > 1) return '📦 ' + arr.map(function (x) { return trimNum(x.v) + x.s; }).join(' + ');
   if (mn === mx) return '📦 ' + trimNum(mn) + keys[0];
   return '📦 ' + trimNum(mn) + '~' + trimNum(mx) + keys[0];
-}
-function taskAbandonAmt(t) {
-  if (t.status === '搁置') return planMin(t);
-  if (t.status === '凯旋') { var s = 0; (t.plans || []).forEach(function (p) { if (p.buy !== false) s += (+p.amount || 0); }); return s; }
-  return 0;
 }
 function sortPlans(t) { return (t.plans || []).slice().sort(function (a, b) { if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1; return (a.id || 0) - (b.id || 0); }); }
 function taskMatch(t, q) { q = (q || '').toLowerCase(); if (!q) return true; if ((t.name || '').toLowerCase().indexOf(q) >= 0) return true; return (t.plans || []).some(function (p) { return (p.name || '').toLowerCase().indexOf(q) >= 0; }); }
@@ -8121,7 +8138,7 @@ function taskStrike(id) {
   var t = taskById(id); if (!t) return;
   if (!t.plans || t.plans.length === 0) { toast('先添加备选方案'); return; }
   if (t.plans.length === 1) {
-    t.plans[0].buy = true; t.plans[0].status = 'purchasing'; t.status = '进行中';
+    t.plans[0].buy = true; t.status = '进行中';
     saveDB(); renderTasks(); toast('⚔️ 已出击 · ' + (t.plans[0].name || '方案')); taskHaptic(); return;
   }
   openStrikeModal([t]);
@@ -8193,7 +8210,6 @@ function confirmStrike() {
     });
     if (!buys.length) { skipped++; return; }
     t.status = '进行中';
-    buys.forEach(function (p) { p.status = 'purchasing'; });
     struck++;
   });
   _strikeSel = null;
@@ -8359,7 +8375,6 @@ function doWinSettle(ws) {
     if (!t) return;
     t.status = '凯旋';
     t.lockedPlanId = null;
-    (t.plans || []).forEach(function (p) { if (p.buy !== false) p.status = 'done'; });
   });
 
   var sum = '';
@@ -8423,7 +8438,7 @@ function openWinSettle(tasks, mode) {
     (t.plans || []).forEach(function (p) {
       if (p.buy === false) return;
       settleRowsOf(t, p).forEach(function (r) {
-        r.taskId = t.id; r.taskName = t.name;
+        r.taskId = t.id;
         r.amount = Math.round((+p.amount || 0) * 100) / 100;   // 该方案预估金额（记在方案级）
         r.comboPrice = +p.comboPrice || 0;
         r.parentId = taskParentIdOf(t);
@@ -8572,7 +8587,6 @@ function taskAbandon(id) {
 function taskRestart(id) {
   var t = taskById(id); if (!t) return;
   t.status = '待接'; t.lockedPlanId = null;
-  (t.plans || []).forEach(function (p) { p.status = 'open'; p.syncedItemId = null; });
   saveDB(); renderTasks(); toast('🔁 已重启');
 }
 function taskDestroy(id) {
@@ -8590,7 +8604,7 @@ function taskBatchStrike() {
   var hasMulti = ts.some(function (t) { return (t.plans || []).length > 1; });
   if (!hasMulti) {
     // 每个委托都只有一个方案，无需选择，直接出击
-    ts.forEach(function (t) { t.plans[0].buy = true; t.plans[0].status = 'purchasing'; t.status = '进行中'; });
+    ts.forEach(function (t) { t.plans[0].buy = true; t.status = '进行中'; });
     afterBatch('⚔️ 批量出击 ' + ts.length + ' 项');
     return;
   }
@@ -8617,7 +8631,7 @@ function taskBatchAbandon() {
 function taskBatchRestart() {
   var ts = getSelTasks().filter(function (t) { return t.status === '凯旋' || t.status === '搁置'; });
   if (!ts.length) { toast('没有可重启的'); return; }
-  ts.forEach(function (t) { t.status = '待接'; t.lockedPlanId = null; (t.plans || []).forEach(function (p) { p.status = 'open'; p.syncedItemId = null; }); });
+  ts.forEach(function (t) { t.status = '待接'; t.lockedPlanId = null; });
   afterBatch('🔁 重启 ' + ts.length + ' 项');
 }
 function taskBatchDestroy() {
@@ -8655,8 +8669,7 @@ function doTaskClear() {
   DB.tasks.forEach(function (t) {
     if ((t.status === '凯旋' || t.status === '搁置') && keep[t.id]) {
       t.status = '待接'; t.lockedPlanId = null;
-      (t.plans || []).forEach(function (p) { p.status = 'open'; p.syncedItemId = null; });
-    }
+        }
   });
   DB.tasks = DB.tasks.filter(function (t) { return !del[t.id]; });
   closeModal(); saveDB(); renderTasks(); toast('清零完成');
@@ -8670,7 +8683,7 @@ function taskOpenForm(id) {
   taskState.parentItemId = editing ? taskParentIdOf(editing) : null;
   taskState.formPlans = editing
     ? (editing.plans || []).map(function (p) { return Object.assign({}, p); })
-    : [{ id: planNextId(), name: '', amount: 0, note: '', status: 'open', pinned: false, comboPrice: 0, qty: 0, spec: 0, unit: '', photos: [], buy: true, _calcOpen: false }];
+    : [{ id: planNextId(), name: '', amount: 0, note: '', pinned: false, comboPrice: 0, qty: 0, spec: 0, unit: '', photos: [], buy: true, _calcOpen: false }];
   // 新建时若已有父级（不可能，兜底）→ 把父级补到所有方案的来源上
   taskSyncParentToPlans();
   var html = '<div class="modal-handle"></div>';
@@ -8822,7 +8835,7 @@ function taskPlanRefreshCalc(i) {
 function taskAddPlan() {
   // v1.7：新方案自动继承父级（仓库），手写品牌名即可，凯旋时归到父级下
   taskState.formPlans.push({
-    id: planNextId(), name: '', amount: 0, note: '', status: 'open', pinned: false,
+    id: planNextId(), name: '', amount: 0, note: '', pinned: false,
     comboPrice: 0, qty: 0, spec: 0, unit: '', photos: [], buy: true, _calcOpen: false,
     sourceItemId: taskState.parentItemId || null, sourceVariantId: null
   });
@@ -8963,7 +8976,7 @@ function taskRefPick(zoneId, itemId) {
   if (item.variants && item.variants.length) {
     item.variants.forEach(function (v) {
       taskState.formPlans.push({
-        id: pid++, name: v.brand || '未命名', amount: 0, note: '', status: 'open', pinned: false,
+        id: pid++, name: v.brand || '未命名', amount: 0, note: '', pinned: false,
         comboPrice: Math.round(((+v.packPrice || +v.price || 0)) * 100) / 100, qty: 0,
         spec: v.packQty || 1, unit: v.packUnit || item.unit || '个',
         photos: (v.photos || []).slice(), buy: true, sourceItemId: item.id, sourceVariantId: v.id, _calcOpen: false
@@ -8971,7 +8984,7 @@ function taskRefPick(zoneId, itemId) {
     });
   } else {
     taskState.formPlans.push({
-      id: pid++, name: item.name || '未命名', amount: 0, note: '', status: 'open', pinned: false,
+      id: pid++, name: item.name || '未命名', amount: 0, note: '', pinned: false,
       comboPrice: Math.round((+item.currentPrice || 0) * 100) / 100, qty: 0,
       spec: 1, unit: item.unit || '个',
       photos: (item.photos || []).slice(), buy: true, sourceItemId: item.id, sourceVariantId: null, _calcOpen: false
@@ -9031,7 +9044,6 @@ function taskFromItem(zoneId, itemId, skipJump) {
       spec: v.packQty || 1,
       unit: v.packUnit || item.unit || '个',
       note: '',
-      status: 'open',
       pinned: false,
       buy: true,
       photos: (v.photos || []).slice(),
@@ -9093,7 +9105,6 @@ function taskFormSave(id) {
       name: (p.name || '').trim(),
       amount: Math.round((+p.amount || 0) * 100) / 100,
       note: (p.note || '').trim(),
-      status: p.status || 'open',
       pinned: !!p.pinned,
       buy: (p.buy !== false),
       // 手写的新品牌也挂父级：保证凯旋时一定落在父级仓库下
@@ -9274,8 +9285,10 @@ function renderSettings() {
   // 数据管理
   html += '<div class="section-title">数据管理</div>';
   html += '<div class="setting-group">';
+  html += '<div style="padding:10px 12px;font-size:12px;line-height:1.6;color:var(--text-secondary)">🔒 数据安全：云端与手机不一致时，App 会弹窗让你亲自选择以哪边为准，绝不自动覆盖你的记录。点「📤 导出数据」可随时把全部数据存成本地 JSON 文件备份。</div>';
   html += '<div class="setting-row" onclick="exportJSON()"><div class="setting-label">📤 导出数据（JSON）</div><div class="setting-value">备份到文件</div></div>';
   html += '<div class="setting-row" onclick="document.getElementById(\'import-input\').click()"><div class="setting-label">📥 导入数据</div><div class="setting-value">从文件恢复</div></div>';
+  html += '<div class="setting-row" onclick="runBackupSelfCheck()"><div class="setting-label">🛡️ 备份自检</div><div class="setting-value">' + (backupCheckResult || '检查导出/导入是否正常') + '</div></div>';
   var arcN = archivedCountAll();
   html += '<div class="setting-row" onclick="showArchivedBox()"><div class="setting-label">📦 归档箱</div><div class="setting-value">' + (arcN > 0 ? arcN + ' 件' : '空') + '</div></div>';
   html += '<div class="setting-row" onclick="cleanupFinishedVariants()"><div class="setting-label">🧹 清理用完的品牌</div><div class="setting-value">先固化年度数据</div></div>';
@@ -9317,6 +9330,31 @@ function renderSettings() {
 }
 
 // ========== 数据导入导出 ==========
+// 备份自检结果缓存（每次大更新后应保持「正常」，一旦失效说明导出/导入链路被破坏）
+var backupCheckResult = '';
+// 不影响真实数据的往返自检：序列化当前 DB → 反序列化 → 跑一遍 mergeDB → 比对指纹。
+// 不写库、不碰云端，纯粹验证「导出/导入」这条保命链路是否完好。
+function runBackupSelfCheck() {
+  try {
+    var json = JSON.stringify(DB);
+    var back = JSON.parse(json);
+    if (!back || !back.zones) { backupCheckResult = '❌ 异常：数据结构不完整'; toast('备份自检未通过，请立即导出并反馈'); renderSettings(); return false; }
+    var merged = mergeDB({ zones: [], tasks: [], settings: {}, version: 1 }, back);
+    var a = dbFingerprint(DB), b = dbFingerprint(merged);
+    var ok = !fingerprintsDiffer(a, b);
+    var sizeKB = Math.round(json.length / 1024);
+    backupCheckResult = ok ? ('✅ 正常 · ' + sizeKB + 'KB') : '⚠️ 往返后有差异，请谨慎';
+    toast(ok ? '🛡️ 备份链路正常（' + sizeKB + 'KB）' : '⚠️ 备份自检发现差异');
+    renderSettings();
+    return ok;
+  } catch (e) {
+    backupCheckResult = '❌ 失败：' + (e.message || e);
+    toast('备份自检失败：' + (e.message || e));
+    renderSettings();
+    return false;
+  }
+}
+
 function exportJSON() {
   var data = JSON.stringify(DB, null, 2);
   var blob = new Blob([data], { type: 'application/json' });
