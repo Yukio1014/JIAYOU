@@ -811,20 +811,6 @@ body {
 
 /* 板块主题色 */
 
-/* 输入数量步进器 */
-.stepper {
-  display: flex; align-items: center; gap: 12px;
-  justify-content: center;
-}
-.stepper button {
-  width: 36px; height: 36px; border-radius: 50%;
-  border: none; background: var(--bg); font-size: 20px;
-  cursor: pointer; display: flex; align-items: center; justify-content: center;
-  transition: transform 0.1s;
-}
-.stepper button:active { transform: scale(0.9); }
-.stepper .stepper-val { font-size: 20px; font-weight: 700; min-width: 40px; text-align: center; }
-
 /* 消费记录列表 */
 .usage-log { font-size: 12px; color: var(--text-secondary); }
 .usage-log-item { padding: 4px 0; border-bottom: 0.5px solid var(--separator); }
@@ -3775,6 +3761,25 @@ function hasOpenRecordOf(item, variantId) {
     return !r.endDate;
   });
 }
+// 该品牌当前「正在使用中」的全部开封记录（并行真源）。
+// 并行语义：同一品牌下允许多条未结束记录并存（如 2 瓶生发精华同时开封、
+// 正装/中样/替换装A/替换装B 同时在用）。每条记录独立计时、独立收尾。
+// 排序：按开始日期升序（最早开的在前），日期缺失的排最后。
+// 说明：盘盈入库（type='surplus'）是进货不是开封，不参与「使用中」判定。
+function variantActiveOpenRecs(item, v) {
+  if (!item || !v) return [];
+  var out = [];
+  (item.usageRecords || []).forEach(function (r) {
+    if (!r || r.variantId !== v.id) return;
+    if (r.instant) return;                 // 打卡记录不参与开封生命周期
+    if (r.type === 'surplus') return;      // 盘盈入库不是开封
+    if (r.endDate) return;                 // 已结束 → 不在使用中
+    var t = r.startDate ? new Date(r.startDate).getTime() : NaN;
+    out.push({ r: r, t: isNaN(t) ? Infinity : t });
+  });
+  out.sort(function (a, b) { return a.t - b.t; });
+  return out.map(function (x) { return x.r; });
+}
 // 开封时间唯一真源 = 使用记录：取该品牌最早一条记录的开始日期。
 // 卡片绝不自己硬存「开封时间」——删了记录，时间自然消失，绝不出现数据打架。
 function variantOpenDateOf(item, v) {
@@ -4156,10 +4161,13 @@ function renderCardBack(item, zone) {
         var cardCls = 'variant-card' + (isUsing ? ' vc-using' : (isDone ? ' vc-done' : '')) + (v.noRestock ? ' vc-norestock' : '');
         html += '<div class="' + cardCls + '">';
         // 头部：品牌名 + 状态徽章 + 不再买标记
+        // 并行展示：使用中时把「并行条数」也标出来（如 2 瓶同时开 → 2 件使用中）
+        var actRecsV = variantActiveOpenRecs(item, v);
+        var actCountV = actRecsV.length;
         html += '<div class="vc-head">';
         html += '<div class="vc-brand">' + escapeHtml(v.brand || '未命名') + '</div>';
         if (v.noRestock) html += '<span class="vc-badge norestock">🚫 不再买</span>';
-        else if (isUsing) html += '<span class="vc-badge using">使用中</span>';
+        else if (isUsing) html += '<span class="vc-badge using">' + (actCountV > 1 ? actCountV + ' 件使用中' : '使用中') + '</span>';
         else if (isDone) html += '<span class="vc-badge done">已用完</span>';
         else if (variantSpecsOf(v).length || (v.stock || 0) > 0) html += '<span class="vc-badge" style="background:rgba(142,142,147,0.12);color:var(--text-secondary)">待开封</span>';
         html += '</div>';
@@ -4201,7 +4209,7 @@ function renderCardBack(item, zone) {
           } else if (isDone) {
             dateTxt = formatDate(vOpenDate) + ' 起';
           } else if (!isUsing) {
-            // 「本份用完但还有剩余」：显示上一批的起止，而不是无限增长的「已用 X 天」
+            // 「本件用完但还有剩余」：显示上一批的起止，而不是无限增长的「已用 X 天」
             var lastEndD = null;
             (item.usageRecords || []).forEach(function(r) { if (r.variantId === v.id && r.endDate) lastEndD = r.endDate; });
             dateTxt = lastEndD ? ('上批 ' + formatDate(vOpenDate) + ' → ' + formatDate(lastEndD)) : (formatDate(vOpenDate) + ' 起');
@@ -4211,8 +4219,35 @@ function renderCardBack(item, zone) {
           html += '<div class="vc-meta-item' + (hasWeight ? '' : ' wide') + '"><div class="vc-meta-label">开封时间</div><div class="vc-meta-value">' + dateTxt + '</div></div>';
         }
         html += '</div>';
-        // === 组合消耗型④：按子规格分行，每行可独立「开启新包 / 这包用完」===
-        if (consumeModelOf(item) === 'combo' && variantSpecsOf(v).length && !isDone) {
+
+        // === 并行开封中：逐条独立展示（各自开封时间 / 消耗量 / 独立收尾）===
+        // 同时开 2 瓶生发精华 → 这里出现两条独立「使用中」记录，互不干扰
+        if (actCountV > 0) {
+          html += '<div style="margin-top:8px;border-top:1px dashed var(--separator);padding-top:8px">';
+          html += '<div style="font-size:12px;font-weight:600;color:var(--orange);margin-bottom:4px">🔥 使用中 ' + actCountV + ' 条（各自独立计时）</div>';
+          actRecsV.forEach(function (rc) {
+            var oi = (item.usageRecords || []).indexOf(rc);
+            var dTxt = rc.startDate ? formatDate(rc.startDate) : '—';
+            var dDays = rc.startDate ? daysBetween(new Date(rc.startDate), new Date()) : 0;
+            var qTxt = '';
+            if (rc.packPieces) {
+              qTxt = (rc.specName ? escapeHtml(rc.specName) + ' · ' : '') + '1包（' + trimNum(rc.packPieces) + (v.packUnit || mainPackUnit(item)) + '）';
+            } else {
+              qTxt = trimNum(rc.qty || 1) + (v.packUnit || mainPackUnit(item));
+            }
+            html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 0">';
+            html += '<div style="flex:1;min-width:0">';
+            html += '<div style="font-size:13px;line-height:1.4">📅 ' + dTxt + ' 起 · 已用 ' + dDays + ' 天</div>';
+            html += '<div style="font-size:11px;color:var(--text-secondary)">' + qTxt + '</div>';
+            html += '</div>';
+            html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0;font-size:11px;padding:5px 8px" onclick="finishOpenRec(\'' + item.id + '\',' + oi + ')">✅ 这件用完</button>';
+            html += '</div>';
+          });
+          html += '</div>';
+        }
+
+        // === 组合/规格型：按子规格分行，每行可独立「开启新包」 ===
+        if (variantSpecsOf(v).length && !isDone) {
           html += '<div style="margin-top:8px;border-top:1px dashed var(--separator);padding-top:8px">';
           variantSpecsOf(v).forEach(function (s) {
             var si = (v.specs || []).indexOf(s); // 原始下标（openOnePack 按 v.specs 解析）
@@ -4220,15 +4255,19 @@ function renderCardBack(item, zone) {
             var nmL = s.name || ('规格' + (si + 1));
             var leftPieces = Math.round(packsRemain * pqL * 100) / 100;
             var perSetL = specPackCount(s);
+            var actL = actRecsV.filter(function (r) { return String(r.specName || '') === String(nmL); }).length;
             html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 0">';
             html += '<div style="flex:1;min-width:0">';
-            html += '<div style="font-size:13px;font-weight:600">' + escapeHtml(nmL) + '</div>';
+            html += '<div style="font-size:13px;font-weight:600">' + escapeHtml(nmL) + (actL > 0 ? ' <span style="color:var(--orange);font-size:11px;font-weight:600">· ' + actL + ' 包使用中</span>' : '') + '</div>';
             html += '<div style="font-size:11px;color:var(--text-secondary)">剩 ' + trimNum(leftPieces) + uL + '（' + trimNum(packsRemain) + '包未开' + (pqL !== 1 ? ' × ' + trimNum(pqL) + uL + '/包' : '') + ' · 单套 ' + trimNum(perSetL) + '包）</div>';
             html += '</div>';
             html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0;font-size:11px;padding:5px 8px' + (packsRemain > 0 ? '' : ';opacity:.45') + '"' + (packsRemain > 0 ? '' : ' disabled') + ' onclick="openOnePack(\'' + item.id + '\',\'' + v.id + '\',' + si + ')">📦 开启新包</button>';
             html += '</div>';
           });
-          html += '<button class="btn btn-outline btn-sm" style="width:100%;margin-top:6px;font-size:12px" onclick="confirmOpenCombo(\'' + item.id + '\',\'' + v.id + '\')">✅ 这包用完了</button>';
+          // 逐条收尾：每条「使用中」的包在这里独立点「用完了」（不是一次性全部收尾）
+          if (actCountV > 0) {
+            html += '<div style="font-size:11px;color:var(--text-tertiary);margin-top:6px">☝️ 上面的「这件用完」按钮按包收尾，开几包就分别收几次</div>';
+          }
           html += '</div>';
         }
         // 使用感受：有任意内容就显示
@@ -4255,7 +4294,7 @@ function renderCardBack(item, zone) {
           html += '<button class="btn btn-outline btn-sm" onclick="toggleVariantNoRestock(\'' + item.id + '\',\'' + v.id + '\')">🚫 不再买</button>';
         }
         if (isUsing) {
-          html += '<button class="btn btn-outline btn-sm" onclick="finishVariant(\'' + item.id + '\',\'' + v.id + '\')">✅ 用完了</button>';
+          html += '<button class="btn btn-outline btn-sm" onclick="finishVariant(\'' + item.id + '\',\'' + v.id + '\')">✅ ' + (actCountV > 1 ? '用完最早这' + (variantSpecsOf(v).length ? '包' : '件') : '用完了') + '</button>';
         } else if (isDone) {
           html += '<button class="btn btn-outline btn-sm" onclick="undoFinishVariant(\'' + item.id + '\',\'' + v.id + '\')">↩️ 撤销</button>';
         } else {
@@ -4367,7 +4406,12 @@ function renderCardBack(item, zone) {
       }
       html += '<div class="usage-log" style="margin-top:8px">';
       var aqR = avgPackQtyOf(item);
-      var shownRecs = item.usageRecords.map(function(r, oi) { return { r: r, oi: oi }; }).reverse().slice(0, 5);
+      // 并行场景：未结束的「使用中」记录必须全部展示（不能因为超出 5 条被截断），
+      // 其余历史记录再补足到最多 8 条。
+      var allP = item.usageRecords.map(function(r, oi) { return { r: r, oi: oi }; });
+      var actAll = allP.filter(function(w) { return !w.r.endDate && !w.r.instant && !w.r.isAudit && w.r.startDate; });
+      var restAll = allP.filter(function(w) { return !(!w.r.endDate && !w.r.instant && !w.r.isAudit && w.r.startDate); });
+      var shownRecs = actAll.concat(restAll.reverse()).slice(0, Math.max(8, actAll.length));
       shownRecs.forEach(function(w) {
         var r = w.r;
         var startStr = r.startDate ? formatDate(r.startDate) : (r.date ? formatDate(r.date) : '');
@@ -4402,7 +4446,9 @@ function renderCardBack(item, zone) {
           var days = daysBetween(new Date(r.startDate), new Date(r.endDate));
           recTxt = '📅 ' + startStr + ' → ' + formatDate(r.endDate) + ' · ' + days + '天 · ' + qtyTxt;
         } else if (startStr) {
-          recTxt = '📅 ' + startStr + ' · 使用中 · ' + qtyTxt;
+          // 并行：多条未结束记录各自独立显示「使用中」，互不干扰
+          var actLine = variantActiveOpenRecs(item, vR0).length;
+          recTxt = '📅 ' + startStr + ' · <span style="color:var(--orange);font-weight:600">使用中</span>（已用 ' + daysBetween(new Date(r.startDate), new Date()) + ' 天）· ' + qtyTxt + (actLine > 1 ? ' <span style="color:var(--text-tertiary)">· 并行 ' + actLine + ' 条</span>' : '');
         } else {
           recTxt = '📅 记录 · ' + qtyTxt;
         }
@@ -4895,8 +4941,8 @@ function manualRefresh() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791358025 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791358025';
+// deploy.py 部署时会把 1791360300 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791360300';
 
 function checkAppUpdate(manual) {
   try {
@@ -4948,28 +4994,32 @@ function getAppVersionText() {
 }
 
 // ========== 开封 ==========
+// 【并行开封铁律】判断「能不能开」只看**那个具体规格里还有没有未开封的库存**，
+// 绝对不允许用「卡片总状态 / 品牌是否使用中」来限制子规格。
+//   · 生发精华 2 瓶：开了第 1 瓶，第 2 瓶必须仍可随时开 → 两条记录同时「使用中」
+//   · 粉底液正装+替换装：开了正装，替换装必须仍可开
+//   · off relax 洗发水：正装/中样在用，只要替换装还有未开包，顶层【开封】菜单就必须显示它
+function variantCanOpen(v, item) {
+  if (!v) return false;
+  if (variantSpecsOf(v).length) {
+    // 多规格：只要「任一规格」还有未开的包 → 可开（不看品牌 opened 状态）
+    return variantSpecsOf(v).some(function (s) { return specPacksRemaining(v, s) > 0; });
+  }
+  // 普通品牌：只看该品牌自身还有没有库存
+  return (parseFloat(v.stock) || 0) > 0;
+}
 function openItem(itemId) {
   var item = getItem(currentZoneId, itemId);
   if (!item) return;
   ensureVariants(item);
 
-  // 选择开封哪个品牌（允许多个同时使用）
-  // 「开封」弹窗 = 只展示「还有未开封库存」的品牌，绝不把正在使用中的品牌扔进来。
-  //   · 多规格（组合/规格型）：只要还有未开的包，就仍可继续开（如先开小样、再开正装）
-  //   · 普通品牌：必须有库存，且「未开封」或「上一批已结束（usedUp 但还有剩）」才可开
-  // 正在使用中的品牌（opened && !usedUp）已被排除，避免出现「给我自己开封」的错乱。
-  var available = item.variants.filter(function(v) {
-    // 正在使用中 → 不属于「未开封库存」，不进开封列表
-    if (v.opened && !v.usedUp) return false;
-    if (variantSpecsOf(v).length) {
-      // 多规格：还有未开的包才可开
-      return variantSpecsOf(v).some(function (s) { return specPacksRemaining(v, s) > 0; });
-    }
-    return (parseFloat(v.stock) || 0) > 0;
-  });
+  // 「开封」弹窗 = 展示「还有未开封库存」的全部品牌（含正在使用中的品牌）。
+  // 关键：使用中 ≠ 不能开新的。只要该品牌还有剩余件数，就允许并行开封，
+  // 不受卡片总状态的任何限制。
+  var available = item.variants.filter(function(v) { return variantCanOpen(v, item); });
   if (available.length === 0) {
-    var inUseCnt = item.variants.filter(function(v) { return v.opened && !v.usedUp; }).length;
-    if (inUseCnt > 0) toast('这个产品正在使用中，等这批用完再开封新的吧');
+    var inUseCnt = item.variants.filter(function(v) { return variantActiveOpenRecs(item, v).length > 0; }).length;
+    if (inUseCnt > 0) toast('所有品牌都已开满，没有未开封的库存了');
     else toast('没有可开封的库存了');
     return;
   }
@@ -4984,18 +5034,25 @@ function openItem(itemId) {
       html += '<div style="text-align:center;margin-bottom:10px;font-size:12px;color:var(--text-secondary)">点一次扣一份，可反复点；扣到 0 自动归入「已用完」</div>';
     }
     available.forEach(function(v) {
+      // 并行展示：该品牌正在使用中的开封条数（允许 >1，如 2 瓶同时开）
+      var actN = variantActiveOpenRecs(item, v).length;
       var statusBadge = '';
-      if (v.opened && !v.usedUp) statusBadge = ' <span style="color:var(--orange);font-size:11px">· 使用中</span>';
+      if (actN > 1) statusBadge = ' <span style="color:var(--orange);font-size:11px">· ' + actN + ' 件使用中</span>';
+      else if (actN === 1) statusBadge = ' <span style="color:var(--orange);font-size:11px">· 使用中</span>';
       html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px;border-radius:10px;background:#F8F8FA;margin-bottom:8px;cursor:pointer" onclick="openVariantItem(\'' + itemId + '\',\'' + v.id + '\')">';
       html += '<div style="font-weight:600">' + escapeHtml(v.brand || '未命名') + statusBadge + '</div>';
       if (variantSpecsOf(v).length) {
         var spT = variantSpecText(v);
-        html += '<div style="color:var(--text-secondary);font-size:12px;text-align:right;max-width:60%">' + escapeHtml(spT) + ' →</div>';
+        var remP = variantSpecPieces(v);
+        html += '<div style="color:var(--text-secondary);font-size:12px;text-align:right;max-width:60%">' + escapeHtml(spT) + (remP > 0 ? ' · 还剩 ' + trimNum(remP) + ' 包可开' : '') + ' →</div>';
       } else {
         html += '<div style="color:var(--text-secondary);font-size:13px">库存 ' + (v.stock||0) + (v.packUnit || mainPackUnit(item)) + ' →</div>';
       }
       html += '</div>';
     });
+    if (!isOneShot) {
+      html += '<div style="font-size:11px;color:var(--text-tertiary);text-align:center;margin-top:6px;line-height:1.5">可以同时开多个品牌 / 多个规格，互不影响；每条开封记录独立计时</div>';
+    }
     html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">取消</button>';
     document.getElementById('modal-content').innerHTML = html;
     document.getElementById('modal-overlay').classList.add('show');
@@ -5035,70 +5092,77 @@ function openVariantItem(itemId, variantId) {
     return;
   }
 
-  // 混合规格（组合消耗型④）：按子规格分行，主操作是「开启新包」——一次开一包
+  // 混合规格：按子规格分行。**统一为「每次只开 1 包」**——
+  // 点一次【开启新包】只扣这 1 包、只生成 1 条记录；要开 2 包就再点一次。
+  // 绝不批量开启、绝不把整批一次性标记为使用中。
   var spOpen = variantSpecsOf(v);
   if (spOpen.length) {
-    var cM = consumeModelOf(item);
-    var isCombo = (cM === 'combo');
+    var nowDateStr = new Date().toISOString().split('T')[0];
     var html = '<div class="modal-handle"></div>';
-    html += '<div class="modal-title">' + (isCombo ? '🧩 开启新包（按规格）' : '🔓 开封使用（多规格）') + '</div>';
+    html += '<div class="modal-title">🧩 开启新包（按规格）</div>';
     html += '<div style="text-align:center;margin-bottom:12px">';
     html += '<div style="font-size:16px;font-weight:700">' + escapeHtml(item.name) + '</div>';
     html += '<div style="font-size:14px;color:var(--accent)">' + escapeHtml(v.brand) + '</div>';
     html += '<div style="font-size:13px;color:var(--text-secondary)">未开 ' + trimNum(variantSpecContent(v)) + variantSpecUnit(v) + '（' + trimNum(variantSpecPieces(v)) + ' 包未开）· 总量 ' + trimNum(variantTotalWeight(v)) + variantSpecUnit(v) + '</div>';
     html += '</div>';
-    window._openSpecQty = {};
+    html += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px;text-align:center;line-height:1.6">📦 点一次只开 <strong>1 包</strong>；要同时开 2 包就点两次。<br>开几包就记几条，库存和记录永远一一对应。</div>';
+    // 各规格剩余包数超出「单套包数」需要开多套：用户在此指定「按第几套开」
+    var perSetNeed = spOpen.some(function (s) { return specPacksRemaining(v, s) > specPackCount(s); });
+    var setIdx = 1;
+    if (perSetNeed) {
+      var maxSets = Math.max(1, Math.ceil(variantPacksBought(v)));
+      html += '<div class="form-group"><label class="form-label">本次开的是第几套（买 ' + trimNum(variantPacksBought(v)) + ' 套）</label>';
+      html += '<select class="form-input" id="open-set-idx" onchange="window._openSetIdx=parseInt(this.value)||1">';
+      for (var si2 = 1; si2 <= maxSets; si2++) {
+        html += '<option value="' + si2 + '">第 ' + si2 + ' 套</option>';
+      }
+      html += '</select></div>';
+    } else {
+      html += '<input type="hidden" id="open-set-idx" value="1">';
+    }
+    html += '<div class="form-group">';
+    html += '<label class="form-label">开封日期</label>';
+    html += '<input type="date" class="form-input" id="open-date" value="' + nowDateStr + '">';
+    html += '</div>';
     spOpen.forEach(function (s) {
-      var k = (v.specs || []).indexOf(s); // 原始下标：confirmOpen/openOnePack 都按 v.specs 解析
+      var k = (v.specs || []).indexOf(s); // 原始下标：openOnePack 按 v.specs 解析
       var packsRemain = specPacksRemaining(v, s), pq = specPackQty(s), u = s.unit || '';
       var pieces = Math.round(packsRemain * pq * 100) / 100;
-      window._openSpecQty[k] = 0;
+      var actRecs = variantActiveOpenRecs(item, v).filter(function (r) { return String(r.specName || '') === String(s.name || ''); });
       html += '<div style="padding:10px;background:var(--bg);border-radius:10px;margin-bottom:6px">';
       html += '<div style="display:flex;gap:8px;align-items:center">';
       html += '<div style="flex:1;min-width:0"><div style="font-weight:600;font-size:14px">' + escapeHtml(s.name || ('规格' + (k + 1))) + '</div>';
-      html += '<div style="font-size:12px;color:var(--text-secondary)">剩 ' + trimNum(pieces) + u + '（' + trimNum(packsRemain) + '包未开' + (pq !== 1 ? ' × ' + trimNum(pq) + u + '/包' : '') + '）</div></div>';
-      if (isCombo) {
-        // 组合消耗型：一键开一整包（已开包数 +1）
-        html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0" ' + (packsRemain > 0 ? '' : 'disabled') + ' onclick="openOnePack(\'' + itemId + '\',\'' + variantId + '\',' + k + ')">📦 开启新包</button>';
-      } else {
-        html += '<div class="stepper"><button onclick="adjustSpecOpen(' + k + ',-1)">−</button><span class="stepper-val" id="spec-open-' + k + '">0</span><button onclick="adjustSpecOpen(' + k + ',1)">＋</button></div>';
-      }
+      html += '<div style="font-size:12px;color:var(--text-secondary)">剩 ' + trimNum(pieces) + u + '（' + trimNum(packsRemain) + '包未开' + (pq !== 1 ? ' × ' + trimNum(pq) + u + '/包' : '') + '）' + (actRecs.length ? ' · <span style="color:var(--orange)">' + actRecs.length + ' 包使用中</span>' : '') + '</div></div>';
+      html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0;' + (packsRemain > 0 ? '' : 'opacity:.45') + '"' + (packsRemain > 0 ? '' : ' disabled') + ' onclick="openOnePack(\'' + itemId + '\',\'' + variantId + '\',' + k + ')">📦 开启新包</button>';
       html += '</div>';
       html += '</div>';
     });
-    if (isCombo) {
-      html += '<div style="font-size:12px;color:var(--text-secondary);margin:8px 0">开新包 → 用完了再点「这包用完」。也可以一次把整批开好。</div>';
-      html += '<button class="btn btn-outline btn-full btn-sm" style="margin-bottom:8px" onclick="openAllPacks(\'' + itemId + '\',\'' + variantId + '\')">📦 整批开启（每规格各开 1 包）</button>';
-      html += '<button class="btn btn-primary btn-full" onclick="confirmOpenCombo(\'' + itemId + '\',\'' + variantId + '\')">✅ 这包用完了</button>';
-    } else {
-      html += '<div class="form-group">';
-      html += '<label class="form-label">开始使用日期</label>';
-      html += '<input type="date" class="form-input" id="open-date" value="' + new Date().toISOString().split('T')[0] + '">';
-      html += '</div>';
-      html += '<button class="btn btn-primary btn-full" onclick="confirmOpen(\'' + itemId + '\',\'' + variantId + '\')">确认开封</button>';
-    }
-    html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">取消</button>';
+    html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">关闭</button>';
     document.getElementById('modal-content').innerHTML = html;
     document.getElementById('modal-overlay').classList.add('show');
     window._openQty = 1;
     window._maxOpenQty = 1;
+    window._openSetIdx = setIdx;
     window._openVariantId = variantId;
     window._openItemId = itemId;
     return;
   }
 
-  // 套餐消耗：开一整套，用完再开下一整套
+  // 套餐消耗：开一整套，用完再开下一整套。
+  // 并行修复：不再强制「必须用完上一套才能开下一套」——只要还有库存就允许再开一套。
   if ((item.consumeMode || 'pack') === 'pack') {
     var pq = Math.min(v.packQty || 1, v.stock || 1);
+    if (pq <= 0) { toast('没有可开封的库存了'); return; }
+    var actP = variantActiveOpenRecs(item, v).length;
     var html = '<div class="modal-handle"></div>';
     html += '<div class="modal-title">🔓 开封使用（套餐）</div>';
     html += '<div style="text-align:center;margin-bottom:16px">';
     html += '<div style="font-size:16px;font-weight:700">' + escapeHtml(item.name) + '</div>';
     html += '<div style="font-size:14px;color:var(--accent)">' + escapeHtml(v.brand) + '</div>';
-    html += '<div style="font-size:13px;color:var(--text-secondary)">库存：' + v.stock + (v.packUnit || mainPackUnit(item)) + '（每套 ' + (v.packQty||1) + (v.packUnit||'个') + '）</div>';
+    html += '<div style="font-size:13px;color:var(--text-secondary)">库存：' + v.stock + (v.packUnit || mainPackUnit(item)) + '（每套 ' + (v.packQty||1) + (v.packUnit||'个') + '）' + (actP > 0 ? ' · <span style="color:var(--orange)">' + actP + ' 套使用中</span>' : '') + '</div>';
     html += '</div>';
     html += '<div style="text-align:center;padding:14px;background:var(--bg);border-radius:10px;margin-bottom:16px;font-size:14px">';
-    html += '将开一整套：<strong>' + pq + ' ' + (v.packUnit||'个') + '</strong><br><span style="font-size:12px;color:var(--text-secondary)">用完这一整套后再开下一整套</span></div>';
+    html += '将开一整套：<strong>' + pq + ' ' + (v.packUnit||'个') + '</strong><br><span style="font-size:12px;color:var(--text-secondary)">' + (actP > 0 ? '上一套还在使用中？没关系，可以并行开新的' : '用完这一整套后再开下一整套') + '</span></div>';
     html += '<div class="form-group">';
     html += '<label class="form-label">开始使用日期</label>';
     html += '<input type="date" class="form-input" id="open-date" value="' + new Date().toISOString().split('T')[0] + '">';
@@ -5113,19 +5177,22 @@ function openVariantItem(itemId, variantId) {
     return;
   }
 
+  // 普通变体：**默认只开 1 件**（不批量）。要同时开 2 件就点两次【开封】。
   var maxQty = v.stock || 1;
+  if (maxQty <= 0) { toast('没有可开封的库存了'); return; }
+  var actN2 = variantActiveOpenRecs(item, v).length;
   var html = '<div class="modal-handle"></div>';
   html += '<div class="modal-title">🔓 开封使用</div>';
   html += '<div style="text-align:center;margin-bottom:16px">';
   html += '<div style="font-size:16px;font-weight:700">' + escapeHtml(item.name) + '</div>';
   html += '<div style="font-size:14px;color:var(--accent)">' + escapeHtml(v.brand) + '</div>';
-  html += '<div style="font-size:13px;color:var(--text-secondary)">库存：' + v.stock + (v.packUnit || mainPackUnit(item)) + '</div>';
+  html += '<div style="font-size:13px;color:var(--text-secondary)">库存：' + v.stock + (v.packUnit || mainPackUnit(item)) + (actN2 > 0 ? ' · <span style="color:var(--orange)">' + actN2 + ' 件使用中</span>' : '') + '</div>';
   html += '</div>';
-  html += '<div class="stepper" style="margin-bottom:16px">';
-  html += '<button onclick="adjustOpenQty(-1)">−</button>';
-  html += '<span class="stepper-val" id="open-qty-val">1</span>';
-  html += '<button onclick="adjustOpenQty(1)">＋</button>';
+  html += '<div class="form-group" style="max-width:160px;margin:0 auto 10px">';
+  html += '<label class="form-label">这次开几件</label>';
+  html += '<input type="number" class="form-input" id="open-qty-input" step="1" min="1" max="' + Math.floor(maxQty) + '" value="1" oninput="window._openQty=Math.max(1,Math.min(window._maxOpenQty,parseFloat(this.value)||1))">';
   html += '</div>';
+  html += '<div style="font-size:12px;color:var(--text-secondary);text-align:center;margin-bottom:10px;line-height:1.6">默认只开 <strong>1 件</strong>；开几件就记几条独立记录' + (actN2 > 0 ? '<br>已经开着 ' + actN2 + ' 件，可以继续并行开新的' : '') + '</div>';
   html += '<div class="form-group">';
   html += '<label class="form-label">开始使用日期</label>';
   html += '<input type="date" class="form-input" id="open-date" value="' + new Date().toISOString().split('T')[0] + '">';
@@ -5138,29 +5205,29 @@ function openVariantItem(itemId, variantId) {
   window._openQty = 1;
   window._maxOpenQty = maxQty;
   window._openVariantId = variantId;
+  window._openItemId = itemId;
 }
 
-function adjustOpenQty(delta) {
-  window._openQty = Math.max(1, Math.min(window._maxOpenQty, window._openQty + delta));
-  var valEl = document.getElementById('open-qty-val');
-  if (valEl) valEl.textContent = window._openQty;
-}
-// 多规格开封：每个规格独立步进（0 ~ 该规格剩余份数）；k = v.specs 原始下标
+// 【已废弃】多规格步进器已移除（旧逻辑上限是「件数」而非「剩余包数」，会导致一键清零）。
+// 上限已修正为「该规格剩余包数」，仅保留函数体供历史调用兼容。
 function adjustSpecOpen(k, delta) {
   var q = window._openSpecQty || {};
   var item = getItem(currentZoneId, window._openItemId);
   var v = item && item.variants ? item.variants.find(function (x) { return x.id === window._openVariantId; }) : null;
   var s = v ? (v.specs || [])[k] : null;
-  var max = s ? specPiecesOf(s) : 0;
+  // 上限 = 该规格「剩余未开包数」（不是件数），且不允许超过剩余
+  var max = (v && s) ? specPacksRemaining(v, s) : 0;
   q[k] = Math.max(0, Math.min(max, (q[k] || 0) + delta));
   window._openSpecQty = q;
   var el = document.getElementById('spec-open-' + k);
   if (el) el.textContent = q[k];
 }
 
-// ========== 模型④ 组合消耗型：动作按「包」，统计按「片」 ==========
+// ========== 组合/规格型：动作按「包」，统计按「件」 ==========
 // 说明：specIdx 是 v.specs 的原始下标（UI 与记录都用它），但只有「有效规格」才可操作
-// 开启新包：某子规格 packCount -1，记一条开包记录（带 specName / packPieces）
+// 【单包开启铁律】点一次只开 1 包：库存 -1 包，使用记录 +1 条，严格一一对应。
+// 并行铁律：同规格允许多条未结束记录并存（开第 2 包不会结束第 1 包）；
+//           不看品牌/卡片的 opened 状态，只看**这个规格**还有没有未开的包。
 function openOnePack(itemId, variantId, specIdx) {
   var item = getItem(currentZoneId, itemId);
   if (!item) return;
@@ -5170,24 +5237,35 @@ function openOnePack(itemId, variantId, specIdx) {
   if (!s) return;
   // 该规格必须还有未开的包（剩余包数 > 0），否则视为不可操作
   var remaining = specPacksRemaining(v, s);
-  if (remaining <= 0) { toast('这个规格已经没有新包了'); return; }
+  if (remaining <= 0) { toast('这个规格已经没有新包了，等新的一批到货或补货吧'); return; }
   var pq = specPackQty(s), u = s.unit || '';
   var nm = s.name || ('规格' + (specIdx + 1));
 
-  // 消耗层：已开包数 +1（不改动构成 packCount，也不改动套餐数）
+  // === 关键修复：只开 1 包 ===
+  // 库存扣减 = 该规格「已开包数」+1（跨套累计）。绝不多扣、绝不批量。
   s.openPacks = Math.round((specOpenPacks(s) + 1) * 100) / 100;
-  // 兼容字段 qty：该规格「单套内包数 × 每包含量」（构成口径，保持稳定）
+  // 兼容字段 qty：该规格「单套内包数 × 每包含量」（构成口径，保持稳定不变）
   s.qty = Math.round(specPackCount(s) * pq * 100) / 100;
-  // 记下「这一包正在用」的开始时间（同一规格同时只有一包在开）
+  // 记下「这一包正在用」的开始时间（同规格可多包并行，各自独立计时）
   var pkey = '__packOpenAt_' + specIdx;
   if (!s[pkey]) s[pkey] = new Date().toISOString();
   s.__openPack = true;
 
-  var nowISO = new Date().toISOString();
+  // 开封日期：优先用弹窗里用户选的日期，缺省为当前时间
+  var dEl = document.getElementById('open-date');
+  var dVal = (dEl && dEl.value) ? dEl.value : '';
+  var nowISO;
+  if (dVal) {
+    var dt = new Date(dVal + 'T00:00:00');
+    nowISO = isNaN(dt.getTime()) ? new Date().toISOString() : dt.toISOString();
+  } else {
+    nowISO = new Date().toISOString();
+  }
+
+  // === 库存与日志严格一对一：开 1 包 = 生成 1 条记录 ===
   if (!item.usageRecords) item.usageRecords = [];
   // 注意：这里**不结束**同规格的上一条记录 —— 开新包只代表「开始用新的一包」，
-  // 上一条记录可能还没结束（同一规格可以同时开着多包，如日用+夜用同时在用）。
-  // 每条「开启」记录在「这包用完」时统一收尾，保证消耗量不丢失。
+  // 上一条记录可以继续使用中（并行）。每条记录在各自「用完」时独立收尾。
   item.usageRecords.push({
     startDate: nowISO, endDate: null,
     qty: pq, variantId: variantId, brand: v.brand,
@@ -5195,76 +5273,55 @@ function openOnePack(itemId, variantId, specIdx) {
     specText: nm + '×1包' + (pq !== 1 ? '（' + trimNum(pq) + u + '）' : '')
   });
 
-  v.stock = variantSpecContent(v);
+  if (variantSpecsOf(v).length) v.stock = variantSpecContent(v);
   v.opened = true;
   v.openDate = nowISO;
   var allGone = variantSpecsOf(v).every(function (x) { return specPacksRemaining(v, x) <= 0; });
-  if (v.stock <= 0 && allGone) { v.usedUp = true; v.finishDate = nowISO; }
+  if (allGone && variantSpecContent(v) <= 0) { v.usedUp = true; v.finishDate = nowISO; }
+  else { v.usedUp = false; v.finishDate = null; }
   syncItemFromVariants(item);
   saveDB();
   closeModal();
   openCardDetail(currentZoneId, itemId);
-  toast('已开启 ' + nm + ' 新包' + (pq !== 1 ? '（' + trimNum(pq) + u + '）' : '') + '，剩 ' + trimNum(specPacksRemaining(v, s)) + ' 包未开');
+  var nowRemain = specPacksRemaining(v, s);
+  var actN = variantActiveOpenRecs(item, v).filter(function (r) { return String(r.specName || '') === String(nm); }).length;
+  toast('已开启 ' + nm + ' ×1包' + (pq !== 1 ? '（' + trimNum(pq) + u + '）' : '') + ' · 该规格剩 ' + trimNum(nowRemain) + ' 包未开' + (actN > 1 ? ' · ' + actN + ' 包并行使用中' : ''));
 }
 
-// 整批开启：每个还有包的规格各开 1 包
-function openAllPacks(itemId, variantId) {
+// 【并行收尾】按单条开封记录独立结束（不再一次性结束该规格的全部记录）。
+// recIdx 为 usageRecords 中的下标；缺省时结束该品牌最早的一条未结束记录。
+function finishOpenRec(itemId, recIdx) {
   var item = getItem(currentZoneId, itemId);
   if (!item) return;
-  var v = item.variants.find(function (x) { return x.id === variantId; });
-  if (!v) return;
-  var sp = variantSpecsOf(v);
-  var openedCount = 0;
-  var nowISO = new Date().toISOString();
-  if (!item.usageRecords) item.usageRecords = [];
-  sp.forEach(function (s) {
-    if (specPacksRemaining(v, s) <= 0) return;
-    var nm = s.name || '规格';
-    var pq = specPackQty(s);
-    s.openPacks = Math.round((specOpenPacks(s) + 1) * 100) / 100;
-    s.qty = Math.round(specPackCount(s) * pq * 100) / 100;
-    s.__openPack = true;
-    item.usageRecords.push({
-      startDate: nowISO, endDate: null, qty: pq, variantId: variantId, brand: v.brand,
-      specName: nm, packPieces: pq, specText: nm + '×1包'
-    });
-    openedCount++;
-  });
-  if (!openedCount) { toast('没有可开启的新包'); return; }
-  v.stock = variantSpecContent(v);
-  v.opened = true;
-  v.openDate = v.openDate || nowISO;
-  syncItemFromVariants(item);
-  saveDB();
-  closeModal();
-  openCardDetail(currentZoneId, itemId);
-  toast('已整批开启 ' + openedCount + ' 个规格的新包');
-}
-
-// 这包用完了：结束所有未结束的开包记录（不扣库存——开包时已扣）
-function confirmOpenCombo(itemId, variantId) {
-  var item = getItem(currentZoneId, itemId);
-  if (!item) return;
-  var v = item.variants.find(function (x) { return x.id === variantId; });
-  if (!v) return;
-  var nowISO = new Date().toISOString();
-  var closed = 0, usedPieces = 0;
-  (item.usageRecords || []).forEach(function (r) {
-    if (r.variantId === variantId && r.specName && !r.endDate && !r.instant) {
-      r.endDate = nowISO; closed++; usedPieces += (r.qty || 0);
+  var recs = item.usageRecords || [];
+  var rec = null;
+  if (recIdx !== undefined && recIdx !== null && recs[recIdx] && !recs[recIdx].endDate) {
+    rec = recs[recIdx];
+  } else {
+    // 缺省：优先结束最早一条未结束的普通开封记录
+    for (var i = 0; i < recs.length; i++) {
+      var r = recs[i];
+      if (r && !r.endDate && !r.instant && r.type !== 'surplus') { rec = r; break; }
     }
-  });
-  if (!closed) { toast('没有正在使用的包（先点「开启新包」）'); return; }
-  variantSpecsOf(v).forEach(function (s) { s.__openPack = false; });
-  var allGone = variantSpecsOf(v).every(function (s) { return specPacksRemaining(v, s) <= 0; });
-  if (allGone) { v.usedUp = true; v.finishDate = nowISO; }
-  else { v.opened = false; v.usedUp = false; v.finishDate = null; }
-  syncItemFromVariants(item);
+  }
+  if (!rec) { toast('没有正在使用的开封记录'); return; }
+  var v = (item.variants || []).find(function (x) { return x.id === rec.variantId; });
+  var nowISO = new Date().toISOString();
+  var isToday = false;
+  if (rec.startDate) {
+    var sd = new Date(rec.startDate), nd = new Date();
+    isToday = new Date(rec.startDate).toDateString() === nd.toDateString();
+  }
+  // 0 天防御：同一天开、同一天用完 → 结束日期退到次日，避免生成 0 天记录污染速率
+  rec.endDate = isToday ? new Date(new Date(rec.startDate).getTime() + 86400000).toISOString() : nowISO;
+  reconcileItemState(item);
   saveDB();
   closeModal();
   openCardDetail(currentZoneId, itemId);
-  toast('这包已用完（' + closed + ' 个规格，共 ' + trimNum(usedPieces) + variantSpecUnit(v) + '）');
+  var nmTxt = rec.specName ? ('「' + rec.specName + '」') : (v ? ('「' + (v.brand || '') + '」') : '');
+  toast('✅ ' + nmTxt + '这' + (rec.specName ? '包' : '件') + '已记用完');
 }
+
 function confirmOpen(itemId, variantId, markAsUsed) {
   var item = getItem(currentZoneId, itemId);
   if (!item) return;
@@ -5274,70 +5331,86 @@ function confirmOpen(itemId, variantId, markAsUsed) {
   var date = dateInput ? dateInput.value : new Date().toISOString().split('T')[0];
   var nowISO = new Date(date).toISOString();
 
-  // 混合规格：按「规格×份数」消耗（口径 = 已开包数 openPacks，不动构成与套餐数）
+  // 多规格：逐步进器批量开封（历史入口，保留兼容）——**按规格各自生成一条记录**，
+  // 绝不把多个规格合并成一条（库存与日志严格一对一）。
   var spOpen = variantSpecsOf(v);
   if (spOpen.length && window._openSpecQty) {
     var usedParts = [], pieces = 0, contentUsed = 0;
     var spUnit = variantSpecUnit(v); // 先取单位：扣完可能全部归零，之后再取就空了
+    var newRecs = [];
     spOpen.forEach(function (s) {
       var k = (v.specs || []).indexOf(s); // 原始下标：与 adjustSpecOpen / 表单一致
-      var avail = specPacksRemaining(v, s) * specPackQty(s); // 可开份数 = 剩余包数 × 每包含量
-      var n = Math.min(window._openSpecQty[k] || 0, avail);
-      if (n <= 0) return;
-      // 消耗换算：份数 → 包数（不足一包按一包计），累加进「已开包数」
+      // 上限严格 = 该规格剩余未开包数（绝不超过剩余，绝不批量清零）
+      var packs = Math.max(0, Math.min(Math.floor(window._openSpecQty[k] || 0), specPacksRemaining(v, s)));
+      if (packs <= 0) return;
       var pq = specPackQty(s);
-      var packs = Math.max(1, Math.ceil(n / pq - 1e-9));
-      var maxPacks = specPacksRemaining(v, s);
-      if (packs > maxPacks) packs = maxPacks;
+      var nmS = s.name || ('规格' + (k + 1));
       s.openPacks = Math.round((specOpenPacks(s) + packs) * 100) / 100;
       s.qty = Math.round(specPackCount(s) * specPackQty(s) * 100) / 100; // 兼容字段：构成口径
-      usedParts.push((s.name || '规格' + (k + 1)) + '×' + packs + '包');
+      usedParts.push(nmS + '×' + trimNum(packs) + '包');
       pieces += packs * pq;
       contentUsed += packs * pq * specContentOf(s);
+      // 一一对应：开 N 包就生成 N 条独立记录，各自独立计时、独立收尾
+      for (var n = 0; n < packs; n++) {
+        newRecs.push({
+          startDate: nowISO,
+          endDate: null,
+          qty: pq,
+          variantId: variantId,
+          brand: v.brand,
+          specName: nmS,
+          packIdx: k,
+          packPieces: pq,
+          specText: nmS + '×1包' + (pq !== 1 ? '（' + trimNum(pq) + spUnit + '）' : '')
+        });
+      }
     });
-    if (!pieces) { toast('先选择要开封的规格'); return; }
+    if (!newRecs.length) { toast('先选择要开封的规格'); return; }
     v.opened = true;
     v.openDate = nowISO;
     v.openQty = pieces;
     v.stock = variantSpecContent(v);
-    var allEmpty = spOpen.every(function (s) { return specPacksRemaining(v, s) <= 0; });
-    if (allEmpty) { v.usedUp = true; v.finishDate = nowISO; }
     if (!item.usageRecords) item.usageRecords = [];
-    item.usageRecords.push({
-      startDate: nowISO,
-      endDate: allEmpty ? nowISO : null,
-      qty: pieces,
-      variantId: variantId,
-      brand: v.brand,
-      specText: usedParts.join(' + '),
-      contentUsed: Math.round(contentUsed * 100) / 100
-    });
+    newRecs.forEach(function (nr) { item.usageRecords.push(nr); });
+    var allEmpty = spOpen.every(function (s) { return specPacksRemaining(v, s) <= 0; });
+    if (allEmpty && variantSpecContent(v) <= 0) { v.usedUp = true; v.finishDate = nowISO; }
+    else { v.usedUp = false; v.finishDate = null; }
     syncItemFromVariants(item);
     saveDB();
     closeModal();
     openCardDetail(currentZoneId, itemId);
-    toast('已开封 ' + escapeHtml(v.brand) + '：' + usedParts.join(' + ') + '，- ' + trimNum(contentUsed) + spUnit);
+    toast('已开封 ' + escapeHtml(v.brand) + '：' + usedParts.join(' + ') + '，共 ' + newRecs.length + ' 条记录，- ' + trimNum(contentUsed) + spUnit);
     return;
   }
 
   var qty = window._openQty || 1;
   if (qty > (v.stock || 0)) qty = v.stock || 0; // 不超过现有库存
+  if (qty <= 0) { toast('没有可开封的库存了'); return; }
 
+  // 并行：不再强制「用完才能再开」，本次开封只新增记录，不影响已有未结束记录
   v.opened = true;
   v.usedUp = !!markAsUsed;
   v.openDate = nowISO;
   v.openQty = qty;
   v.stock = Math.max(0, (v.stock || 0) - qty);
-  if (markAsUsed) v.finishDate = nowISO;
+  if (markAsUsed) {
+    // 一次性「开了就记用完」：0 天防御，结束日期退到次日
+    v.finishDate = new Date(new Date(nowISO).getTime() + 86400000).toISOString();
+  }
 
+  // 【严格一对一】开了几件 = 几条记录（每件独立计时，并行互不干扰）
   if (!item.usageRecords) item.usageRecords = [];
-  item.usageRecords.push({
-    startDate: nowISO,
-    endDate: markAsUsed ? nowISO : null,
-    qty: qty,
-    variantId: variantId,
-    brand: v.brand
-  });
+  var nItems = Math.max(1, Math.floor(qty));
+  var unitEach = Math.round((qty / nItems) * 100) / 100;
+  for (var ii = 0; ii < nItems; ii++) {
+    item.usageRecords.push({
+      startDate: nowISO,
+      endDate: markAsUsed ? v.finishDate : null,
+      qty: (ii === nItems - 1) ? Math.round((qty - unitEach * (nItems - 1)) * 100) / 100 : unitEach,
+      variantId: variantId,
+      brand: v.brand
+    });
+  }
 
   syncItemFromVariants(item);
   saveDB();
@@ -5442,77 +5515,81 @@ function instantTargetVariant(item) {
 }
 
 // 直接标记某个变体用完（用于多变体的"用完了"按钮，食品类直接完成）
-function finishVariant(itemId, variantId) {
+// 【并行收尾】recIdx 指定结束哪一条开封记录；缺省只结束**最早一条**未结束记录，
+// 绝不一次性结束该品牌下其它并行记录（如 2 瓶同时开着，用完 1 瓶只收尾 1 条）。
+function finishVariant(itemId, variantId, recIdx) {
   var item = getItem(currentZoneId, itemId);
   if (!item) return;
   var v = item.variants.find(function(vv) { return vv.id === variantId; });
   if (!v) return;
 
-  // 多规格：开封那一刻已按「规格×份数」扣过库存，
-  // 这里的「用完了」= 手头开的这一批用完 → 只结束本次使用记录，剩余规格照常待开封
+  // 统一找「要收尾的那一条」：指定下标优先，否则取最早一条未结束记录
+  var recF = null;
+  var recs = item.usageRecords || [];
+  if (recIdx !== undefined && recIdx !== null && recs[recIdx] && !recs[recIdx].endDate && !recs[recIdx].instant && recs[recIdx].type !== 'surplus') {
+    recF = recs[recIdx];
+  } else {
+    for (var pi = 0; pi < recs.length; pi++) {
+      var rr = recs[pi];
+      if (rr && rr.variantId === variantId && !rr.endDate && !rr.instant && rr.type !== 'surplus') { recF = rr; break; }
+    }
+  }
+  var nowF = new Date().toISOString();
+  // 0 天防御：同日开、同日用完 → 结束日期退到次日，避免 0 天记录污染速率
+  if (recF) {
+    if (recF.startDate && new Date(recF.startDate).toDateString() === new Date().toDateString()) {
+      recF.endDate = new Date(new Date(recF.startDate).getTime() + 86400000).toISOString();
+    } else {
+      recF.endDate = nowF;
+    }
+  }
+
+  // 多规格：开封那一刻已按「规格」扣过库存，
+  // 这里的「用完了」= 手头开的**这一包**用完 → 只结束这条记录，其余并行记录照常进行
   if (variantSpecsOf(v).length) {
-    var recF = null;
-    if (item.usageRecords) {
-      for (var fi = item.usageRecords.length - 1; fi >= 0; fi--) {
-        if (item.usageRecords[fi].variantId === variantId && !item.usageRecords[fi].endDate) { recF = item.usageRecords[fi]; break; }
-      }
-    }
-    var nowF = new Date().toISOString();
-    if (recF) recF.endDate = nowF;
-    v.usedUp = false;
-    v.finishDate = null;
-    v.opened = false; // 本批结束，剩余库存等下次开封
     var usedC = (recF && recF.contentUsed > 0) ? recF.contentUsed : 0;
-    // 整变体已清零（规格全部为 0）→ 真正用完，折叠进「已用完」区
-    if (variantSpecContent(v) <= 0) {
-      v.usedUp = true;
-      v.finishDate = v.finishDate || nowF;
-      syncItemFromVariants(item);
-      saveDB();
-      openCardDetail(currentZoneId, itemId);
-      toast('已用完' + (usedC > 0 ? '（≈' + trimNum(usedC) + variantSpecUnit(v) + '）' : ''));
-      return;
-    }
+    var nmF = recF ? String(recF.specName || '') : '';
+    reconcileItemState(item);
+    var stillAct = variantActiveOpenRecs(item, v).length;
     var remainC = variantSpecContent(v), remainP = variantSpecPieces(v), spU = variantSpecUnit(v);
+    if (remainC <= 0 && remainP <= 0) {
+      var alreadyDone = v.usedUp && v.finishDate;
+      v.usedUp = true;
+      if (!alreadyDone) v.finishDate = v.finishDate || nowF;
+    }
     syncItemFromVariants(item);
     saveDB();
     openCardDetail(currentZoneId, itemId);
-    toast('本批已记用完' + (usedC > 0 ? '（≈' + trimNum(usedC) + spU + '）' : '') + '，剩 ' + trimNum(remainC) + spU + '（' + trimNum(remainP) + ' 包未开）待开封');
+    if (v.usedUp && remainC <= 0) {
+      toast('已用完' + (usedC > 0 ? '（≈' + trimNum(usedC) + spU + '）' : ''));
+    } else {
+      toast((nmF ? '「' + nmF + '」这包' : '本包') + '已记用完' + (usedC > 0 ? '（≈' + trimNum(usedC) + spU + '）' : '')
+        + (stillAct > 0 ? ' · 还有 ' + stillAct + ' 包在使用中' : '')
+        + '，剩 ' + trimNum(remainP) + ' 包未开待开封');
+    }
     return;
   }
 
-  // 普通变体：还有剩余库存 → 「用完了」只结束当前开封的这一份，剩余的继续待开封
+  // 普通变体：还有剩余库存 → 「用完了」只结束当前开封的这一件，剩余的继续待开封
   // （如 10支装用了7支还剩3支：结束使用记录，但不能把整个品牌折叠进「已用完」）
   if ((v.stock || 0) > 0) {
-    var recN = null;
-    if (item.usageRecords) {
-      for (var ni = item.usageRecords.length - 1; ni >= 0; ni--) {
-        if (item.usageRecords[ni].variantId === variantId && !item.usageRecords[ni].endDate) { recN = item.usageRecords[ni]; break; }
-      }
-    }
-    var nowN = new Date().toISOString();
-    if (recN) recN.endDate = nowN;
-    v.usedUp = false;
-    v.finishDate = null;
-    v.opened = false; // 本份结束，剩余库存等下次开封
+    reconcileItemState(item);
+    var stillActN = variantActiveOpenRecs(item, v).length;
     var uN = v.packUnit || mainPackUnit(item);
     syncItemFromVariants(item);
     saveDB();
     openCardDetail(currentZoneId, itemId);
-    toast('本份已记用完，剩 ' + trimNum(v.stock) + uN + ' 待开封');
+    toast('本件已记用完' + (stillActN > 0 ? ' · 还有 ' + stillActN + ' 件在使用中' : '') + '，剩 ' + trimNum(v.stock) + uN + ' 待开封');
     return;
   }
 
   // 库存已为 0 → 真正用完，折叠进「已用完」区
+  // 收尾该品牌全部未结束记录（此刻确实没有剩余了，不存在并行歧义）
+  recs.forEach(function (r) {
+    if (r && r.variantId === variantId && !r.endDate && !r.instant && r.type !== 'surplus') r.endDate = nowF;
+  });
   v.usedUp = true;
-  v.finishDate = v.finishDate || new Date().toISOString();
-
-  if (item.usageRecords && item.usageRecords.length > 0) {
-    var lastRecord = item.usageRecords[item.usageRecords.length - 1];
-    if (lastRecord && !lastRecord.endDate && lastRecord.variantId === variantId) {
-      lastRecord.endDate = v.finishDate;
-    }
-  }
+  v.finishDate = v.finishDate || nowF;
 
   syncItemFromVariants(item);
   saveDB();
@@ -7248,34 +7325,34 @@ function undoFinishVariant(itemId, variantId) {
   var v = item.variants.find(function(vv) { return vv.id === variantId; });
   if (!v) { toast('该变体不存在'); return; }
   if (!v.usedUp) {
-    // 多规格「本批用完」后的撤销：库存还剩着，只是把最近一次记录恢复为使用中
+    // 多规格「本包用完」后的撤销：库存还剩着，只把最近结束的一条记录恢复为使用中
+    // （并行场景：只恢复一条，不碰其它仍在使用的记录）
     var reopened = false;
     if (item.usageRecords) {
       for (var i = item.usageRecords.length - 1; i >= 0; i--) {
         var r0 = item.usageRecords[i];
-        if (r0.variantId === variantId && r0.endDate) { r0.endDate = null; reopened = true; break; }
+        if (r0.variantId === variantId && r0.endDate && !r0.instant) { r0.endDate = null; reopened = true; break; }
       }
     }
     if (!reopened) { toast('该变体未标记用完'); return; }
-    v.opened = true;
-    v.finishDate = null;
     syncItemFromVariants(item);
     saveDB();
     openCardDetail(currentZoneId, itemId);
-    toast('已撤销：该批继续使用中');
+    toast('已撤销：该包继续使用中');
     return;
   }
   v.usedUp = false;
   v.finishDate = null;
   if (item.usageRecords && item.usageRecords.length > 0) {
-    for (var i = item.usageRecords.length - 1; i >= 0; i--) {
-      var r = item.usageRecords[i];
-      if (r.variantId === variantId && r.endDate) {
+    for (var j = item.usageRecords.length - 1; j >= 0; j--) {
+      var r = item.usageRecords[j];
+      if (r.variantId === variantId && r.endDate && !r.instant) {
         r.endDate = null;
         break;
       }
     }
   }
+  reconcileItemState(item);
   syncItemFromVariants(item);
   saveDB();
   openCardDetail(currentZoneId, itemId);
