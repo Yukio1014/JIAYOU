@@ -444,10 +444,11 @@ body {
 .card-price-zone { margin-top: 9px; }  /* 主信息与下方按钮之间 */
 
 /* 第 12 轮：字号层级重排（降噪核心） */
-/* 【第 13 轮】唯一被强调的数字 = 库存/余量：与标题并排放在第一行右侧，15px/600 */
+/* 【第 13 轮】唯一被强调的数字 = 库存/余量：与标题并排放在第一行右侧 */
+/* 【第 17 轮】字号 15→13px：库存是附属信息，绝不挤压产品名称（视觉重心=名称） */
 .card-hero {
-  font-size: 15px; font-weight: 600; line-height: 1.35;
-  color: var(--text-primary); letter-spacing: 0;
+  font-size: 13px; font-weight: 600; line-height: 1.35;
+  color: var(--text-secondary); letter-spacing: 0;
 }
 .card-hero-sub {
   font-size: 12px; font-weight: 400; color: var(--text-tertiary);
@@ -3084,18 +3085,21 @@ function getItemStatus(item) {
       if (totalStock <= threshold) status.lowStockSoft = true;
     }
   } else {
-    // 库存为 0：手头没有任何后备库存，无论是否使用中都应提示补货
+    // 库存为 0：先分「还有没有在用的」
     var hasOpenedInUse = variants.some(function(v) { return v.opened && !v.usedUp; });
     if (hasOpenedInUse) {
       // 有使用中的变体：按消耗速率预估剩余天数
+      // 【第 17 轮】红色告急只留给「预估 ≤30 天内真的断粮」：
+      //   预估为负（已超平均周期仍在用，如洗头膏用了 334 天）或算不出来（无记录）
+      //   都不能证明马上断粮 → 一律温和提示，不再红色误报
       var openedEstDays = estimateOpenedDaysLeft(item, variants);
       status.estDaysLeft = openedEstDays;
-      if (openedEstDays !== null && openedEstDays > 0) {
-        // 正在使用的那份还没用完，但用完就没库存了 → 温和提示补货（蓝）
-        status.lowStockSoft = true;
-      } else {
-        // 已超过预估用完时间，或无法预估 → 真正告急（黄）
+      if (openedEstDays !== null && openedEstDays > 0 && openedEstDays <= 30) {
+        // 使用中的那份按速率真的快见底了 → 真正告急（红）
         status.lowStock = true;
+      } else {
+        // 还能用很久 / 已超平均周期仍在服役 / 数据不足 → 温和提示补货（蓝）
+        status.lowStockSoft = true;
       }
     } else {
       // 没有使用中的变体，库存为 0，真正告急
@@ -3138,7 +3142,11 @@ function getItemStatus(item) {
 function stockBarClass(item, status) {
   status = status || getItemStatus(item);
   var totalStock = getTotalStock(item);
-  if (!totalStock) return 'low';
+  // 【第 17 轮】库存为 0 不再一律红条：使用中且预估还能用 → 黄条；真断粮才红条
+  if (!totalStock) {
+    if (status.lowStock) return 'low';
+    return status.hasInUse ? 'mid' : 'low';
+  }
   var threshold = item.stockThreshold || 1;
   var pct = (totalStock / Math.max(totalStock, threshold * 3)) * 100;
   var barClass = 'low';
@@ -4021,8 +4029,21 @@ function cardUsageStatusLabel(item) {
     return !r.instant && r.type !== 'surplus' && (r.startDate || r.endDate);
   });
   var anyOpened = vs.some(function (v) { return v.opened && !v.usedUp; });
-  // 库存归零：确实手头没了 → 告急（这不是数据不足的误报，是事实）
-  if (totalStock <= 0) return { icon: '❗️', label: '告急', cls: 'st-danger' };
+  // 【第 17 轮】库存归零不再一律告急：
+  //   没有任何使用中的 → 真正断粮，告急（红）
+  //   还有使用中的 → 看预估剩余天数：≤30 天才告急；31~90 天 ⚠️；更久或算不准 → 🌀
+  //   （洗头膏类长期使用品：已用 300~1500 天、多件在用，仅因库存数字为 0 就标红是误报，
+  //    会造成警报疲劳——红色只留给真正需要立刻补货的物品）
+  if (totalStock <= 0) {
+    var anyUse0 = vs.some(function (v) { return v.opened && !v.usedUp; });
+    if (!anyUse0) return { icon: '❗️', label: '告急', cls: 'st-danger' };
+    var st0 = null;
+    try { st0 = getItemStatus(item); } catch (e) { st0 = null; }
+    var ed0 = st0 ? st0.estDaysLeft : null;
+    if (typeof ed0 === 'number' && ed0 > 0 && ed0 <= 30) return { icon: '❗️', label: '告急', cls: 'st-danger' };
+    if (typeof ed0 === 'number' && ed0 > 30 && ed0 <= 90) return { icon: '⚠️', label: '余量较少', cls: 'st-warn' };
+    return { icon: '🌀', label: '使用中', cls: 'st-using' };
+  }
   // 从未开封 + 有库存 → 呆滞品
   if (!hasOpenRec && !anyOpened) return { icon: '💭', label: '呆滞品', cls: 'st-idle' };
   // 开封过 → 看消耗数据是否充足
@@ -4086,7 +4107,9 @@ function renderItemCard(item, zone) {
   if (!isDurable) {
     var stkFullC = String(stockSummaryOf(item));
     var stkPartsC = stkFullC.split('·');
-    heroTxtC = stkPartsC[0].trim();
+    // 【第 17 轮】主数字只留纯库存量（如 1920ml），去掉括号折算（约5.1份）——
+    // 名称是第一视觉重心，库存只是附属信息，长折算文本会把名称挤没
+    heroTxtC = stkPartsC[0].replace(/（[^）]*）/g, '').replace(/\([^)]*\)/g, '').trim();
     heroSubC = stkPartsC.slice(1).join('·').trim();
   }
   html += '<div style="display:flex;align-items:center;gap:6px">';
@@ -4795,7 +4818,6 @@ function renderCardBack(item, zone) {
     // === 信息区（第 11 轮：逻辑链 总库存 → 告急阈值 → 月/年消耗量 → 采购建议）===
     // 严格按「我有多少 → 低于多少该补 → 用多快 → 所以我该买什么」排列
     var advB = buyAdviceOf(item);
-    var advTxtB = advB ? String(advB.main).replace(/<[^>]+>/g, '') : '缺少数据';
     var rateB = calcUsageRate(item);
     var cModelR = consumeModelOf(item);
     html += '<div style="padding:11px 13px;border-radius:11px;background:var(--bg-secondary);margin-bottom:14px">';
@@ -4828,11 +4850,58 @@ function renderCardBack(item, zone) {
     if (rateLine) {
       html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">📈 ' + rateLine + '</div>';
     } else {
-      html += '<div style="font-size:12px;color:var(--text-tertiary);margin-top:4px">📈 消耗速度：缺少数据（继续记录会更准）</div>';
+      html += '<div style="font-size:12px;color:var(--text-tertiary);margin-top:4px">📈 消耗速度：记录使用后生成（继续记录会更准）</div>';
     }
 
-    // ④ 采购建议（第 11 轮：独占一行，位于模块最底部；文字再长也放得下）
-    html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:7px;padding-top:8px;border-top:1px solid var(--separator);line-height:1.55">🛒 采购建议<br><span style="color:' + (advB ? 'var(--accent)' : 'var(--text-tertiary)') + ';font-weight:500;font-size:13px">' + escapeHtml(advTxtB) + '</span></div>';
+    // ④ 采购建议（第 17 轮：底部详细「建议采购」上移到数据正下方，结论紧跟数据支撑；
+    //    没有数据支撑时不再显示「缺少数据」，改为一句话引导）
+    var stAllB = statsOf(item);
+    var rateBv = calcUsageRate(item);
+    if (advB || (stAllB && stAllB.rate > 0) || cModelR === 'instant' || rateBv > 0) {
+      html += '<div style="margin-top:8px;padding:9px 11px;border-radius:10px;background:#F0F7FF">';
+      html += '<div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:5px">🛒 建议采购</div>';
+      html += '<div style="font-size:13px;line-height:1.7">';
+      if (advB) {
+        html += '· ' + advB.main + '<br>';
+        if (advB.detail) {
+          html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px">'
+            + (cModelR === 'combo' ? '各规格余量：' : '')
+            + advB.detail + '</div>';
+        }
+        if (stAllB.monthsLeft !== null && stAllB.monthsLeft !== undefined) {
+          var avgU = itemAvgPieceOf(item);
+          var mlU = itemStockContent(item);
+          var uLeft;
+          if (avgU > 0 && mlU !== null && mlU !== undefined) {
+            uLeft = '≈' + trimNum(round1(mlU)) + '（约 ' + trimNum(round1(mlU / avgU)) + ' 份）';
+          } else if (cModelR === 'combo') {
+            uLeft = trimNum(round1(stAllB.restSmall)) + stAllB.unitSmall;
+          } else {
+            uLeft = trimNum(round1(getTotalStock(item))) + escapeHtml(stAllB.unit);
+          }
+          html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">当前库存 ' + uLeft + '，约够用 ' + Math.max(0, Math.round(stAllB.monthsLeft)) + ' 个月</div>';
+        }
+      } else if (rateBv > 0) {
+        // 有速率但暂无采购量建议：给半年/一年参考量（原底部块内容，随上移保留）
+        var hasSpecRecsH = (item.usageRecords || []).some(function (r) { return r.specText; });
+        var crH = contentRateOf(item);
+        var cpuH = (crH && crH.perMonth > 0 && rateBv > 0) ? (crH.perMonth / rateBv) : 0;
+        var recUnitH = hasSpecRecsH ? '份' : rateUnitName(item);
+        if (crH && crH.perMonth > 0 && cpuH > 0 && itemStockContent(item) !== null) {
+          html += '· 半年量：<strong>≈' + trimNum(round1(crH.perMonth * 6)) + crH.unit + '</strong>（约 ' + Math.max(1, Math.ceil(crH.perMonth * 6 / cpuH)) + ' ' + recUnitH + '）<br>';
+          html += '· 一年量：<strong>≈' + trimNum(round1(crH.perMonth * 12)) + crH.unit + '</strong>（约 ' + Math.max(1, Math.ceil(crH.perMonth * 12 / cpuH)) + ' ' + recUnitH + '）';
+        } else {
+          html += '· 半年量：<strong>' + Math.max(1, Math.ceil(rateBv * 6)) + recUnitH + '</strong><br>';
+          html += '· 一年量：<strong>' + Math.max(1, Math.ceil(rateBv * 12)) + recUnitH + '</strong>';
+        }
+      } else {
+        html += '<span style="color:var(--text-secondary)">继续记录使用情况，数据会更准</span>';
+      }
+      html += '</div></div>';
+    } else {
+      // 无数据支撑：只显示引导语，不再出现自相矛盾的「缺少数据」
+      html += '<div style="font-size:12px;color:var(--text-tertiary);margin-top:7px;padding-top:8px;border-top:1px solid var(--separator);line-height:1.55">🛒 采购建议<br><span style="color:var(--text-tertiary);font-weight:500;font-size:13px">记录多次使用后生成建议</span></div>';
+    }
 
     html += '</div>';
 
@@ -5109,52 +5178,9 @@ function renderCardBack(item, zone) {
           if (aq0 > 1) html += '<div class="back-row"><span class="back-label">年需求容量</span><span class="back-value">≈ ' + round1(rate*12*aq0) + escapeHtml(mainPackUnit(item)) + '/年</span></div>';
         }
       }
-      // --- 采购建议详情（原「消耗与采购」区块并入；数据不足如实说）---
+      // --- 第 17 轮：详细「建议采购」已上移至顶部信息区（紧贴月/年消耗量），此处删除重复块 ---
       var stAll = statsOf(item);
-      var adv = buyAdviceOf(item);
       if (cModelR === 'instant' || (stAll && stAll.rate > 0)) {
-        html += '<div style="margin-top:8px;padding:10px;border-radius:10px;background:#F0F7FF">';
-        html += '<div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px">🛒 建议采购</div>';
-        html += '<div style="font-size:13px;line-height:1.7">';
-        if (adv) {
-          html += '· ' + adv.main + '<br>';
-          if (adv.detail) {
-            html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px">'
-              + (cModelR === 'combo' ? '各规格余量：' : '')
-              + adv.detail + '</div>';
-          }
-          if (stAll.monthsLeft !== null && stAll.monthsLeft !== undefined) {
-            var avgU = itemAvgPieceOf(item);
-            var mlU = itemStockContent(item);
-            var uLeft;
-            if (avgU > 0 && mlU !== null && mlU !== undefined) {
-              uLeft = '≈' + trimNum(round1(mlU)) + '（约 ' + trimNum(round1(mlU / avgU)) + ' 份）';
-            } else if (cModelR === 'combo') {
-              uLeft = trimNum(round1(stAll.restSmall)) + stAll.unitSmall;
-            } else {
-              uLeft = trimNum(round1(getTotalStock(item))) + escapeHtml(stAll.unit);
-            }
-            html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">当前库存 ' + uLeft + '，约够用 ' + Math.max(0, Math.round(stAll.monthsLeft)) + ' 个月</div>';
-          }
-        } else if (stAll && stAll.rate > 0) {
-          var rate2 = rate;
-          var hasSpecRecs2 = (item.usageRecords || []).some(function (r) { return r.specText; });
-          var cr2 = contentRateOf(item);
-          var cpu2 = (cr2 && cr2.perMonth > 0 && rate2 > 0) ? (cr2.perMonth / rate2) : 0;
-          var recUnit2 = hasSpecRecs2 ? '份' : rateUnitName(item);
-          var stockContent2 = itemStockContent(item);
-          if (cr2 && cr2.perMonth > 0 && cpu2 > 0 && stockContent2 !== null) {
-            var halfVol = cr2.perMonth * 6, yearVol = cr2.perMonth * 12;
-            html += '· 半年量：<strong>≈' + trimNum(round1(halfVol)) + cr2.unit + '</strong>（约 ' + Math.max(1, Math.ceil(halfVol / cpu2)) + ' ' + recUnit2 + '）<br>';
-            html += '· 一年量：<strong>≈' + trimNum(round1(yearVol)) + cr2.unit + '</strong>（约 ' + Math.max(1, Math.ceil(yearVol / cpu2)) + ' ' + recUnit2 + '）<br>';
-          } else {
-            html += '· 半年量：<strong>' + Math.max(1, Math.ceil(rate2 * 6)) + recUnit2 + '</strong><br>';
-            html += '· 一年量：<strong>' + Math.max(1, Math.ceil(rate2 * 12)) + recUnit2 + '</strong><br>';
-          }
-        } else {
-          html += '<span style="color:var(--text-secondary)">继续记录使用情况，数据会更准</span>';
-        }
-        html += '</div></div>';
         // 囤货提醒
         var stBack = getItemStatus(item);
         if (stBack.stockUpAlert) {
@@ -5655,8 +5681,8 @@ function manualRefresh() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791386666 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791386666';
+// deploy.py 部署时会把 1791388211 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791388211';
 
 function checkAppUpdate(manual) {
   try {
