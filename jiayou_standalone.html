@@ -727,6 +727,8 @@ body {
 .task-tab { flex: 1; text-align: center; padding: 9px 4px; border-radius: 10px; font-size: 13px; font-weight: 700; color: var(--text-secondary); background: var(--bg); border: 1.5px solid transparent; cursor: pointer; transition: transform .12s; }
 .task-tab:active { transform: scale(0.96); }
 .task-banner { border-radius: 12px; padding: 12px 14px; font-size: 14px; font-weight: 700; color: #fff; margin-bottom: 14px; line-height: 1.4; }
+.task-banner-sub { margin: -8px 0 14px; padding: 6px 12px; font-size: 11px; color: var(--text-secondary); background: rgba(255,149,0,0.10); border-radius: 8px; line-height: 1.4; }
+.task-banner-sub:empty { display: none; }
 .task-banner.orange { background: linear-gradient(135deg,#FF9500,#FFB340); }
 .task-banner.green { background: linear-gradient(135deg,#34C759,#5AD680); }
 .task-toolbar { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; }
@@ -931,6 +933,7 @@ body {
 <div class="navbar" id="nav-home">
   <h1>家有</h1>
   <div class="nav-actions">
+    <button class="nav-btn" id="home-refresh-btn" onclick="manualRefresh()" title="刷新数据">🔄</button>
     <div class="cloud-status" id="cloud-status" onclick="manualSync()">☁️ 初始化...</div>
     <button class="nav-btn" onclick="openSettings()">⚙</button>
   </div>
@@ -945,6 +948,7 @@ body {
   <button class="nav-btn" onclick="showPage('home')">‹</button>
   <h1 id="zone-title">领地</h1>
   <div class="nav-actions">
+    <button class="nav-btn" id="zone-refresh-btn" onclick="manualRefresh()" title="刷新数据">🔄</button>
     <button class="nav-btn" onclick="openCategoryManager()">✎</button>
     <button class="nav-btn" onclick="openItemForm()">＋</button>
   </div>
@@ -958,6 +962,7 @@ body {
 <div class="navbar" id="nav-pool" style="display:none;">
   <h1>📋 任务委托</h1>
   <div class="nav-actions">
+    <button class="nav-btn" onclick="manualRefresh()" title="刷新数据">🔄</button>
     <button class="nav-btn" onclick="taskOpenForm()">＋</button>
   </div>
 </div>
@@ -1582,7 +1587,25 @@ function mergeDB(defaults, loaded) {
   migrateSpecTwoLayer(result);
   // 历史脏数据：表单内连续添加方案曾共用同一个 id，导致点任一方案只切换第一个 → 全局去重
   migrateTaskPlanIds(result);
+  // 状态对账（关键）：从使用记录重新推导每个品牌的开封/用完状态，
+  // 并剔除 0 天记录。这解决了「删了记录、卡片还卡在『使用中』、刷新重进也没用」
+  // 这类幽灵状态 —— 因为云端/本地存的陈旧 opened 字段会在装载时被纠正回来。
+  reconcileDBState(result);
   return result;
+}
+
+// 全库状态对账：遍历所有补给品板块的物品，重建 opened/usedUp 并清理 0 天记录
+function reconcileDBState(db) {
+  if (!db || !db.zones) return;
+  db.zones.forEach(function (z) {
+    if (!z || z.type !== 'consumable' || !z.items) return;
+    z.items.forEach(function (it) {
+      if (!it) return;
+      // 先剔除 0 天等无效记录，再据记录重建状态
+      purgeInvalidRecords(it);
+      try { reconcileItemState(it); } catch (e) { console.warn('状态对账失败', e); }
+    });
+  });
 }
 
 // 方案 id 全局去重：任务内重复或缺失的 id 分配新 id（从全局最大 +1 递增），其余字段一律不动
@@ -2273,7 +2296,22 @@ var currentSearchQuery = '';
 
 function openSettings() { showPage('settings'); }
 
+// ========== 全局重绘入口 ==========
+// 云同步 / 手动刷新后调用：重绘当前页面 + 卡片详情（若开着）
+function renderAll() {
+  refreshCurrentPage();
+  if (currentDetailItem && currentDetailZone) {
+    renderCardFront(currentDetailItem, currentDetailZone);
+    renderCardBack(currentDetailItem, currentDetailZone);
+  }
+  // 云状态角标
+  try { if (typeof updateCloudStatus === 'function') updateCloudStatus(); } catch (e) {}
+}
+
+// ========== 页面路由 ==========
+var currentPage = 'home';
 function showPage(page) {
+  currentPage = page;
   document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
   document.getElementById('page-' + page).classList.add('active');
 
@@ -2678,10 +2716,17 @@ function stockBarClass(item, status) {
   return barClass;
 }
 
+// 有效周期记录：必须有起止日期，且不是 0 天（开始=结束）——0 天记录会拉垮速率平均
+function validPeriodRecords(item) {
+  return (item && item.usageRecords ? item.usageRecords : []).filter(function (r) {
+    return r.startDate && r.endDate && !isZeroDayRecord(r);
+  });
+}
+
 // 预估当前总库存还能用多少天（基于历史消耗速率）
 function estimateStockDaysLeft(item, totalStock, variants) {
   if (!item.usageRecords || item.usageRecords.length === 0) return null;
-  var records = item.usageRecords.filter(function(r) { return r.startDate && r.endDate; });
+  var records = validPeriodRecords(item);
   if (records.length === 0) return null;
   // 统计总消耗量和首次使用日期
   var totalQty = 0, totalContent = 0, allContent = true, earliestDate = null;
@@ -2773,7 +2818,7 @@ function mainPackUnit(item) {
 function round1(x) { return Math.round((+x || 0) * 10) / 10; }
 function calcUsageRate(item) {
   if (!item.usageRecords || item.usageRecords.length === 0) return 0;
-  var records = item.usageRecords.filter(function(r) { return r.startDate && r.endDate; });
+  var records = validPeriodRecords(item);
   if (records.length === 0) return 0;
 
   // 统计总消耗量
@@ -2803,7 +2848,7 @@ var CONTENT_UNIT_TABLE = { ml: ['ml', 1], L: ['ml', 1000], g: ['g', 1], kg: ['g'
 function contentRateOf(item) {
   if (!item.usageRecords || !item.usageRecords.length) return null;
   var vs = item.variants || [];
-  var recs = item.usageRecords.filter(function(r) { return r.startDate && r.endDate; });
+  var recs = validPeriodRecords(item);
   if (!recs.length) return null;
   // 基准含量单位：第一个配了含量且单位可换算的变体
   var baseUnit = null;
@@ -3079,7 +3124,7 @@ function buyAdviceOf(item) {
 // 基于"首次使用到今天"的总时间跨度，预估剩余可用天数
 function estimateOpenedDaysLeft(item, variants) {
   if (!item.usageRecords || item.usageRecords.length === 0) return null;
-  var records = item.usageRecords.filter(function(r) { return r.startDate && r.endDate; });
+  var records = validPeriodRecords(item);
   if (records.length === 0) return null;
 
   // 统计总消耗量和首次使用日期
@@ -3599,6 +3644,106 @@ function renderItemCard(item, zone) {
   return html;
 }
 
+// ========== 状态对账（Reconcile）==========
+// 唯一真源 = 使用记录（usageRecords）。任何记录的增/删/改之后都必须调用本函数，
+// 由记录重新推导每个变体的 opened / usedUp，从而杜绝「记录删了、卡片还卡在『使用中』」
+// 这类幽灵状态。同时把 0 天记录（startDate === endDate）当作「无效」剔除出速率统计。
+function hasOpenRecordOf(item, variantId) {
+  return (item.usageRecords || []).some(function (r) {
+    if (r.variantId !== variantId) return false;
+    // 即时消耗（打卡）不参与「开封/使用中」判定
+    if (r.instant) return false;
+    // 有待结束的开包/开封记录 → 该品牌处于使用中
+    return !r.endDate;
+  });
+}
+function reconcileItemState(item) {
+  if (!item) return;
+  ensureVariants(item);
+  // 即时消耗型（打卡）不参与「开封/使用中」生命周期：它的 opened/usedUp
+  // 由 punchInstant / unpunchInstant 自己管理（扣到 0 折叠进已用完），对账不能碰
+  if (consumeModelOf(item) === 'instant') { syncItemFromVariants(item); return; }
+  (item.variants || []).forEach(function (v) {
+    var openRec = hasOpenRecordOf(item, v.id);
+    var hasAnyRecord = (item.usageRecords || []).some(function (r) { return r.variantId === v.id && !r.instant; });
+    var specs = variantSpecsOf(v);
+    if (openRec) {
+      // 还有未结束的记录 → 使用中
+      v.opened = true;
+      v.usedUp = false;
+      v.finishDate = null;
+      if (!v.openDate) {
+        var openDates = (item.usageRecords || [])
+          .filter(function (r) { return r.variantId === v.id && !r.instant && r.startDate; })
+          .map(function (r) { return new Date(r.startDate); });
+        if (openDates.length) v.openDate = new Date(Math.min.apply(null, openDates)).toISOString();
+      }
+    } else {
+      // 没有未结束的记录 → 绝不残留「使用中」
+      // 判定是否已用完：多规格看规格是否全部开光；普通品牌看该品牌是否已被标记用完
+      var allGone = false;
+      if (specs.length) {
+        allGone = specs.every(function (s) { return specPacksRemaining(v, s) <= 0; });
+      } else {
+        allGone = hasAnyRecord && (parseFloat(v.stock) || 0) <= 0;
+      }
+      v.opened = false;
+      if (allGone) {
+        v.usedUp = true;
+        if (!v.finishDate) {
+          // 用完日期取该品牌最后一条记录的结束日期
+          var ends = (item.usageRecords || [])
+            .filter(function (r) { return r.variantId === v.id && !r.instant && r.endDate; })
+            .map(function (r) { return new Date(r.endDate); });
+          v.finishDate = ends.length ? new Date(Math.max.apply(null, ends)).toISOString() : new Date().toISOString();
+        }
+      } else {
+        v.usedUp = false;
+        v.finishDate = null;
+      }
+    }
+    // 多规格：把「已开包数」居中的一致性拉齐——若某规格有未结束记录，则标记 __openPack
+    if (specs.length) {
+      specs.forEach(function (s, si) {
+        var nm = s.name || '规格';
+        var inUse = (item.usageRecords || []).some(function (r) {
+          return r.variantId === v.id && r.specName === nm && !r.endDate && !r.instant;
+        });
+        s.__openPack = inUse;
+      });
+    }
+  });
+  syncItemFromVariants(item);
+}
+
+// 0 天记录：开始日期 == 结束日期 → 无效，绝不允许进入速率平均
+function isZeroDayRecord(r) {
+  if (!r || !r.startDate || !r.endDate) return false;
+  return daysBetween(new Date(r.startDate), new Date(r.endDate)) <= 0;
+}
+// 清理无效记录（0 天 / 缺日期），返回清理条数
+function purgeInvalidRecords(item) {
+  if (!item || !item.usageRecords) return 0;
+  var before = item.usageRecords.length;
+  item.usageRecords = item.usageRecords.filter(function (r) {
+    if (r.instant) return true; // 打卡记录没有周期概念，保留
+    if (!r.startDate) return true; // 保留（历史脏数据交由用户手动处理）
+    if (r.endDate && isZeroDayRecord(r)) return false; // 0 天 → 剔除
+    return true;
+  });
+  return before - item.usageRecords.length;
+}
+// 一键清理 0 天记录（卡片上的「一键清理」入口）
+function purgeZeroRecords(itemId) {
+  var item = findItemByIdGlobal(itemId);
+  if (!item) return;
+  var n = purgeInvalidRecords(item);
+  reconcileItemState(item);
+  saveDB();
+  refreshItemViews(item);
+  toast(n > 0 ? '🧹 已清理 ' + n + ' 条 0 天记录，消耗数据已重算' : '没有需要清理的记录');
+}
+
 // ========== 使用记录编辑 ==========
 function openUsageEdit(itemId, idx) {
   var item = findItemByIdGlobal(itemId);
@@ -3610,10 +3755,14 @@ function openUsageEdit(itemId, idx) {
   html += '<div class="form-group"><label class="form-label">消耗数量（' + rateUnitName(item) + '）</label><input type="number" class="form-input" id="ur-qty" step="0.01" min="0" value="' + (r.qty || 1) + '"></div>';
   html += '<div class="form-group"><label class="form-label">开始日期</label><input type="date" class="form-input" id="ur-start" value="' + fmt(r.startDate) + '"></div>';
   html += '<div class="form-group"><label class="form-label">结束日期（留空 = 使用中）</label><input type="date" class="form-input" id="ur-end" value="' + fmt(r.endDate) + '"></div>';
+  if (!r.instant) {
+    html += '<div style="font-size:11px;color:var(--text-tertiary);margin-top:-4px">⚠️ 结束日期不能等于开始日期：0 天记录会被判定无效，不参与消耗速率计算</div>';
+  }
   html += '<div style="display:flex;gap:10px;margin-top:14px">';
   html += '<button class="btn btn-danger" style="flex:1" onclick="deleteUsageRecord(\'' + itemId + '\',' + idx + ')">🗑️ 删除</button>';
   html += '<button class="btn btn-primary" style="flex:2" onclick="saveUsageEdit(\'' + itemId + '\',' + idx + ')">保存</button>';
   html += '</div>';
+  html += '<button class="btn btn-ghost btn-full" style="margin-top:8px;color:var(--red)" onclick="clearAllUsageRecords(\'' + itemId + '\')">🗑️ 清空全部使用记录</button>';
   document.getElementById('modal-content').innerHTML = html;
   document.getElementById('modal-overlay').classList.add('show');
 }
@@ -3628,19 +3777,81 @@ function saveUsageEdit(itemId, idx) {
   if (s) r.startDate = s;
   if (e) { r.endDate = e; }
   else { delete r.endDate; }
+  // 0 天记录拦截：填了结束日期且等于开始日期 → 直接拒绝保存
+  if (r.startDate && r.endDate && isZeroDayRecord(r)) {
+    toast('⚠️ 结束日期不能等于开始日期（0 天记录会污染消耗速率），请修正');
+    return;
+  }
+  reconcileItemState(item);
   saveDB();
   closeModal();
-  if (currentDetailItem && currentDetailItem.id === item.id) renderCardBack(currentDetailItem, currentDetailZone);
+  refreshItemViews(item);
   toast('✅ 记录已更新');
 }
 function deleteUsageRecord(itemId, idx) {
   var item = findItemByIdGlobal(itemId);
   if (!item || !item.usageRecords || !item.usageRecords[idx]) { closeModal(); return; }
+  var r = item.usageRecords[idx];
+  // 删除记录时若该记录对应「开包/开封」动作，需同时回滚已开包数，
+  // 否则会出现「记录删了、包数却少了一包」的库存错乱。
+  rollbackRecordConsumption(item, r);
   item.usageRecords.splice(idx, 1);
+  // 关键：删记录后必须对账，把「使用中」回滚到正确状态
+  reconcileItemState(item);
   saveDB();
   closeModal();
-  if (currentDetailItem && currentDetailItem.id === item.id) renderCardBack(currentDetailItem, currentDetailZone);
-  toast('🗑️ 记录已删除');
+  refreshItemViews(item);
+  toast('🗑️ 记录已删除，状态已回滚');
+}
+// 回滚一条记录所代表的开包消耗（把对应规格的 openPacks 减回去）
+function rollbackRecordConsumption(item, r) {
+  if (!item || !r) return;
+  if (r.instant) return; // 打卡记录的库存由 unpunchInstant 单独处理
+  if (!r.variantId) return;
+  var v = (item.variants || []).find(function (x) { return x.id === r.variantId; });
+  if (!v) return;
+  var specs = variantSpecsOf(v);
+  if (!specs.length) return; // 普通变体：开封时已扣 stock，删记录不自动回补库存（用户可另行盘点/补货）
+  // 多规格：按记录里的规格名把已开包数减回去
+  var nm = String(r.specName || '');
+  var s = specs.find(function (x) { return String(x.name || '') === nm; });
+  if (!s) return;
+  var pq = specPackQty(s);
+  var back = 1;
+  // 记录 qty 是「份」时换算回包数；纯开包记录 qty 即 1 包
+  if (pq > 0 && (parseFloat(r.qty) || 0) > pq) back = Math.max(1, Math.ceil((parseFloat(r.qty) || pq) / pq - 1e-9));
+  s.openPacks = Math.max(0, Math.round((specOpenPacks(s) - back) * 100) / 100);
+  s.qty = Math.round(specPackCount(s) * pq * 100) / 100;
+  v.stock = variantSpecContent(v);
+}
+// 一键清空某产品的全部使用记录（数据乱了时的救命按钮）
+function clearAllUsageRecords(itemId) {
+  var item = findItemByIdGlobal(itemId);
+  if (!item) return;
+  var n = (item.usageRecords || []).length;
+  if (!n) { toast('这个产品还没有使用记录'); return; }
+  if (!window.confirm('确定清空「' + (item.name || '') + '」的全部 ' + n + ' 条使用记录吗？\n清空后该产品的消耗速率与采购建议将从头重新推算。')) return;
+  item.usageRecords = [];
+  // 清空记录 = 撤回所有开封/开包动作 → 品牌回到未开封（库存不动，因为开包时已扣）
+  (item.variants || []).forEach(function (v) {
+    v.opened = false;
+    v.usedUp = false;
+    v.finishDate = null;
+    v.openDate = null;
+    v.openQty = 0;
+    variantSpecsOf(v).forEach(function (s) {
+      s.__openPack = false;
+      s.openPacks = 0;                 // 已开包数归零 → 未开包数回到满额
+      s.qty = Math.round(specPackCount(s) * specPackQty(s) * 100) / 100;
+    });
+    // 库存按「未开包 = 全部包数」重算，保证剩余量与归零后的记录一致
+    if (variantSpecsOf(v).length) v.stock = variantSpecContent(v);
+  });
+  reconcileItemState(item);
+  saveDB();
+  closeModal();
+  refreshItemViews(item);
+  toast('🧹 已清空 ' + n + ' 条记录，消耗数据已重置');
 }
 
 // ========== 卡片详情（翻面）==========
@@ -3654,12 +3865,18 @@ function openCardDetail(zoneId, itemId) {
   currentDetailItem = item;
   currentDetailZone = zone;
 
+  // 打开详情时先对账一次：保证卡片状态与使用记录一致（杜绝幽灵「使用中」）
+  if (zone.type === 'consumable') reconcileItemState(item);
+
   renderCardFront(item, zone);
   renderCardBack(item, zone);
 
   // 默认直接显示背面（翻转状态），无需点两次
   document.getElementById('flip-inner').classList.add('flipped');
   document.getElementById('card-detail-overlay').classList.add('show');
+
+  // 底层页面同步刷新：改动后返回列表时数据已是最新（不再需要退出重进）
+  refreshCurrentPage();
 }
 
 // 消耗模型徽章：卡片标题右手边直接显示当前模型（件数/规格/即时/组合），
@@ -4040,6 +4257,11 @@ function renderCardBack(item, zone) {
         html += '<div class="open-record" style="cursor:pointer" onclick="openUsageEdit(\'' + item.id + '\',' + w.oi + ')">' + recTxt + '<span style="float:right;font-size:11px;color:var(--text-tertiary)">✏️</span></div>';
       });
       html += '</div>';
+      var zeroCnt = (item.usageRecords || []).filter(isZeroDayRecord).length;
+      if (zeroCnt > 0) {
+        html += '<div style="margin-top:8px;padding:8px 10px;border-radius:8px;background:rgba(255,149,0,0.10);font-size:12px;color:var(--orange);font-weight:600">⚠️ 检测到 ' + zeroCnt + ' 条 0 天记录（开始=结束），已自动剔除出消耗速率统计 · <span style="text-decoration:underline;cursor:pointer" onclick="purgeZeroRecords(\'' + item.id + '\')">一键清理</span></div>';
+      }
+      html += '<button class="btn btn-outline btn-sm" style="width:100%;margin-top:8px;color:var(--red);border-color:rgba(255,59,48,0.35)" onclick="clearAllUsageRecords(\'' + item.id + '\')">🗑️ 清空全部使用记录</button>';
       html += '</div>';
     }
 
@@ -4472,9 +4694,54 @@ function closeCardDetail() {
   currentDetailZone = null;
 }
 
+// ========== 即时刷新（数据绑定修复）==========
+// 任何数据改动后调用：重绘卡片详情 + 当前所在页面，保证「改完立刻看到」，
+// 不再需要退出重进。currentPage 由 showPage 记录。
+function refreshItemViews(item) {
+  // 1) 卡片详情正/背面
+  if (currentDetailItem && item && currentDetailItem.id === item.id) {
+    renderCardFront(currentDetailItem, currentDetailZone);
+    renderCardBack(currentDetailItem, currentDetailZone);
+  } else if (currentDetailItem) {
+    // 详情开着但改的是别的物品：也要重绘（库存/统计可能联动）
+    renderCardFront(currentDetailItem, currentDetailZone);
+    renderCardBack(currentDetailItem, currentDetailZone);
+  }
+  // 2) 当前所在页面（总览 / 板块 / 任务委托 / 年报…）
+  refreshCurrentPage();
+}
+function refreshCurrentPage() {
+  try {
+    if (currentPage === 'home') renderHome();
+    else if (currentPage === 'zone') renderZone();
+    else if (currentPage === 'pool') renderTasks();
+    else if (currentPage === 'settings') renderSettings();
+    else if (currentPage === 'report') renderReport();
+  } catch (e) { /* 页面未挂载时忽略 */ }
+}
+// 右上角 🔄 刷新按钮：手动强制重绘 + 重新装载本地数据，解决偶发数据延迟
+function manualRefresh() {
+  try {
+    Promise.resolve(loadDB()).then(function () {
+      // 关掉可能残留的弹层，避免刷新后弹层显示旧数据
+      if (typeof renderAll === 'function') renderAll();
+      refreshCurrentPage();
+      toast('🔄 已刷新');
+    }).catch(function () {
+      if (typeof renderAll === 'function') renderAll();
+      refreshCurrentPage();
+      toast('🔄 已刷新');
+    });
+  } catch (e) {
+    if (typeof renderAll === 'function') renderAll();
+    refreshCurrentPage();
+    toast('🔄 已刷新');
+  }
+}
+
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791353332 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791353332';
+// deploy.py 部署时会把 1791355709 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791355709';
 
 function checkAppUpdate(manual) {
   try {
@@ -4531,14 +4798,24 @@ function openItem(itemId) {
   if (!item) return;
   ensureVariants(item);
 
-  // 选择开封哪个品牌（移除"已有正在使用的就锁定"的限制，允许多个同时使用）
-  // 多规格变体：只要还有规格份数剩余就仍可继续开（如先开小样、再开正装）
+  // 选择开封哪个品牌（允许多个同时使用）
+  // 「开封」弹窗 = 只展示「还有未开封库存」的品牌，绝不把正在使用中的品牌扔进来。
+  //   · 多规格（组合/规格型）：只要还有未开的包，就仍可继续开（如先开小样、再开正装）
+  //   · 普通品牌：必须有库存，且「未开封」或「上一批已结束（usedUp 但还有剩）」才可开
+  // 正在使用中的品牌（opened && !usedUp）已被排除，避免出现「给我自己开封」的错乱。
   var available = item.variants.filter(function(v) {
-    if (variantSpecsOf(v).length) return true;
-    return v.stock > 0 && (!v.opened || v.usedUp);
+    // 正在使用中 → 不属于「未开封库存」，不进开封列表
+    if (v.opened && !v.usedUp) return false;
+    if (variantSpecsOf(v).length) {
+      // 多规格：还有未开的包才可开
+      return variantSpecsOf(v).some(function (s) { return specPacksRemaining(v, s) > 0; });
+    }
+    return (parseFloat(v.stock) || 0) > 0;
   });
   if (available.length === 0) {
-    toast('没有可开封的库存了');
+    var inUseCnt = item.variants.filter(function(v) { return v.opened && !v.usedUp; }).length;
+    if (inUseCnt > 0) toast('这个产品正在使用中，等这批用完再开封新的吧');
+    else toast('没有可开封的库存了');
     return;
   }
 
@@ -6366,7 +6643,14 @@ function saveItem() {
 
   saveDB();
   closeModal();
+  if (zone.type === 'consumable' && editingItemId) {
+    // 保存后：对账状态 + 重算统计，让界面立刻反映最新数据
+    var saved = getItem(currentZoneId, editingItemId);
+    if (saved) reconcileItemState(saved);
+    saveDB();
+  }
   renderZone();
+  refreshCurrentPage();
   toast(editingItemId ? '已保存' : '已添加');
 }
 
@@ -7469,6 +7753,47 @@ function planTotalContent(p) {
 }
 function planMin(t) { var m = Infinity; (t.plans || []).forEach(function (p) { var a = +p.amount || 0; if (a > 0 && a < m) m = a; }); return m === Infinity ? 0 : m; }
 function planMax(t) { var m = 0; (t.plans || []).forEach(function (p) { var a = +p.amount || 0; if (a > m) m = a; }); return m; }
+// 已勾选「本次购买」的方案金额合计（p.buy !== false 视为勾选）
+function taskSelectedAmount(t) {
+  var s = 0;
+  (t.plans || []).forEach(function (p) { if (p.buy !== false) s += (+p.amount || 0); });
+  return Math.round(s * 100) / 100;
+}
+// 已勾选「本次购买」的方案数量
+function taskSelectedCount(t) {
+  return (t.plans || []).filter(function (p) { return p.buy !== false; }).length;
+}
+// 顶部主横幅：实时反映当前勾选合计金额（无勾选显示 ¥0.00）
+function taskBannerMainHtml() {
+  var selAmt = 0, selCnt = 0;
+  DB.tasks.forEach(function (t) {
+    if (t.status !== '待接') return;
+    selAmt += taskSelectedAmount(t);
+    selCnt += taskSelectedCount(t);
+  });
+  if (selAmt <= 0) return '🛒 当前已选采购总额：' + fmtMoney(0);
+  return '🛒 当前已选采购总额：' + fmtMoney(selAmt) + '（' + selCnt + ' 项）';
+}
+// 顶部副横幅：本区域全部目标的最低解锁成本（保持原有信息，不丢失）
+function taskBannerSubHtml(need, cnt) {
+  if (need === undefined || cnt === undefined) {
+    need = 0; cnt = 0;
+    DB.tasks.forEach(function (t) { if (t.status === '待接') { need += planMin(t); cnt++; } });
+  }
+  if (cnt <= 0) return '';
+  return '解锁本区域全部目标（' + cnt + ' 项），最低需 ' + fmtMoney(need) + ' · 勾选「本次购买」实时汇总';
+}
+// 原地刷新横幅（勾选瞬间调用，无延迟、不整页重绘）
+function refreshTaskBanner() {
+  var el = document.getElementById('task-banner-main');
+  if (el) el.innerHTML = taskBannerMainHtml();
+  var el2 = document.getElementById('task-banner-sub');
+  if (el2) {
+    var need = 0, cnt = 0;
+    DB.tasks.forEach(function (t) { if (t.status === '待接') { need += planMin(t); cnt++; } });
+    el2.innerHTML = taskBannerSubHtml(need, cnt);
+  }
+}
 function planWeightStr(p) {
   var d = planDerived(p);
   if (d.multi) { var mt = planSpecText(p); return mt ? ('📦 ' + mt) : ''; }
@@ -7521,9 +7846,19 @@ function renderTasks() {
 
   // 战报条（按规范：仅待接/搁置，进行中/凯旋不显示，避免干扰主线）
   if (s.tab === '待接') {
-    var need = 0, cnt = 0;
-    DB.tasks.forEach(function (t) { if (t.status === '待接') { need += planMin(t); cnt++; } });
-    html += '<div class="task-banner orange">解锁本区域全部目标，需消耗金币总额：' + fmtMoney(need) + '（' + cnt + ' 项）</div>';
+    var need = 0, cnt = 0, selAmt = 0, selCnt = 0;
+    DB.tasks.forEach(function (t) {
+      if (t.status !== '待接') return;
+      need += planMin(t); cnt++;
+      selAmt += taskSelectedAmount(t);
+      selCnt += taskSelectedCount(t);
+    });
+    // 顶部横幅数字随「本次购买」勾选实时联动：
+    //   无勾选 → 「当前已选采购总额：¥0.00」
+    //   有勾选 → 显示已勾选方案合计金额
+    // 用 id 挂载，勾选时原地刷新（taskPlanBuyToggle 调用），零延迟
+    html += '<div class="task-banner orange" id="task-banner-main">' + taskBannerMainHtml() + '</div>';
+    html += '<div class="task-banner-sub" id="task-banner-sub">' + taskBannerSubHtml(need, cnt) + '</div>';
   } else if (s.tab === '搁置') {
     var saved = 0, sc = 0;
     DB.tasks.forEach(function (t) { if (t.status === '搁置') { saved += planMin(t); sc++; } });
@@ -7683,7 +8018,11 @@ function taskPlanBuyToggle(tid, pid) {
   p.buy = on;
   saveDB();
   toast(on ? '☑️ 本次购买：' + (p.name || '方案') : '⬜ 不采购：' + (p.name || '方案'));
+  // 关键：横幅金额随勾选实时刷新（原地更新，勾选/取消的瞬间生效，无需退出重进）
+  refreshTaskBanner();
   renderTasks();
+  // 刷新后重新同步一次横幅（renderTasks 已重绘含横幅，此处兜底保证数字正确）
+  refreshTaskBanner();
   var card = document.querySelector('.task-card[data-task-id="' + Number(tid) + '"]');
   if (card) card.classList.add('flipped');
   taskHaptic();
