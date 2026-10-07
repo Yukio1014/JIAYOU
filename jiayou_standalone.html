@@ -139,7 +139,30 @@ body {
 }
 .btn-quiet:active { background: var(--bg); }
 /* 卡片底部操作区按钮统一高度，避免两行高矮不齐 */
-.btn-card-action { padding: 9px 8px; font-size: 13px; border-radius: 10px; }
+.btn-card-action { padding: 7px 6px; font-size: 12px; border-radius: 9px; }
+
+/* 第 12 轮：详情页操作区 —— 全部按钮强制同一行，图标为主 + 极小文字为辅 */
+.act-row {
+  display: flex; gap: 6px; margin-bottom: 12px;
+  flex-wrap: nowrap; align-items: stretch;
+}
+.act-row > button { flex: 1 1 0; min-width: 0; }
+.act-mini {
+  display: flex; flex-direction: row; align-items: center; justify-content: center;
+  gap: 4px; padding: 8px 2px; font-size: 15px; line-height: 1;
+  border-radius: 9px; white-space: nowrap; overflow: hidden;
+}
+.act-mini i {
+  font-style: normal; font-size: 11px; font-weight: 500;
+  color: var(--text-secondary); letter-spacing: 0;
+}
+/* 第 12 轮：记录行右侧的极简图标按钮 —— 方形小尺寸，纯图标无文字 */
+.rec-icon-btn {
+  flex-shrink: 0; width: 26px; height: 26px; padding: 0;
+  font-size: 12px; line-height: 1; border-radius: 7px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.rec-icon-danger { color: var(--text-tertiary); }
 
 /* ========== 卡片 ========== */
 .card { background: var(--card-bg); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
@@ -349,8 +372,8 @@ body {
 .stock-bar.high .stock-fill { background: linear-gradient(90deg, #34C759, #5AD680); }
 
 /* ========== 物品卡片网格 ========== */
-/* 第 10 轮：加大卡片间距与内边距，给文字留呼吸空间（ADHD 友好） */
-.item-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+/* 第 12 轮：缩小卡片间距（14 → 10），列表更紧凑、不浪费屏幕 */
+.item-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .item-card {
   background: var(--card-bg); border-radius: var(--radius);
   box-shadow: var(--shadow); overflow: hidden;
@@ -364,18 +387,18 @@ body {
   font-size: 40px; color: var(--text-tertiary);
 }
 .item-card .card-photo img { width: 100%; height: 100%; object-fit: cover; }
-.item-card .card-body { padding: 14px 14px 15px; }
-/* 第 11 轮：标题加大加粗（视觉第一名）；辅助信息缩小不加粗，柔和色 */
-.item-card .card-name { font-size: 17px; font-weight: 700; letter-spacing: -0.2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item-card .card-body { padding: 10px 12px 11px; }
+/* 第 12 轮：标题降噪 —— 15px/600（不再 17px/700），两列卡片内「生理期护理」也能完整显示 */
+.item-card .card-name { font-size: 15px; font-weight: 600; letter-spacing: -0.1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .item-card .card-info { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
 
 /* 耐用品紧凑卡片（无大照片区，隐私模式） */
 .item-card-compact {
-  min-height: 80px;
+  min-height: 0;
   display: flex; flex-direction: column; justify-content: center;
 }
-.item-card-compact .card-body { padding: 18px 15px; }
-.item-card-compact .card-name { font-size: 17px; font-weight: 700; }
+.item-card-compact .card-body { padding: 10px 12px 11px; }
+.item-card-compact .card-name { font-size: 15px; font-weight: 600; }
 
 /* 第 10 轮：小卡片属性标签降噪 —— 去掉彩色背景与边框，只留极简灰字/灰图标 */
 /* 属性 ≠ 状态：属性永远安静，彩色只留给真正需要行动的预警 */
@@ -390,12 +413,12 @@ body {
 .card-st.st-warn  { color: var(--orange); font-weight: 600; }
 /* ❗️ 告急：仅文字变红加粗，卡片级红色左边框由 .card-alert 承担 */
 .card-st.st-danger { color: var(--red); font-weight: 700; }
-/* 消耗模型标签：只留一个小灰图标（⚡ / ⌛），完全去文字与底色 */
+/* 第 12 轮：状态/模型图标 —— 极小、纯图标、不占文字空间 */
 .card-model {
-  flex-shrink: 0; font-size: 12px; font-weight: 400; padding: 0;
+  flex-shrink: 0; font-size: 11px; font-weight: 400; padding: 0;
   background: none; border: none; border-radius: 0;
-  white-space: nowrap; line-height: 1.4; color: var(--text-tertiary);
-  opacity: 0.75;
+  white-space: nowrap; line-height: 1; color: var(--text-tertiary);
+  opacity: 0.7;
 }
 .card-model.model-instant { color: var(--text-tertiary); }
 .card-model.model-cycle { color: var(--text-tertiary); }
@@ -413,25 +436,30 @@ body {
   box-shadow: 0 3px 12px rgba(255,59,48,0.26), var(--shadow);
 }
 
-/* 第 11 轮：卡片内留白节奏（保持上一版的呼吸感，绝不为了两列而压死） */
-.card-sec { margin-top: 9px; }         /* 段与段 */
-.card-sec-tight { margin-top: 6px; }   /* 段内行与行 */
-.card-price-zone { margin-top: 12px; } /* 主信息与下方按钮之间 */
+/* 第 12 轮：卡片内留白节奏 —— 整体收紧，卡片真正变扁 */
+.card-sec { margin-top: 6px; }         /* 段与段 */
+.card-sec-tight { margin-top: 4px; }   /* 段内行与行 */
+.card-price-zone { margin-top: 9px; }  /* 主信息与下方按钮之间 */
 
-/* 第 11 轮：标题 → 主数字 → 辅助信息 三级字号（层级一眼分明） */
-/* 第 11 轮：主数字（库存量）—— 17px（略降以适配两列，仍明显重于辅助信息） */
+/* 第 12 轮：字号层级重排（降噪核心） */
+/* 唯一被强调的数字 = 库存/余量（15px/600，常规黑），其余一律小字常规灰 */
 .card-hero {
-  font-size: 17px; font-weight: 700; line-height: 1.25;
-  color: var(--text-primary); letter-spacing: -0.2px;
+  font-size: 14px; font-weight: 600; line-height: 1.35;
+  color: var(--text-primary); letter-spacing: 0;
 }
 .card-hero-sub {
   font-size: 12px; font-weight: 400; color: var(--text-tertiary);
   margin-left: 6px; letter-spacing: 0;
 }
-/* 第 11 轮：辅助信息（品牌数等）—— 缩小、不加粗、柔和色，绝不抢标题视线 */
+/* 辅助信息（品牌数等）—— 小字、常规粗细、柔和色，绝不抢标题视线 */
 .card-meta {
-  font-size: 12px; font-weight: 400; color: var(--text-secondary);
+  font-size: 11.5px; font-weight: 400; color: var(--text-tertiary);
   line-height: 1.5;
+}
+/* 第 12 轮：卡片可用天数 —— 全卡唯一允许「大字号」的核心数据之外的第二强调 */
+.card-days {
+  font-size: 12px; font-weight: 500; color: var(--text-secondary);
+  line-height: 1.4; white-space: nowrap;
 }
 
 /* 变体缩略图网格（卡片背面） */
@@ -538,30 +566,32 @@ body {
 }
 
 /* 卡片背面 */
-.detail-back { padding: 16px; }
+.detail-back { padding: 14px 14px 20px; }
 .detail-back .back-header {
   display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 14px;
+  margin-bottom: 8px;
 }
-.detail-back .back-title { font-size: 18px; font-weight: 700; }
+.detail-back .back-title { font-size: 16px; font-weight: 600; letter-spacing: -0.2px; }
 .detail-back .back-close {
-  width: 30px; height: 30px; border-radius: 50%;
-  background: var(--bg); border: none; font-size: 16px;
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--bg); border: none; font-size: 13px;
   cursor: pointer; display: flex; align-items: center; justify-content: center;
+  color: var(--text-secondary);
 }
-.back-section { margin-bottom: 16px; }
+.back-section { margin-bottom: 14px; }
+/* 第 12 轮：区块标题不再大写加粗，改小字常规灰（降噪） */
 .back-section-title {
-  font-size: 12px; color: var(--text-secondary);
-  font-weight: 600; text-transform: uppercase;
-  letter-spacing: 0.5px; margin-bottom: 8px;
+  font-size: 12px; color: var(--text-tertiary);
+  font-weight: 500; text-transform: none;
+  letter-spacing: 0; margin-bottom: 7px;
 }
 .back-row {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 8px 0; border-bottom: 0.5px solid var(--separator); font-size: 14px;
+  padding: 6px 0; border-bottom: 0.5px solid var(--separator); font-size: 13px;
 }
 .back-row:last-child { border-bottom: none; }
-.back-row .back-label { color: var(--text-secondary); }
-.back-row .back-value { font-weight: 600; }
+.back-row .back-label { color: var(--text-secondary); font-weight: 400; }
+.back-row .back-value { font-weight: 500; }
 
 /* ========== 品牌变体卡片（统一规格）========== */
 .variant-card {
@@ -574,22 +604,24 @@ body {
 .variant-card:last-child { margin-bottom: 0; }
 .variant-card.vc-using { border-color: var(--orange); box-shadow: inset 3px 0 0 var(--orange); }
 .variant-card.vc-done { opacity: 0.72; }
-.vc-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
-.vc-brand { font-size: 16px; font-weight: 700; letter-spacing: -0.2px; line-height: 1.3; }
+.vc-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 9px; }
+/* 第 12 轮：品牌名 16→14px、去掉 700 加粗（辅助信息不该抢主数字） */
+.vc-brand { font-size: 14px; font-weight: 600; letter-spacing: 0; line-height: 1.35; }
 .vc-badge { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px; flex-shrink: 0; }
 .vc-badge.using { background: rgba(255,149,0,0.14); color: var(--orange); }
 .vc-badge.done { background: rgba(52,199,89,0.14); color: var(--green); }
 .vc-badge.norestock { background: rgba(142,142,147,0.16); color: var(--text-secondary); }
 .variant-card.vc-norestock { opacity: 0.66; border-style: dashed; }
-.vc-price-line { display: flex; align-items: baseline; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
-.vc-price { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
+.vc-price-line { display: flex; align-items: baseline; gap: 8px; margin-bottom: 9px; flex-wrap: wrap; }
+/* 第 12 轮：价格是全页唯一保留的大数字（17px/600），其余一律小字常规 */
+.vc-price { font-size: 17px; font-weight: 600; letter-spacing: -0.3px; }
 .vc-price-note { font-size: 12px; color: var(--text-secondary); }
-.vc-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; padding-top: 12px; border-top: 0.5px dashed var(--separator); }
+.vc-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 9px 12px; padding-top: 10px; border-top: 0.5px dashed var(--separator); }
 .vc-meta-item { min-width: 0; }
-.vc-meta-label { font-size: 11px; color: var(--text-secondary); margin-bottom: 2px; }
-.vc-meta-value { font-size: 13px; font-weight: 600; line-height: 1.4; word-break: break-all; }
+.vc-meta-label { font-size: 11px; color: var(--text-tertiary); margin-bottom: 2px; }
+.vc-meta-value { font-size: 12px; font-weight: 400; color: var(--text-primary); line-height: 1.45; word-break: break-all; }
 .vc-meta-item.wide { grid-column: 1 / -1; }
-.vc-meta-item.wide .vc-meta-value { color: var(--text-secondary); font-weight: 500; font-size: 12px; }
+.vc-meta-item.wide .vc-meta-value { color: var(--text-secondary); font-weight: 400; font-size: 12px; }
 .vc-feel { margin-top: 12px; padding-top: 12px; border-top: 0.5px dashed var(--separator); }
 .vc-stars { font-size: 14px; line-height: 1.2; }
 .vc-tags { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
@@ -3822,16 +3854,16 @@ function renderItemCard(item, zone) {
   // 把分级类补进已开出的卡片标签
   html = html.replace('class="item-card item-card-compact"', 'class="item-card item-card-compact' + tierCls + '"');
 
-  // ========== 第一段：产品名（整张卡的标题，最大最重）==========
-  // 右上角只放「极简灰属性」：⚡/⌛ 模型图标 + 状态小字，全部去底色去边框
-  html += '<div style="display:flex;align-items:baseline;gap:8px">';
+  // ========== 第一段：产品名 + 右侧极简图标（模型 ⚡/⌛ + 状态 💭/🌀/⚠️/❗️）==========
+  // 第 12 轮：右侧不再出现「2 个品牌」这类文字，只留两个极小图标，把宽度全还给标题
+  html += '<div style="display:flex;align-items:center;gap:6px">';
   html += '<div class="card-name" style="flex:1;min-width:0">' + escapeHtml(item.name) + '</div>';
   if (stL) {
     var mdlC = (cModelC === 'instant') ? '⚡' : '⌛';
-    html += '<span style="flex-shrink:0;display:inline-flex;align-items:center;gap:5px">'
-      + '<span class="card-model ' + ((cModelC === 'instant') ? 'model-instant' : 'model-cycle') + '" title="'
-      + ((cModelC === 'instant') ? '即时消耗型' : '周期消耗型') + '">' + mdlC + '</span>'
-      + '<span class="card-st ' + stL.cls + '">' + stL.icon + ' ' + stL.label + '</span>'
+    var mdlTxt = (cModelC === 'instant') ? '即时消耗型' : '周期消耗型';
+    html += '<span style="flex-shrink:0;display:inline-flex;align-items:center;gap:3px;line-height:1">'
+      + '<span class="card-model" title="' + mdlTxt + '">' + mdlC + '</span>'
+      + '<span class="card-st ' + stL.cls + '" title="' + stL.label + '">' + stL.icon + '</span>'
       + '</span>';
   }
   html += '</div>';
@@ -3851,37 +3883,51 @@ function renderItemCard(item, zone) {
       }
     }
   } else {
-    // ========== 第二段：核心库存信息（扁平单行，节省纵向空间）==========
-    // 第 11 轮：库存量 + 品牌数合并到同一行；品牌数降为小灰字，不抢主数字
+    // ========== 第二段：库存（唯一强调数字） + 可用天数（同一行、左对齐、可换行）==========
+    // 第 12 轮：取消全部加粗；主数字 14px/600 黑，副信息 12px/400 灰，字号接近但层级靠颜色和字重区分
     var stkFull = String(stockSummaryOf(item));
     var stkParts = stkFull.split('·');
     var heroTxt = stkParts[0].trim();
     var heroSub = stkParts.slice(1).join('·').trim();
-    html += '<div class="card-sec" style="display:flex;align-items:baseline;gap:8px;flex-wrap:nowrap">';
-    html += '<span class="card-hero" style="min-width:0">' + escapeHtml(heroTxt);
+    html += '<div class="card-sec" style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">';
+    html += '<span class="card-hero" style="min-width:0">' + escapeHtml(heroTxt) + '</span>';
     if (heroSub) html += '<span class="card-hero-sub">' + escapeHtml(heroSub) + '</span>';
-    html += '</span>';
-    if (variantCount > 0) {
-      html += '<span class="card-meta" style="flex-shrink:0">' + variantCount + ' 个品牌</span>';
-    }
+    // 可用天数：全卡第二个（也是最后一个）被强调的数据，不做加粗，只做深灰
+    var daysTxtC = cardDaysText(item, status);
+    if (daysTxtC) html += '<span class="card-days">' + escapeHtml(daysTxtC) + '</span>';
     html += '</div>';
 
-    // ========== 第三段：操作按钮（底部）==========
-    // 主次分明：日常操作「消耗/开封」＝ 浅色白底（次要）；
-    //          「补货」＝ 现有 btn-outline 强调样式（重要操作）
-    html += '<div class="card-price-zone" style="display:flex;gap:9px">';
+    // ========== 第三段：操作按钮（底部，压缩高度）==========
+    html += '<div class="card-price-zone" style="display:flex;gap:7px">';
     if (isInstantC) {
-      // 【第 10 轮】走选择器：多品牌时让用户明确选扣哪个，单一品牌时自动扣 1
+      // 走选择器：多品牌时让用户明确选扣哪个，单一品牌时自动扣 1
       html += '<button class="btn btn-quiet btn-card-action" style="flex:1" onclick="event.stopPropagation();punchInstantPick(\'' + item.id + '\')">✨ 消耗</button>';
     } else {
       html += '<button class="btn btn-quiet btn-card-action" style="flex:1" onclick="event.stopPropagation();openItem(\'' + item.id + '\')">🔅 开封</button>';
     }
-    html += '<button class="btn btn-outline btn-card-action" style="flex:1;font-weight:600" onclick="event.stopPropagation();openRestockForm(\'' + item.id + '\')">🛒 补货</button>';
+    html += '<button class="btn btn-card-action" style="flex:1;background:transparent;border:1px solid var(--separator);color:var(--text-secondary);font-weight:500" onclick="event.stopPropagation();openRestockForm(\'' + item.id + '\')">🛒 补货</button>';
     html += '</div>';
   }
 
   html += '</div></div>';
   return html;
+}
+
+// 第 12 轮：卡片第二行的「可用天数」文案 —— 只在数据算得出来时显示，避免乱报
+// 口径与状态标签保持一致：数据不足一律留空（不显示「? 天」这种废话）
+function cardDaysText(item, status) {
+  try {
+    var st = status || getItemStatus(item);
+    if (!st) return '';
+    // 保质期临近优先（这是事实提醒）
+    if (st.expired) return '';
+    if (st.expiring && st.daysLeft !== null && st.daysLeft !== undefined) return '· 剩 ' + st.daysLeft + ' 天过期';
+    var d = st.estDaysLeft;
+    if (d === null || d === undefined) return '';
+    d = Math.max(0, Math.round(d));
+    if (d > 365 * 2) return '';
+    return '· 可用 ≈ ' + d + ' 天';
+  } catch (e) { return ''; }
 }
 
 // ========== 状态对账（Reconcile）==========
@@ -4465,30 +4511,27 @@ function renderCardBack(item, zone) {
 
     // === 操作区（分类下一行）===
     // 第 11 轮：统一浅灰边框（btn-outline），去掉蓝色主按钮 —— 颜色留给预警与补货
-    // 即时型：[✨ 消耗][↺ 回退][⚖️ 盘点][💸 补货]
-    // 周期型：[🔅 开封][⚖️ 盘点][💸 委托]
+    // 第 12 轮：即时型 5 按钮压成同一行（flex-wrap:nowrap），图标为主 + 极小文字；
+    //          最后一个按钮由「补货」改为「委托」（补货属于委托流程的一环）
     if (isInstantB) {
-      var iuB = (function () {
-        var vT = (item.variants || []).find(function (x) { return x.id === instantTargetVariant(item); });
-        return (vT && vT.packUnit) || mainPackUnit(item) || '份';
-      })();
       var lastInstIdx = -1;
       for (var lb = (item.usageRecords || []).length - 1; lb >= 0; lb--) {
         if (item.usageRecords[lb] && item.usageRecords[lb].instant) { lastInstIdx = lb; break; }
       }
       var canUndo = (lastInstIdx >= 0);
-      html += '<div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">';
-      html += '<button class="btn btn-outline btn-sm" style="flex:1;min-width:calc(50% - 3px);font-size:12px;padding:7px 4px" onclick="punchInstantPick(\'' + item.id + '\')">✨ 消耗</button>';
-      html += '<button class="btn btn-outline btn-sm" style="flex:1;min-width:calc(50% - 3px);font-size:12px;padding:7px 4px' + (canUndo ? '' : ';opacity:0.45') + '" onclick="' + (canUndo ? 'unpunchInstant(\\\'' + item.id + '\\\',\\\'' + instantTargetVariant(item) + '\\\')' : 'toast(\\\'还没有可回退的消耗记录\\\')') + '">↺ 回退</button>';
-      html += '<button class="btn btn-outline btn-sm" style="flex:1;min-width:calc(50% - 3px);font-size:12px;padding:7px 4px" onclick="batchPunchInstant(\'' + item.id + '\',\'' + instantTargetVariant(item) + '\')">🪄 批量</button>';
-      html += '<button class="btn btn-outline btn-sm" style="flex:1;min-width:calc(50% - 3px);font-size:12px;padding:7px 4px" onclick="openStockAuditForm(\'' + item.id + '\')">⚖️ 盘点</button>';
-      html += '<button class="btn btn-outline btn-sm" style="flex:1;min-width:calc(50% - 3px);font-size:12px;padding:7px 4px;font-weight:600" onclick="openRestockForm(\'' + item.id + '\')">💸 补货</button>';
+      var opBtn = 'btn btn-outline btn-sm act-mini';
+      html += '<div class="act-row">';
+      html += '<button class="' + opBtn + '" onclick="punchInstantPick(\'' + item.id + '\')">✨<i>消耗</i></button>';
+      html += '<button class="' + opBtn + '"' + (canUndo ? '' : ' style="opacity:0.4"') + ' onclick="' + (canUndo ? 'unpunchInstant(\\\'' + item.id + '\\\',\\\'' + instantTargetVariant(item) + '\\\')' : 'toast(\\\'还没有可回退的消耗记录\\\')') + '">↺<i>回退</i></button>';
+      html += '<button class="' + opBtn + '" onclick="batchPunchInstant(\'' + item.id + '\',\'' + instantTargetVariant(item) + '\')">🪄<i>批量</i></button>';
+      html += '<button class="' + opBtn + '" onclick="openStockAuditForm(\'' + item.id + '\')">⚖️<i>盘点</i></button>';
+      html += '<button class="' + opBtn + '" onclick="taskFromItem(\'' + zone.id + '\',\'' + item.id + '\')">💸<i>委托</i></button>';
       html += '</div>';
     } else {
-      html += '<div style="display:flex;gap:8px;margin-bottom:8px">';
-      html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="openItem(\'' + item.id + '\')">🔅 开封</button>';
-      html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="openStockAuditForm(\'' + item.id + '\')">⚖️ 盘点</button>';
-      html += '<button class="btn btn-outline btn-sm" style="flex:1" onclick="taskFromItem(\'' + zone.id + '\',\'' + item.id + '\')">💸 委托</button>';
+      html += '<div class="act-row act-row-3">';
+      html += '<button class="btn btn-outline btn-sm act-mini" onclick="openItem(\'' + item.id + '\')">🔅<i>开封</i></button>';
+      html += '<button class="btn btn-outline btn-sm act-mini" onclick="openStockAuditForm(\'' + item.id + '\')">⚖️<i>盘点</i></button>';
+      html += '<button class="btn btn-outline btn-sm act-mini" onclick="taskFromItem(\'' + zone.id + '\',\'' + item.id + '\')">💸<i>委托</i></button>';
       html += '</div>';
     }
 
@@ -4500,16 +4543,16 @@ function renderCardBack(item, zone) {
     var cModelR = consumeModelOf(item);
     html += '<div style="padding:11px 13px;border-radius:11px;background:var(--bg-secondary);margin-bottom:14px">';
 
-    // ① 总库存（主数字，最大最重）
+    // ① 总库存（主数字 —— 唯一保留 600 权重，字号降到 14px）
     html += '<div style="display:flex;align-items:baseline;gap:8px">';
     html += '<span style="font-size:12px;color:var(--text-secondary)">📦 总库存</span>';
     html += '<span style="flex:1"></span>';
-    html += '<b style="font-size:15px;color:var(--text-primary);font-weight:700">' + escapeHtml(stockSummaryOf(item)) + '</b>';
+    html += '<span style="font-size:14px;color:var(--text-primary);font-weight:600">' + escapeHtml(stockSummaryOf(item)) + '</span>';
     html += '</div>';
 
     // ② 告急阈值（小字，保持原有弱化地位，位置不动）
     if (item.stockThreshold) {
-      html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:5px">🔔 告急阈值 <b style="color:var(--text-primary);font-weight:600">' + item.stockThreshold + mainPackUnit(item) + '</b></div>';
+      html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">🔔 告急阈值 <span style="color:var(--text-primary);font-weight:500">' + item.stockThreshold + mainPackUnit(item) + '</span></div>';
     }
 
     // ③ 数据支撑：月消耗量 / 年消耗量（第 11 轮：从「消耗概览」上移，紧挨采购建议）
@@ -4526,13 +4569,13 @@ function renderCardBack(item, zone) {
       }
     }
     if (rateLine) {
-      html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:5px">📈 ' + rateLine + '</div>';
+      html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">📈 ' + rateLine + '</div>';
     } else {
-      html += '<div style="font-size:12px;color:var(--text-tertiary);margin-top:5px">📈 消耗速度：缺少数据（继续记录会更准）</div>';
+      html += '<div style="font-size:12px;color:var(--text-tertiary);margin-top:4px">📈 消耗速度：缺少数据（继续记录会更准）</div>';
     }
 
     // ④ 采购建议（第 11 轮：独占一行，位于模块最底部；文字再长也放得下）
-    html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:8px;padding-top:9px;border-top:1px solid var(--separator);line-height:1.6">🛒 采购建议<br><b style="color:' + (advB ? 'var(--accent)' : 'var(--text-tertiary)') + ';font-weight:600;font-size:13px">' + escapeHtml(advTxtB) + '</b></div>';
+    html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:7px;padding-top:8px;border-top:1px solid var(--separator);line-height:1.55">🛒 采购建议<br><span style="color:' + (advB ? 'var(--accent)' : 'var(--text-tertiary)') + ';font-weight:500;font-size:13px">' + escapeHtml(advTxtB) + '</span></div>';
 
     html += '</div>';
 
@@ -4624,18 +4667,19 @@ function renderCardBack(item, zone) {
           var iuUV = v.packUnit || mainPackUnit(item) || '份';
           var usedYearV = instantUsedQty(item, v.id);
           var recentV = instRecsV.slice(-3).reverse();
-          html += '<div style="margin-top:8px;border-top:1px dashed var(--separator);padding-top:8px">';
-          html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">';
-          html += '<span style="flex:1;font-size:12px;font-weight:600;color:var(--text-tertiary)">✨ 消耗记录 ' + instRecsV.length + ' 条</span>';
-          html += '<span style="font-size:11px;color:var(--accent);font-weight:600">今年已用 ' + trimNum(usedYearV) + escapeHtml(iuUV) + '</span>';
+          html += '<div style="margin-top:7px;border-top:1px dashed var(--separator);padding-top:7px">';
+          html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:2px">';
+          html += '<span style="flex:1;font-size:11px;font-weight:500;color:var(--text-tertiary)">✨ 消耗记录 ' + instRecsV.length + ' 条</span>';
+          html += '<span style="font-size:11px;color:var(--text-tertiary);font-weight:400">今年已用 ' + trimNum(usedYearV) + escapeHtml(iuUV) + '</span>';
           html += '</div>';
           recentV.forEach(function (w) {
             var r = w.r;
             var dTxt = r.startDate ? formatDate(r.startDate) : '—';
-            html += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0">';
+            html += '<div style="display:flex;align-items:center;gap:6px;padding:3px 0">';
             html += '<span style="flex:1;min-width:0;font-size:12px;color:var(--text-secondary)">✨ ' + (r.batch ? '批量 ' : '') + '消耗 -' + trimNum(r.qty) + ' ' + escapeHtml(iuUV) + ' · ' + dTxt + '</span>';
-            html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0;font-size:11px;padding:3px 8px" onclick="openUsageEdit(\'' + item.id + '\',' + w.i + ')">🪄</button>';
-            html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0;font-size:11px;padding:3px 8px;color:var(--red);border-color:rgba(255,59,48,0.3)" onclick="deleteInstantRecordConfirm(\'' + item.id + '\',' + w.i + ')">🗑️</button>';
+            // 第 12 轮：记录右侧只留极简图标（🪄 改 / 🗑️ 删），去掉文字
+            html += '<button class="btn btn-outline rec-icon-btn" title="修改这条记录" onclick="openUsageEdit(\'' + item.id + '\',' + w.i + ')">🪄</button>';
+            html += '<button class="btn btn-outline rec-icon-btn rec-icon-danger" title="撤销这条消耗（库存回退）" onclick="deleteInstantRecordConfirm(\'' + item.id + '\',' + w.i + ')">↩️</button>';
             html += '</div>';
           });
           if (instRecsV.length > 3) {
@@ -4664,8 +4708,8 @@ function renderCardBack(item, zone) {
             html += '<div style="font-size:13px;line-height:1.4">📅 ' + dTxt + ' 起 · 已用 ' + dDays + ' 天</div>';
             html += '<div style="font-size:11px;color:var(--text-secondary)">' + qTxt + '</div>';
             html += '</div>';
-            html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0;font-size:11px;padding:5px 8px" onclick="openUsageEdit(\'' + item.id + '\',' + oi + ')">✏️</button>';
-            html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0;font-size:11px;padding:5px 8px" onclick="finishOpenRec(\'' + item.id + '\',' + oi + ')">✅ 这件用完</button>';
+            html += '<button class="btn btn-outline rec-icon-btn" title="修改这条记录" onclick="openUsageEdit(\'' + item.id + '\',' + oi + ')">✏️</button>';
+            html += '<button class="btn btn-outline rec-icon-btn" style="width:auto;padding:0 9px" onclick="finishOpenRec(\'' + item.id + '\',' + oi + ')">✅ 用完</button>';
             html += '</div>';
           });
           html += '</div>';
@@ -4699,9 +4743,9 @@ function renderCardBack(item, zone) {
         if (v.feeling && (v.feeling.rating || (v.feeling.tags && v.feeling.tags.length > 0) || v.feeling.notes)) {
           html += '<div class="vc-feel">';
           html += '<div class="vc-feel-head">';
-          html += '<span style="flex:1;font-size:11px;font-weight:600;color:var(--text-tertiary)">💕 我的感受</span>';
-          html += '<button class="btn btn-outline btn-sm" style="font-size:11px;padding:3px 8px" onclick="openVariantFeelingForm(\'' + item.id + '\',\'' + v.id + '\')">🪄 编辑</button>';
-          html += '<button class="btn btn-outline btn-sm" style="font-size:11px;padding:3px 8px;color:var(--red);border-color:rgba(255,59,48,0.3)" onclick="removeVariantFeeling(\'' + item.id + '\',\'' + v.id + '\')">🗑️ 删除</button>';
+          html += '<span style="flex:1;font-size:11px;font-weight:500;color:var(--text-tertiary)">💕 我的感受</span>';
+          html += '<button class="btn btn-outline rec-icon-btn" title="编辑感受" onclick="openVariantFeelingForm(\'' + item.id + '\',\'' + v.id + '\')">🪄</button>';
+          html += '<button class="btn btn-outline rec-icon-btn rec-icon-danger" title="删除感受" onclick="removeVariantFeeling(\'' + item.id + '\',\'' + v.id + '\')">🗑️</button>';
           html += '</div>';
           if (v.feeling.rating) {
             html += '<div class="vc-stars">';
@@ -4724,10 +4768,11 @@ function renderCardBack(item, zone) {
         if (isUsing) {
           footBtns += '<button class="btn btn-outline btn-sm" onclick="finishVariant(\'' + item.id + '\',\'' + v.id + '\')">✅ ' + (actCountV > 1 ? '用完最早这' + (variantSpecsOf(v).length ? '包' : '件') : '用完了') + '</button>';
         } else if (isDone) {
-          footBtns += '<button class="btn btn-outline btn-sm" onclick="undoFinishVariant(\'' + item.id + '\',\'' + v.id + '\')">↩️ 撤销</button>';
+          // 第 12 轮：撤销类按钮只留图标，去掉「撤销」二字
+          footBtns += '<button class="btn btn-outline btn-sm" title="撤销「已用完」" onclick="undoFinishVariant(\'' + item.id + '\',\'' + v.id + '\')">↩️</button>';
         } else {
           var hasEndedRec = (item.usageRecords || []).some(function(r) { return r.variantId === v.id && r.endDate; });
-          if (hasEndedRec) footBtns += '<button class="btn btn-outline btn-sm" onclick="undoFinishVariant(\'' + item.id + '\',\'' + v.id + '\')">↩️ 撤销</button>';
+          if (hasEndedRec) footBtns += '<button class="btn btn-outline btn-sm" title="撤销「已用完」" onclick="undoFinishVariant(\'' + item.id + '\',\'' + v.id + '\')">↩️</button>';
         }
         if (footBtns) { html += '<div class="vc-foot">' + footBtns + '</div>'; }
         html += '</div>';
@@ -4752,13 +4797,13 @@ function renderCardBack(item, zone) {
       html += '<div class="back-section">';
       html += '<div class="back-section-title" style="display:flex;align-items:center;gap:6px;margin-bottom:6px">'
         + '<span style="flex:1">📒 使用记录 (' + recCntO + ' 条)</span>'
-        + (actNowR > 0 ? '<span style="flex-shrink:0;font-size:11px;color:var(--orange);font-weight:700">' + actNowR + ' 件使用中</span>' : '')
-        + '<button class="btn btn-outline btn-sm" style="flex-shrink:0;font-size:11px;padding:3px 8px" onclick="openFinishPick(\'' + item.id + '\')">✅ 用完</button>'
-        + '<button class="btn btn-outline btn-sm" style="flex-shrink:0;font-size:11px;padding:3px 8px" onclick="openRecordPick(\'' + item.id + '\')">🪄 编辑</button>'
+        + (actNowR > 0 ? '<span style="flex-shrink:0;font-size:11px;color:var(--orange);font-weight:500">' + actNowR + ' 件使用中</span>' : '')
+        + '<button class="btn btn-outline rec-icon-btn" style="width:auto;padding:0 8px;font-size:11px" onclick="openFinishPick(\'' + item.id + '\')">✅ 用完</button>'
+        + '<button class="btn btn-outline rec-icon-btn" style="width:auto;padding:0 8px;font-size:11px" onclick="openRecordPick(\'' + item.id + '\')">🪄 编辑</button>'
         + '</div>';
       html += '<details class="ledger-fold ov-fold">';
       html += '<summary><span style="font-size:14px">📊</span><span style="flex:1">消耗概览 (' + recCntO + ' 条记录)</span>';
-      if (actNowR > 0) html += '<span style="font-size:11px;color:var(--orange);font-weight:700">' + actNowR + ' 件使用中</span>';
+      if (actNowR > 0) html += '<span style="font-size:11px;color:var(--orange);font-weight:500">' + actNowR + ' 件使用中</span>';
       html += '<span class="ov-caret">▼</span></summary>';
       html += '<div style="margin-top:10px">';
       // --- 摘要行 ---
@@ -4892,8 +4937,8 @@ function renderCardBack(item, zone) {
           }
           html += '<div class="open-record" style="cursor:pointer;display:flex;align-items:center;gap:8px" onclick="openUsageEdit(\'' + item.id + '\',' + w.oi + ')"><span style="flex:1;min-width:0">' + recTxt + '</span>'
             + (r.isAudit
-              ? '<button class="btn btn-outline btn-sm" style="flex-shrink:0;font-size:11px;padding:2px 8px;color:var(--accent);border-color:rgba(90,200,250,0.45)" onclick="event.stopPropagation();openUsageEdit(\'' + item.id + '\',' + w.oi + ')">✏️ 改周期</button>'
-              : '<button class="btn btn-outline btn-sm" style="flex-shrink:0;font-size:11px;padding:2px 8px" onclick="event.stopPropagation();openUsageEdit(\'' + item.id + '\',' + w.oi + ')">✏️ 修改</button>')
+              ? '<button class="btn btn-outline rec-icon-btn" title="改周期" style="width:auto;padding:0 8px;color:var(--accent);border-color:rgba(90,200,250,0.45)" onclick="event.stopPropagation();openUsageEdit(\'' + item.id + '\',' + w.oi + ')">✏️ 改周期</button>'
+              : '<button class="btn btn-outline rec-icon-btn" title="修改这条记录" onclick="event.stopPropagation();openUsageEdit(\'' + item.id + '\',' + w.oi + ')">🪄</button>')
             + '</div>';
         });
         html += '</div>';
@@ -5294,8 +5339,8 @@ function manualRefresh() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791374416 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791374416';
+// deploy.py 部署时会把 1791376383 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791376383';
 
 function checkAppUpdate(manual) {
   try {
