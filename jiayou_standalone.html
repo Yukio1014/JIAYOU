@@ -3662,6 +3662,16 @@ function openCardDetail(zoneId, itemId) {
   document.getElementById('card-detail-overlay').classList.add('show');
 }
 
+// 消耗模型徽章：卡片标题右手边直接显示当前模型（件数/规格/即时/组合），
+// 免得每个物品都要点进编辑页才能看到/确认是哪个模型。点击徽章直达编辑。
+function consumeModelBadgeHtml(item) {
+  var mk = consumeModelOf(item);
+  var mm = CONSUME_MODELS[mk] || { icon: '❓', name: mk, desc: '' };
+  return '<button onclick="event.stopPropagation();editItem(\'' + item.id + '\')" '
+    + 'title="' + (mm.desc || '').replace(/"/g, '&quot;') + '（点此修改模型）" '
+    + 'style="display:inline-block;margin-left:8px;padding:2px 8px;border-radius:6px;background:rgba(10,132,255,0.10);color:var(--accent);font-size:12px;font-weight:600;vertical-align:middle;border:none;cursor:pointer;white-space:nowrap">'
+    + mm.icon + ' ' + mm.name + '</button>';
+}
 function renderCardFront(item, zone) {
   var isDurable = zone.type !== 'consumable';
   var html = '<div class="detail-front">';
@@ -3670,7 +3680,7 @@ function renderCardFront(item, zone) {
   html += isDurable ? '👕' : '📦';
   html += '</div>';
   html += '<div class="detail-body">';
-  html += '<div class="detail-name">' + escapeHtml(item.name) + '</div>';
+  html += '<div class="detail-name">' + escapeHtml(item.name) + consumeModelBadgeHtml(item) + '</div>';
   var catPath = getCategoryPath(zone.id, item.categoryId);
   html += '<div class="detail-cat">' + zone.icon + ' ' + zone.name + (catPath ? ' · ' + catPath : '') + '</div>';
 
@@ -3721,7 +3731,7 @@ function renderCardFront(item, zone) {
 function renderCardBack(item, zone) {
   var html = '<div class="detail-back">';
   html += '<div class="back-header">';
-  html += '<div class="back-title">' + escapeHtml(item.name) + '</div>';
+  html += '<div class="back-title">' + escapeHtml(item.name) + consumeModelBadgeHtml(item) + '</div>';
   if (item.oneShot === true) {
     html += '<div style="display:inline-block;margin-left:8px;padding:2px 8px;border-radius:6px;background:rgba(255,149,0,0.12);color:var(--orange);font-size:12px;font-weight:600;vertical-align:middle">⚡ 开袋即用完</div>';
   }
@@ -4463,8 +4473,8 @@ function closeCardDetail() {
 }
 
 // ========== 自动更新检查 ==========
-// deploy.py 部署时会把 1791352169 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791352169';
+// deploy.py 部署时会把 1791353332 替换为构建时间戳，并上传同目录 version.json
+var APP_VERSION = '1791353332';
 
 function checkAppUpdate(manual) {
   try {
