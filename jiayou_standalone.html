@@ -1099,11 +1099,6 @@ var DB = {
 };
 
 // 板块类型: consumable(补给品) / durable(耐用品)
-var ZONE_TYPES = {
-  consumable: { name: '补给品', icon: '🦦', desc: '会用完、会过期、需要补货' },
-  durable: { name: '耐用品', icon: '🐨', desc: '外观库、配件等耐用品' }
-};
-
 // ========== IndexedDB 存储（iOS PWA 更可靠） ==========
 var DB_NAME = 'jiayou_app_db';
 var STORE_NAME = 'data';
@@ -1561,18 +1556,6 @@ function variantIsMixed(v) {
 //   ② 多行但所有规格容量(含单位)完全相同 → 仍视为单一规格；
 //   ③ 多行且存在容量差异 → 多规格（速率/采购必须穿透到具体规格，绝不用整套均值或总量）。
 //   ④ 没有规格明细 → 退化为单一规格（按单件容量算），杜绝「整套餐均值」乱算。
-function variantIsMultiSpec(v) {
-  var ss = variantSpecsOf(v);
-  if (ss.length <= 1) return false;            // 0/1 行 → 单一规格
-  var seen = {}, any = false;
-  ss.forEach(function (s) {
-    var cap = Math.round(specPackQty(s) * specContentOf(s) * 100) / 100;  // 该规格真实容量
-    var u = String(s.unit || '').trim();
-    if (cap > 0) { any = true; seen[cap + '|' + u] = 1; }
-  });
-  if (!any) return false;                       // 都没填容量 → 退化为单一规格（防均值乱算）
-  return Object.keys(seen).length > 1;           // 容量有差异 → 多规格
-}
 // 均值单件容量（ml/g 等含量单位才有意义；片/粒类返回 0）
 function variantAvgPiece(v) {
   var ss = variantSpecsOf(v); if (!ss.length) return 0;
@@ -2729,9 +2712,7 @@ function stockBarClass(item, status) {
 // ==========================================================================
 var R24_DAYS_PER_MONTH = 31;
 var R24_MONTHS_PER_YEAR = 12;
-var R24_DAYS_PER_YEAR = 372;
 var NO_DATA_TEXT = '📭 缺数据，请等至少1个完整周期用完后再查看建议。';
-var NO_DATA_SHORT = '📭 缺数据';
 var SUFFICIENT_TEXT = '库存充足，暂无需采购';
 var NO_MATCH_TEXT = '未找到相关产品';
 
@@ -2820,12 +2801,6 @@ function isSetPackMode(item) {
   return consumeModelOf(item) !== 'instant' &&
     item.variants.some(function (v) { return (parseFloat(v.packQty) || 1) > 1 && !variantSpecsOf(v).length; });
 }
-function avgPackQtyOf(item) {
-  if (!item || !item.variants || !item.variants.length) return 1;
-  var t = 0, n = 0;
-  item.variants.forEach(function (v) { t += (parseFloat(v.packQty) || 1); n++; });
-  return n ? (t / n) : 1;
-}
 function round1(x) { return Math.round((+x || 0) * 10) / 10; }
 
 // ---------- 库存：纯数字，剩余 vs 累计购入严格分离 ----------
@@ -2896,18 +2871,6 @@ function avgCapOf(item) {
   return (pcsT > 0 && capT > 0) ? Math.round(capT / pcsT * 100) / 100 : 0;
 }
 // 某品牌变体的「每件容量」：牙膏=120g/支；规格明细型=每包含量×每份规格
-function perPieceCapOf(v) {
-  if (!v) return null;
-  var sp = variantSpecsOf(v);
-  if (sp.length) {
-    var q = specPackQty(sp[0]) * specContentOf(sp[0]);
-    var u = String(sp[0].unit || v.packWeightUnit || '').trim();
-    return (q > 0) ? { qty: q, unit: u } : null;
-  }
-  var w = parseFloat(v.packWeight);
-  if (w > 0) return { qty: w, unit: String(v.packWeightUnit || v.weightUnit || '').trim() };
-  return null;
-}
 // 历史累计购入总量（口径与 restNowOf 完全同源）：Σ 变体「购入件数 × 单件量」
 // 清空记录时库存必须回滚到这个数 —— 「记录没了，库存却少了」是绝不能接受的错账。
 function boughtTotalOf(item) {
@@ -4443,7 +4406,6 @@ function renderCardBack(item, zone) {
     var isInstantB = (cModel === 'instant'); // 即时消耗型：顶部一行四按钮
     // === 副标题：分类 · 存放位置（左） + [🪄 编辑][💾 归档][⚰️ 永删]（右） ===
     // 第 11 轮：去掉右上角「⋯」三点菜单（功能重复），改为分类右侧三个明确按钮
-    var allOffB = (item.variants || []).length > 0 && item.variants.every(function (v) { return v.noRestock; });
     html += '<div style="display:flex;align-items:center;gap:8px;margin:-2px 0 8px">';
     html += '<div style="flex:1;min-width:0;font-size:12px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
       + (getCategoryPath(zone.id, item.categoryId) || '未分类')
@@ -4484,7 +4446,6 @@ function renderCardBack(item, zone) {
     // === 信息区（第 11 轮：逻辑链 总库存 → 告急阈值 → 月/年消耗量 → 采购建议）===
     // 严格按「我有多少 → 低于多少该补 → 用多快 → 所以我该买什么」排列
     var advB = buyAdviceOf(item);
-    var rateB = calcUsageRate(item);
     var cModelR = consumeModelOf(item);
     // 【第 18 轮】总库存旁标注「使用中」实物：0 包 ≠ 断粮，用户一眼看到还有多少在手里消耗
     var iuDtl18 = (cModelR !== 'instant') ? inUseStockOf(item) : null;
@@ -4598,7 +4559,6 @@ function renderCardBack(item, zone) {
         var actRecsV = variantActiveOpenRecs(item, v);
         var actCountV = actRecsV.length;
         // 第 11 轮：品牌名与「💕感受 / 🚮弃用」并排 —— 感受只属于具体品牌，主卡不再有入口
-        var hasFeelV = !!(v.feeling && (v.feeling.rating || (v.feeling.tags && v.feeling.tags.length > 0) || v.feeling.notes));
         html += '<div class="vc-head" style="gap:6px">';
         html += '<div class="vc-brand" style="flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(v.brand || '未命名') + '</div>';
         // 状态徽章紧跟名字
@@ -5023,8 +4983,6 @@ function flipCard() {
 var _viewerPhotos = [];
 var _viewerIndex = 0;
 var _viewerScale = 1;
-var _viewerStartX = 0;
-var _viewerStartY = 0;
 var _viewerLastDist = 0;
 
 function openPhotoViewer(photos, index) {
@@ -5349,7 +5307,7 @@ function manualRefresh() {
 
 // ========== 自动更新检查 ==========
 // deploy.py 部署时会把 1791388211 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791485037';
+var APP_VERSION = '1791485550';
 
 function checkAppUpdate(manual) {
   try {
@@ -5755,7 +5713,7 @@ function finishOpenRec(itemId, recIdx) {
   var nowISO = new Date().toISOString();
   var isToday = false;
   if (rec.startDate) {
-    var sd = new Date(rec.startDate), nd = new Date();
+    var nd = new Date();
     isToday = new Date(rec.startDate).toDateString() === nd.toDateString();
   }
   // 0 天防御：同一天开、同一天用完 → 结束日期退到次日，避免生成 0 天记录污染速率
