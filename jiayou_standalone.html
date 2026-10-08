@@ -12,7 +12,6 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
 <title>家有</title>
-<script src="supabase.js?v=2" defer></script>
 <style>
 /* ========== 设计系统 ========== */
 :root {
@@ -58,19 +57,6 @@ body {
 }
 .navbar h1 { font-size: 28px; font-weight: 700; letter-spacing: -0.5px; }
 .navbar .nav-actions { display: flex; gap: 8px; align-items: center; }
-.cloud-status {
-  font-size: 12px; font-weight: 600;
-  padding: 5px 10px; border-radius: 12px;
-  background: rgba(0,122,255,0.08); color: var(--accent);
-  white-space: nowrap; cursor: pointer;
-  transition: opacity 0.15s;
-}
-.cloud-status:active { opacity: 0.6; }
-.cloud-status.synced { background: rgba(52,199,89,0.12); color: var(--green); }
-.cloud-status.syncing { background: rgba(0,122,255,0.12); color: var(--accent); }
-.cloud-status.pending { background: rgba(255,149,0,0.12); color: var(--orange); }
-.cloud-status.offline { background: rgba(142,142,147,0.12); color: var(--text-secondary); }
-.cloud-status.error { background: rgba(255,59,48,0.12); color: var(--red); }
 .nav-btn {
   width: 32px; height: 32px;
   border-radius: 50%; border: none;
@@ -988,7 +974,6 @@ body {
   <h1>家有</h1>
   <div class="nav-actions">
     <button class="nav-btn" id="home-refresh-btn" onclick="manualRefresh()" title="刷新数据">🔄</button>
-    <div class="cloud-status" id="cloud-status" onclick="manualSync()">☁️ 初始化...</div>
     <button class="nav-btn" onclick="openSettings()">⚙</button>
   </div>
 </div>
@@ -1088,698 +1073,6 @@ body {
    家有 App - 核心逻辑
    ================================================================ */
 
-// ========== Supabase 云同步配置 ==========
-const SUPABASE_URL = 'https://pnahlubyqqzcjrzhnzfa.supabase.co';
-const SUPABASE_KEY = 'sb_publishable_UpBLW71YgaQCcm6YGCrGsw_urK1cVTd';
-const BUCKET_NAME = 'jiayou-photos';
-const CLOUD_SYNC_DEBOUNCE_MS = 2500;
-
-// ---- 测试环境隔离 ----
-// 当处于测试模式（window.__SUPABASE_TEST_MODE__、?testmode=1 或 localStorage 开关）时，
-// 用内存 Mock 顶替真实客户端：零网络请求，绝不可能碰到用户手机在用的真实云端数据库。
-function isSupabaseTestMode() {
-  try {
-    if (window.__SUPABASE_TEST_MODE__) return true;
-    if (typeof location !== 'undefined' && /[?&]testmode=1/.test(location.search || '')) return true;
-    if (typeof localStorage !== 'undefined' && localStorage.getItem('jiayou_test_mode') === '1') return true;
-  } catch (e) {}
-  return false;
-}
-// 极简内存 Mock：只实现本 App 用到的 4 个动作（auth.getSession / signInAnonymously /
-// from().select().eq().single() / from().upsert()），签名与 supabase-js 保真，
-// 让上层同步逻辑无需任何分支改动即可在测试中跑通。
-function createMockSupabaseClient() {
-  var _row = null; // 内存里的「云端」那一行
-  var mockUser = { id: 'test_user_local', email: 'test@jiayou.app' };
-  function qb() {
-    var st = { _eq: null, _single: false };
-    var api = {
-      select: function () { return api; },
-      eq: function (col, val) { st._eq = val; return api; },
-      single: function () {
-        st._single = true;
-        return Promise.resolve(_row ? { data: Object.assign({}, _row), error: null }
-                                    : { data: null, error: { code: 'PGRST116', message: 'no rows' } });
-      },
-      upsert: function (payload) { _row = Object.assign({}, payload); return Promise.resolve({ error: null }); },
-      then: function (res) { return Promise.resolve({ data: [], error: null }).then(res); }
-    };
-    return api;
-  }
-  return {
-    auth: {
-      getSession: function () { return Promise.resolve({ data: { session: { user: mockUser } }, error: null }); },
-      signInAnonymously: function () { return Promise.resolve({ data: { user: mockUser }, error: null }); },
-      signUp: function () { return Promise.resolve({ data: { user: mockUser }, error: null }); },
-      signInWithPassword: function () { return Promise.resolve({ data: { user: mockUser }, error: null }); },
-      signOut: function () { return Promise.resolve({ error: null }); }
-    },
-    from: function () { return qb(); },
-    storage: { from: function () { return {
-      upload: function () { return Promise.resolve({ data: {}, error: null }); },
-      getPublicUrl: function () { return { data: { publicUrl: 'mock://local' } }; }
-    }; } },
-    __mock: true
-  };
-}
-
-var supabaseClient = null;
-var currentUser = null;
-var cloudSyncState = { status: 'idle', message: '', lastSyncAt: null, pending: false };
-var cloudSyncTimer = null;
-var cloudSyncInProgress = false;
-
-// 懒初始化 Supabase 客户端：
-// supabase.js 是 defer 加载（HTML 解析完才执行），而内联主脚本先执行，
-// 因此不能在顶层直接读 window.supabase —— 必须等真正用到时再创建。
-function ensureSupabaseClient() {
-  if (supabaseClient) return true;
-  // 测试模式：直接换成内存 Mock，一条网络请求都不会发出
-  if (isSupabaseTestMode()) {
-    supabaseClient = createMockSupabaseClient();
-    cloudSyncState.message = '';
-    return true;
-  }
-  if (!window.supabase || !window.supabase.createClient) {
-    cloudSyncState.message = 'Supabase 库未加载（检查 supabase.js 是否存在）';
-    return false;
-  }
-  try {
-    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
-      auth: { persistSession: true, autoRefreshToken: true }
-    });
-    return true;
-  } catch(e) {
-    console.error('Supabase初始化失败', e);
-    cloudSyncState.message = 'Supabase初始化失败: ' + (e.message || e);
-    return false;
-  }
-}
-
-// 生成稳定设备ID（用于匿名用户识别）
-function getDeviceId() {
-  var id = localStorage.getItem('jiayou_device_id');
-  if (!id) {
-    id = 'dev_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
-    localStorage.setItem('jiayou_device_id', id);
-  }
-  return id;
-}
-
-// 尝试匿名登录；失败则使用设备本地模式（仍可用，只是不同步）
-async function initAuth() {
-  if (!ensureSupabaseClient()) {
-    updateCloudUI();
-    return;
-  }
-  try {
-    var { data: { session }, error } = await supabaseClient.auth.getSession();
-    if (error) throw error;
-    if (session && session.user) {
-      currentUser = session.user;
-      cloudSyncState.message = '';
-      updateCloudUI();
-      return;
-    }
-    // 尝试匿名登录
-    var { data, error: signErr } = await supabaseClient.auth.signInAnonymously();
-    if (signErr) {
-      console.log('匿名登录失败，尝试邮箱降级:', signErr.message);
-      await fallbackAnonymousLogin();
-      return;
-    }
-    currentUser = data.user;
-    localStorage.setItem('jiayou_anon_email', data.user.email || '');
-    cloudSyncState.message = '';
-    updateCloudUI();
-  } catch(e) {
-    console.error('认证初始化失败', e);
-    cloudSyncState.message = '认证失败: ' + (e.message || e);
-    updateCloudUI();
-    await fallbackAnonymousLogin();
-  }
-}
-
-// 确定性派生密码（第 14 轮）：不再用 Math.random —— 只要 deviceId 还在，
-// 密码随时可以重新算出来。否则 localStorage 一旦被 iOS 清理，随机密码就
-// 永久丢失，旧云端账号（里面有全部数据）再也无法登录。
-function deriveDevicePassword(deviceId) {
-  var h1 = 5381, h2 = 52711;
-  for (var i = 0; i < deviceId.length; i++) {
-    var c = deviceId.charCodeAt(i);
-    h1 = ((h1 << 5) + h1 + c) >>> 0;
-    h2 = ((h2 << 7) + h2 + c + i) >>> 0;
-  }
-  return 'jy_' + h1.toString(16) + '_' + h2.toString(16) + '_' + deviceId.slice(-6);
-}
-
-async function fallbackAnonymousLogin() {
-  if (!ensureSupabaseClient()) return;
-  var deviceId = getDeviceId();
-  var email = localStorage.getItem('jiayou_anon_email');
-  var storedPwd = localStorage.getItem('jiayou_anon_password');
-  var isNew = false;
-  if (!email) {
-    email = deviceId + '@jiayou.app';
-    isNew = true;
-  }
-  var derivedPwd = deriveDevicePassword(deviceId);
-  try {
-    if (isNew) {
-      // 新设备：直接注册（用派生密码）
-      var { data: signUpData, error: signUpErr } = await supabaseClient.auth.signUp({
-        email: email,
-        password: derivedPwd,
-        options: { data: { source: 'jiayou_app' } }
-      });
-      if (signUpErr) {
-        // 「already registered」= 这是老设备但本机凭证丢了（存储被清/被重试登录清掉）。
-        // 依次尝试：派生密码 → 本地存过的旧密码。都不行就明确报告，绝不反复注册。
-        if (/already registered/i.test(signUpErr.message || '')) {
-          var d1 = await supabaseClient.auth.signInWithPassword({ email: email, password: derivedPwd });
-          if (!d1.error && d1.data && d1.data.user) {
-            currentUser = d1.data.user;
-            localStorage.setItem('jiayou_anon_email', email);
-            localStorage.setItem('jiayou_anon_password', derivedPwd);
-            cloudSyncState.message = '';
-            updateCloudUI();
-            toast('云端已恢复登录');
-            return;
-          }
-          if (storedPwd) {
-            var d2 = await supabaseClient.auth.signInWithPassword({ email: email, password: storedPwd });
-            if (!d2.error && d2.data && d2.data.user) {
-              currentUser = d2.data.user;
-              cloudSyncState.message = '';
-              updateCloudUI();
-              return;
-            }
-          }
-          // 旧版本注册的账号密码是随机数，本机丢失后无法推算 —— 如实告知救援路径
-          cloudSyncState.message = '设备账号已注册但本机密码丢失。请在 Supabase 控制台重置 ' + email + ' 的密码后重试，或从控制台 Table Editor 导出数据用「导入数据」恢复';
-          updateCloudUI();
-          return;
-        }
-        throw signUpErr;
-      }
-      if (!signUpData.user) throw new Error('注册后未返回用户');
-      currentUser = signUpData.user;
-      localStorage.setItem('jiayou_anon_email', email);
-      localStorage.setItem('jiayou_anon_password', derivedPwd);
-      cloudSyncState.message = '';
-      updateCloudUI();
-      toast('已创建云端账号');
-      return;
-    }
-    // 已有账号：先试存储的密码，失败再试派生密码
-    var { data: signInData, error: signInErr } = await supabaseClient.auth.signInWithPassword({
-      email: email,
-      password: storedPwd || derivedPwd
-    });
-    if (!signInErr && signInData.user) {
-      currentUser = signInData.user;
-      cloudSyncState.message = '';
-      updateCloudUI();
-      return;
-    }
-    var d3 = await supabaseClient.auth.signInWithPassword({ email: email, password: derivedPwd });
-    if (!d3.error && d3.data && d3.data.user) {
-      currentUser = d3.data.user;
-      localStorage.setItem('jiayou_anon_password', derivedPwd);
-      cloudSyncState.message = '';
-      updateCloudUI();
-      return;
-    }
-    // 登录彻底失败：不再盲目重新注册（同邮箱 signUp 只会得到 already registered），
-    // 如实报告并给出救援路径
-    cloudSyncState.message = '云端登录失败: 密码不匹配。请在 Supabase 控制台重置 ' + email + ' 的密码后重试';
-    updateCloudUI();
-  } catch(e) {
-    console.error('降级认证失败', e);
-    cloudSyncState.message = '云端登录失败: ' + (e.message || e);
-    updateCloudUI();
-  }
-}
-
-// 重试登录（第 14 轮重写）：绝不清除本地凭证！旧版会把 anon_email/password 清掉，
-// 导致同一设备邮箱被拿去重新注册 → Supabase 报 already registered，
-// 且唯一正确的随机密码被永久清除，云端账号从此登不上。现在只做重新登录。
-async function retryCloudLogin() {
-  toast('正在重试登录...');
-  cloudSyncState.message = '正在重试...';
-  updateCloudUI();
-  if (!ensureSupabaseClient()) { toast('Supabase 库未加载'); return; }
-  try { await supabaseClient.auth.signOut(); } catch(e) {}
-  currentUser = null;
-  await initAuth();
-  if (currentUser) {
-    var changed = await syncFromCloud();
-    if (changed) renderAll();
-    toast('登录成功');
-  } else {
-    toast('登录仍失败，请检查网络或稍后再试');
-  }
-}
-
-// ========== 手动填入云端账号（第 14 轮数据救援）==========
-// 当本机凭证被系统清掉、老账号又是随机密码时，自动登录必然失败。
-// 这时可以在 Supabase 控制台把那个账号的密码重置为自己设的值，再在这里填入，
-// App 就会用它登录并把云端数据完整拉回来（也可用于迁移到自己的邮箱账号）。
-function openCloudAccountForm() {
-  var email = '';
-  try { email = localStorage.getItem('jiayou_anon_email') || ''; } catch(e) {}
-  if (!email) { try { email = getDeviceId() + '@jiayou.app'; } catch(e) {} }
-  var suggestedPwd = 'Jiayou#2026';
-  var sql = "update auth.users set encrypted_password = crypt('" + suggestedPwd + "', gen_salt('bf')) where email = '" + email + "';";
-  var html = '';
-  html += '<div class="modal-handle"></div>';
-  html += '<div class="modal-title">🔑 手动填入云端账号</div>';
-  html += '<div style="font-size:13px;line-height:1.7;color:var(--text-secondary);margin-bottom:10px">旧账号的密码是随机生成的、找不回来，需要先重置一次（约 2 分钟）：<br>① 用注册邮箱登录 <b>supabase.com</b> 控制台 → 左侧 <b>SQL Editor</b> → 粘贴下面这条 SQL → Run：</div>';
-  html += '<pre id="rescue-sql" style="background:#f5f5f5;border-radius:8px;padding:10px;font-size:11px;white-space:pre-wrap;word-break:break-all;color:#333">' + escapeHtml(sql) + '</pre>';
-  html += '<button class="btn btn-outline btn-sm" style="width:100%" onclick="copyRescueSql()">📋 复制这条 SQL</button>';
-  html += '<div style="font-size:13px;line-height:1.7;color:var(--text-secondary);margin:10px 0">② 执行成功后，下面会自动填好账号和建议密码，直接点「登录并取回云端数据」即可。</div>';
-  html += '<div class="form-group"><label class="form-label">云端账号邮箱</label><input type="email" class="form-input" id="cloud-email" value="' + escapeHtml(email) + '" placeholder="例如 dev_xxx@jiayou.app"></div>';
-  html += '<div class="form-group"><label class="form-label">密码</label><input type="text" class="form-input" id="cloud-pwd" value="' + escapeHtml(suggestedPwd) + '" placeholder="你在 SQL 里设置的密码"></div>';
-  html += '<button class="btn btn-primary btn-full" style="margin-top:12px" onclick="saveCloudAccount()">登录并取回云端数据</button>';
-  html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">取消</button>';
-  document.getElementById('modal-content').innerHTML = html;
-  document.getElementById('modal-overlay').classList.add('show');
-}
-
-// 复制救援 SQL（含 iOS Safari 兼容回退）
-function copyRescueSql() {
-  var t = '';
-  try { t = document.getElementById('rescue-sql').textContent; } catch(e) {}
-  function fallback() {
-    var ta = document.createElement('textarea');
-    ta.value = t; ta.style.cssText = 'position:fixed;opacity:0';
-    document.body.appendChild(ta); ta.select();
-    try { document.execCommand('copy'); toast('已复制，去 Supabase SQL Editor 粘贴执行'); }
-    catch(e) { toast('复制失败，请长按 SQL 文字手动复制'); }
-    ta.remove();
-  }
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(t).then(function() { toast('已复制，去 Supabase SQL Editor 粘贴执行'); }, fallback);
-  } else fallback();
-}
-
-async function saveCloudAccount() {
-  var emailEl = document.getElementById('cloud-email');
-  var pwdEl = document.getElementById('cloud-pwd');
-  var email = (emailEl && emailEl.value ? emailEl.value : '').trim();
-  var pwd = (pwdEl && pwdEl.value ? pwdEl.value : '').trim();
-  if (!email || !pwd) { toast('请填写完整的邮箱和密码'); return; }
-  closeModal();
-  try {
-    localStorage.setItem('jiayou_anon_email', email);
-    localStorage.setItem('jiayou_anon_password', pwd);
-    if (!ensureSupabaseClient()) { toast('Supabase 库未加载'); return; }
-    if (currentUser) { try { await supabaseClient.auth.signOut(); } catch(e) {} currentUser = null; }
-    toast('正在登录...');
-    var { data, error } = await supabaseClient.auth.signInWithPassword({ email: email, password: pwd });
-    if (error || !data.user) throw error || new Error('登录失败');
-    currentUser = data.user;
-    cloudSyncState.message = '';
-    updateCloudUI();
-    toast('登录成功，正在取回云端数据...');
-    var changed = await syncFromCloud();
-    if (changed) renderAll();
-    var n = 0;
-    try { n = (DB.zones || []).reduce(function (s, z) { return s + ((z.items || []).length); }, 0); } catch(e) {}
-    toast('☁️ 已取回云端数据，本机现有 ' + n + ' 件物品');
-  } catch(e) {
-    var msg = (e && e.message) ? e.message : String(e);
-    cloudSyncState.message = '手动登录失败: ' + msg;
-    updateCloudUI();
-    // 第 15 轮：把 Supabase 的原文翻译成人话，并直接给出下一步动作
-    if (/Invalid login credentials/i.test(msg)) {
-      toast('密码不匹配：这个云端账号的密码是旧版随机生成的，本机丢了吗就找不回了。请按弹窗里的说明去 Supabase 控制台重置密码后再来');
-    } else {
-      toast('登录失败: ' + msg);
-    }
-  }
-}
-
-function updateCloudUI() {
-  var el = document.getElementById('cloud-status');
-  var settingsEl = document.getElementById('settings-cloud-status');
-  var text = '☁️ 未登录', cls = 'cloud-status offline';
-  if (!currentUser) {
-    text = '☁️ 未登录'; cls = 'cloud-status offline';
-  } else if (cloudSyncInProgress) {
-    text = '🔄 同步中...'; cls = 'cloud-status syncing';
-  } else if (cloudSyncState.pending) {
-    text = '⏳ 待同步'; cls = 'cloud-status pending';
-  } else if (cloudSyncState.lastSyncAt) {
-    var t = new Date(cloudSyncState.lastSyncAt);
-    text = '✓ 已同步 ' + String(t.getHours()).padStart(2,'0') + ':' + String(t.getMinutes()).padStart(2,'0');
-    cls = 'cloud-status synced';
-  } else {
-    text = '☁️ 已登录'; cls = 'cloud-status online';
-  }
-  if (el) { el.textContent = text; el.className = cls; }
-  if (settingsEl) { settingsEl.textContent = text.replace(/^[^\s]+\s/, ''); }
-}
-
-function setCloudStatus(status, message) {
-  cloudSyncState.status = status;
-  if (message) cloudSyncState.message = message;
-  updateCloudUI();
-}
-
-// 从本地数据中提取所有照片（base64），上传到 Storage，替换为 URL
-async function uploadAllLocalPhotos() {
-  if (!currentUser) return;
-  if (!ensureSupabaseClient()) return;
-  var uploads = [];
-  DB.zones.forEach(function(zone) {
-    zone.items.forEach(function(item) {
-      (item.photos || []).forEach(function(photo, idx) {
-        if (photo && photo.startsWith && photo.startsWith('data:')) {
-          uploads.push({ zoneId: zone.id, itemId: item.id, field: 'photos', idx: idx, data: photo });
-        }
-      });
-      (item.variants || []).forEach(function(v, vidx) {
-        (v.photos || []).forEach(function(photo, pidx) {
-          if (photo && photo.startsWith && photo.startsWith('data:')) {
-            uploads.push({ zoneId: zone.id, itemId: item.id, field: 'variant_photos', vidx: vidx, pidx: pidx, data: photo });
-          }
-        });
-      });
-    });
-  });
-  if (uploads.length === 0) return;
-  setCloudStatus('syncing', '上传照片中...');
-  for (var i = 0; i < uploads.length; i++) {
-    var u = uploads[i];
-    try {
-      var url = await uploadPhotoToStorage(u.data, u.zoneId, u.itemId);
-      if (url) {
-        if (u.field === 'photos') {
-          var item = findItemByIds(u.zoneId, u.itemId);
-          if (item && item.photos && item.photos[u.idx]) item.photos[u.idx] = url;
-        } else {
-          var item = findItemByIds(u.zoneId, u.itemId);
-          if (item && item.variants && item.variants[u.vidx] && item.variants[u.vidx].photos) {
-            item.variants[u.vidx].photos[u.pidx] = url;
-          }
-        }
-      }
-    } catch(e) { console.error('照片上传失败', e); }
-  }
-}
-
-function findItemByIds(zoneId, itemId) {
-  var zone = DB.zones.find(function(z) { return z.id === zoneId; });
-  if (!zone) return null;
-  return zone.items.find(function(it) { return it.id === itemId; }) || null;
-}
-
-async function uploadPhotoToStorage(base64Data, zoneId, itemId) {
-  if (!currentUser) return null;
-  if (!ensureSupabaseClient()) return null;
-  try {
-    var arr = base64Data.split(',');
-    var mime = arr[0].match(/:(.*?);/)[1];
-    var bstr = atob(arr[1]);
-    var n = bstr.length;
-    var u8arr = new Uint8Array(n);
-    for (var i = 0; i < n; i++) u8arr[i] = bstr.charCodeAt(i);
-    var ext = mime.split('/')[1] || 'jpg';
-    var fileName = currentUser.id + '/' + zoneId + '/' + itemId + '/' + Date.now() + '_' + Math.random().toString(36).slice(2) + '.' + ext;
-    var file = new File([u8arr], fileName.split('/').pop(), { type: mime });
-    var { data, error } = await supabaseClient.storage.from(BUCKET_NAME).upload(fileName, file, { upsert: true });
-    if (error) throw error;
-    var { data: urlData } = supabaseClient.storage.from(BUCKET_NAME).getPublicUrl(fileName);
-    return urlData.publicUrl;
-  } catch(e) {
-    console.error('上传照片到Storage失败', e);
-    return null;
-  }
-}
-
-// 保存数据到云端
-async function syncToCloud(force) {
-  if (!currentUser) return;
-  if (!ensureSupabaseClient()) return;
-  if (cloudSyncInProgress) {
-    cloudSyncState.pending = true;
-    updateCloudUI();
-    return;
-  }
-  cloudSyncInProgress = true;
-  cloudSyncState.pending = false;
-  setCloudStatus('syncing', '正在同步...');
-  try {
-    // ===== 空库防推护栏（第 14 轮）=====
-    // 本机物品数为 0、但本机历史上明明有过数据 → 几乎必然是存储被系统清了/损坏了。
-    // 此时把空 DB 推上云端会覆盖掉用户最后一份真实数据，绝对禁止。
-    var _nowItems = (DB.zones || []).reduce(function (s, z) { return s + ((z.items || []).length); }, 0);
-    var _prevItems = 0;
-    try { _prevItems = parseInt(localStorage.getItem('jiayou_prev_item_count') || '0', 10) || 0; } catch (e) {}
-    if (_nowItems === 0 && _prevItems > 0) {
-      cloudSyncState.pending = false;
-      setCloudStatus('error', '本机为空，已暂停上传以保护云端数据');
-      console.warn('空库防推护栏生效：本机 0 件物品但历史曾有过 ' + _prevItems + ' 件，拒绝上传');
-      toast('⚠️ 本机数据为空，已暂停上传以保护云端数据');
-      return;
-    }
-    // 先上传本地 base64 照片
-    await uploadAllLocalPhotos();
-    // 保存元数据
-    var payload = {
-      user_id: currentUser.id,
-      data: DB,
-      updated_at: new Date().toISOString(),
-      version: (DB.version || 1)
-    };
-    var { error } = await supabaseClient
-      .from('app_data')
-      .upsert(payload, { onConflict: 'user_id' });
-    if (error) throw error;
-    cloudSyncState.lastSyncAt = Date.now();
-    // 记录「本机已把当前内容推上云端」的时间戳，作为冲突检测基准
-    try { localStorage.setItem('jiayou_last_cloud_ts', String(Date.now())); } catch (e) {}
-    setCloudStatus('synced', '同步完成');
-  } catch(e) {
-    console.error('同步到云端失败', e);
-    cloudSyncState.pending = true;
-    setCloudStatus('error', '同步失败');
-  } finally {
-    cloudSyncInProgress = false;
-    updateCloudUI();
-    // 如果有排队中的同步，debounce 后重试
-    if (cloudSyncState.pending) {
-      clearTimeout(cloudSyncTimer);
-      cloudSyncTimer = setTimeout(function() { syncToCloud(true); }, CLOUD_SYNC_DEBOUNCE_MS);
-    }
-  }
-}
-
-function queueCloudSync() {
-  if (!currentUser) return;
-  if (!ensureSupabaseClient()) return;
-  cloudSyncState.pending = true;
-  updateCloudUI();
-  clearTimeout(cloudSyncTimer);
-  cloudSyncTimer = setTimeout(function() { syncToCloud(true); }, CLOUD_SYNC_DEBOUNCE_MS);
-}
-
-// ========== 云端数据安全：冲突检测（绝不静默覆盖）==========
-// 数据指纹：用「物品数 / 记录数 / 委托数」的轻量统计代替逐字节比较，
-// 既能识别出「两边内容不同」，又不会因为保存时间戳这类无关差异误报。
-function dbFingerprint(db) {
-  var zones = (db && db.zones) || [];
-  var items = 0, records = 0, tasks = ((db && db.tasks) || []).length;
-  zones.forEach(function (z) {
-    (z.items || []).forEach(function (it) {
-      items++;
-      records += ((it.usageRecords || []).length);
-    });
-  });
-  return { items: items, records: records, tasks: tasks };
-}
-function fingerprintsDiffer(a, b) {
-  if (!a || !b) return true;
-  return a.items !== b.items || a.records !== b.records || a.tasks !== b.tasks;
-}
-function fpText(fp) {
-  if (!fp) return '—';
-  return fp.items + ' 件物品 / ' + fp.records + ' 条使用记录 / ' + fp.tasks + ' 个委托';
-}
-
-// 手动同步时的冲突检测：本机上次写入 < 云端更新时间，且两边指纹不同 → 提示用户选择
-// 返回 'continue'（无冲突，可继续）或 'abort'（已弹窗，调用方应直接返回）
-var _manualSyncBypass = false;
-function detectCloudConflict() {
-  if (_manualSyncBypass) return 'continue';
-  var lastLocalWrite = 0;
-  try { lastLocalWrite = parseInt(localStorage.getItem('jiayou_last_local_write') || '0', 10) || 0; } catch (e) {}
-  var lastCloudTs = 0;
-  try { lastCloudTs = parseInt(localStorage.getItem('jiayou_last_cloud_ts') || '0', 10) || 0; } catch (e) {}
-  // 从没在本机编辑过 → 不存在「本机改动会被冲掉」的风险
-  if (!lastLocalWrite) return 'continue';
-  // 本机改动晚于/等于云端 → 本机更新，正常上传
-  if (lastCloudTs && lastLocalWrite >= lastCloudTs) return 'continue';
-  // 本机改动更早，但云端这次读取没拿到数据 → 交给 syncFromCloud 常规分支
-  return 'need_remote';
-}
-
-// 真正比对云端内容后弹出选择框（只有真的两边不同才会弹）
-function showCloudConflictDialog(cloudData) {
-  var localFp = dbFingerprint(DB);
-  var cloudFp = dbFingerprint(cloudData);
-  if (!fingerprintsDiffer(localFp, cloudFp)) return false; // 内容一致，无需打扰
-  var html = '';
-  html += '<div class="modal-handle"></div>';
-  html += '<div class="modal-title">⚠️ 云端与本机数据不一致</div>';
-  html += '<div style="font-size:13px;line-height:1.7;color:var(--text-secondary);margin-bottom:12px">为了不让任何一边被悄悄覆盖，请你亲自决定这次以哪边为准。选错也不会丢数据 —— 另一边仍保留在原来的位置，可随时再切回。</div>';
-  html += '<div style="border:1.5px solid var(--border);border-radius:12px;padding:12px;margin-bottom:10px">';
-  html += '<div style="font-size:13px;font-weight:700;margin-bottom:4px">📱 本机数据（最后一次编辑：' + (lastLocalWriteText() || '未知') + '）</div>';
-  html += '<div style="font-size:12px;color:var(--text-secondary)">' + fpText(localFp) + '</div>';
-  html += '</div>';
-  html += '<div style="border:1.5px solid var(--border);border-radius:12px;padding:12px;margin-bottom:14px">';
-  html += '<div style="font-size:13px;font-weight:700;margin-bottom:4px">☁️ 云端数据（最后更新时间：' + (cloudUpdatedAtText() || '未知') + '）</div>';
-  html += '<div style="font-size:12px;color:var(--text-secondary)">' + fpText(cloudFp) + '</div>';
-  html += '</div>';
-  html += '<button class="btn btn-primary btn-full" onclick="resolveCloudConflict(\'cloud\')">☁️ 用云端数据覆盖本机</button>';
-  html += '<button class="btn btn-outline btn-full" style="margin-top:8px" onclick="resolveCloudConflict(\'local\')">📱 保留本机数据，上传到云端</button>';
-  html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="resolveCloudConflict(\'cancel\')">先不处理（保持现状）</button>';
-  document.getElementById('modal-content').innerHTML = html;
-  document.getElementById('modal-overlay').classList.add('show');
-  return true;
-}
-
-var _pendingCloudData = null, _pendingCloudTs = 0;
-function lastLocalWriteText() {
-  try {
-    var ts = parseInt(localStorage.getItem('jiayou_last_local_write') || '0', 10);
-    return ts ? formatDateTime(ts) : '';
-  } catch (e) { return ''; }
-}
-function cloudUpdatedAtText() { return _pendingCloudTs ? formatDateTime(_pendingCloudTs) : ''; }
-
-function resolveCloudConflict(choice) {
-  if (choice === 'cancel') {
-    closeModal();
-    toast('已保持现状，可稍后点「立即同步」再决定');
-    return;
-  }
-  if (choice === 'cloud') {
-    // 用云端覆盖本机：先留一份本机快照到归档箱，避免误点后无法找回
-    try { DB = mergeDB(DB, _pendingCloudData); } catch (e) { console.error(e); }
-    try { localStorage.setItem('jiayou_last_cloud_ts', String(_pendingCloudTs || Date.now())); } catch (e) {}
-    try { localStorage.setItem('jiayou_last_local_write', String(Date.now())); } catch (e) {}
-    saveDBIndexed().catch(function () {});
-    try { localStorage.setItem('jiayou_db', JSON.stringify(DB)); } catch (e) {}
-  } else {
-    // 保留本机：直接推上去，本次强制绕过冲突检测防止死循环
-    _manualSyncBypass = true;
-  }
-  closeModal();
-  _pendingCloudData = null;
-  var bypass = _manualSyncBypass;
-  Promise.resolve(saveDBIndexed()).then(function () {
-    renderAll();
-    if (choice === 'local') {
-      return syncToCloud(true).then(function () {
-        _manualSyncBypass = false;
-        toast('📱 已按本机数据覆盖云端');
-      });
-    }
-    return null;
-  }).then(function () {
-    if (choice === 'cloud') toast('☁️ 已按云端数据恢复本机');
-  }).catch(function () {
-    _manualSyncBypass = bypass;
-    toast('操作失败，请重试');
-  });
-}
-
-// 从云端拉取数据
-async function syncFromCloud() {
-  if (!currentUser) return false;
-  if (!ensureSupabaseClient()) return false;
-  setCloudStatus('syncing', '从云端恢复...');
-  try {
-    var { data, error } = await supabaseClient
-      .from('app_data')
-      .select('data, updated_at')
-      .eq('user_id', currentUser.id)
-      .single();
-    if (error) {
-      if (error.code === 'PGRST116') {
-        // 云端没有数据，把本地数据推上去
-        await syncToCloud(true);
-        return true;
-      }
-      throw error;
-    }
-    if (!data || !data.data) return false;
-    // 记录云端更新时间戳（冲突检测的基准之一）
-    var cloudTs = data.updated_at ? new Date(data.updated_at).getTime() : 0;
-    if (cloudTs) { try { localStorage.setItem('jiayou_last_cloud_ts', String(cloudTs)); } catch (e) {} }
-    _pendingCloudTs = cloudTs;
-    // 合并云端数据到本地
-    var cloudData = data.data;
-    var localZones = (DB.zones || []);
-    var cloudZones = (cloudData.zones || []);
-    var localItemsCount = localZones.reduce(function(s, z) { return s + (z.items ? z.items.length : 0); }, 0);
-    var cloudItemsCount = cloudZones.reduce(function(s, z) { return s + (z.items ? z.items.length : 0); }, 0);
-    if (cloudItemsCount > 0) {
-      // 本机有未上传的改动、且与云端内容不同 → 弹窗让用户亲自选，绝不悄悄覆盖
-      if (detectCloudConflict() === 'need_remote') {
-        var popped = showCloudConflictDialog(cloudData);
-        if (popped) { cloudSyncState.lastSyncAt = Date.now(); setCloudStatus('synced', '待你确认'); return true; }
-      }
-      // 云端有真实数据，用云端覆盖
-      DB = mergeDB(DB, cloudData);
-      // 立即同步到本地存储
-      try { localStorage.setItem('jiayou_db', JSON.stringify(DB)); } catch(e) {}
-      saveDBIndexed().catch(function(){});
-      try { localStorage.setItem('jiayou_last_local_write', String(Date.now())); } catch(e) {}
-      // 恢复完毕后刷新「本机物品数」基准，让空库防推护栏解除
-      try {
-        var _restored = (DB.zones || []).reduce(function (s, z) { return s + ((z.items || []).length); }, 0);
-        localStorage.setItem('jiayou_prev_item_count', String(_restored));
-      } catch(e) {}
-    } else if (localItemsCount > 0) {
-      // 本地有数据但云端没有，推送到云端
-      await syncToCloud(true);
-      return true;
-    } else {
-      // 双方都空，用云端（默认空）
-      DB = mergeDB(DB, cloudData);
-    }
-    cloudSyncState.lastSyncAt = Date.now();
-    setCloudStatus('synced', '恢复完成');
-    return true;
-  } catch(e) {
-    console.error('从云端恢复失败', e);
-    setCloudStatus('error', '恢复失败');
-    return false;
-  }
-}
-
-// 手动触发同步按钮
-function manualSync() {
-  if (!navigator.onLine) { toast('当前离线，恢复网络后自动同步'); return; }
-  if (!ensureSupabaseClient()) { toast('Supabase 库未加载，无法同步'); return; }
-  if (!currentUser) { toast('未登录，无法同步'); return; }
-  // 数据安全护栏：本机改动早于云端更新且内容不同 → 弹窗让用户选，绝不悄悄覆盖
-  if (detectCloudConflict() === 'need_remote') {
-    syncFromCloud().then(function (changed) {
-      if (!changed) { toast('云端暂无数据，不会覆盖本机'); return; }
-      renderAll();
-    });
-    return;
-  }
-  toast('开始同步...');
-  syncToCloud(true).then(function() {
-    renderAll();
-    toast('同步完成');
-  });
-}
 
 // ========== 数据层 ==========
 var DB = {
@@ -1807,7 +1100,7 @@ function initIndexedDB() {
     if (!window.indexedDB) { resolve(null); return; }
     // 超时兜底：iOS 在站点存储被系统清理/损坏后，indexedDB.open 可能既不触发
     // onsuccess 也不触发 onerror（永久挂起），把整个启动序列卡死在
-    // 「await loadDB()」上 —— 表现为页面空白 + 云端状态永远「初始化...」。
+    // 「await loadDB()」上 —— 表现为页面空白。
     // 3.5 秒没响应就放弃 IndexedDB，降级 localStorage 继续启动。
     var settled = false;
     var timer = setTimeout(function() {
@@ -1863,19 +1156,10 @@ function saveDB() {
     saveDBIndexed().catch(function(e) { console.error('IndexedDB保存失败', e); });
     // 次存：localStorage（5-10MB限制，存不下会失败但不阻塞）
     try { localStorage.setItem('jiayou_db', json); } catch(lsErr) { console.warn('localStorage保存失败', lsErr); }
-    // 记录本机最后一次写入时间（用于云端/本地冲突检测，见 detectCloudConflict）
-    try { localStorage.setItem('jiayou_last_local_write', String(Date.now())); } catch(e) {}
-    // 记录本机物品数（用于「空库防推护栏」：本机突然变空时拒绝上传，见 syncToCloud）
-    try {
-      var _items = (DB.zones || []).reduce(function (s, z) { return s + ((z.items || []).length); }, 0);
-      localStorage.setItem('jiayou_prev_item_count', String(_items));
-    } catch(e) {}
-    // 排队同步到 Supabase 云端（最可靠）
-    queueCloudSync();
   } catch(e) {
     console.error('saveDB错误:', e);
     if (e.name === 'QuotaExceededError') {
-      toast('本地存储空间不足（云端已存）');
+      toast('本地存储空间不足，请先导出备份并清理部分照片');
     } else {
       toast('存储失败: ' + e.message);
     }
@@ -1950,8 +1234,7 @@ async function loadDB() {
         items: []
       }
     ];
-    // 注意：首次创建默认板块时不立即 saveDB，避免空默认数据覆盖云端真实数据
-    // 等 syncFromCloud 拉取后会被云端数据覆盖
+    // 注意：首次创建默认板块时不立即 saveDB，避免空默认数据覆盖已有真实数据
   }
 }
 
@@ -1974,14 +1257,14 @@ function mergeDB(defaults, loaded) {
   // 补给品套餐模型迁移（只增字段，零破坏：stock/totalPrice/price 原值不动）
   migrateConsumablePackages(result);
   // 规格两层结构迁移（packCount 包数 × packQty 每包含量 × content 每份规格）
-  // 关键：云端可能存着旧单层结构（只有 qty/content），合并时必须就地升级，
+  // 关键：旧数据可能存着旧单层结构（只有 qty/content），合并时必须就地升级，
   // 不能依赖调用方事后再补跑 —— 否则 specPackQty 读不到会退回默认 1 造成口径错乱
   migrateSpecTwoLayer(result);
   // 历史脏数据：表单内连续添加方案曾共用同一个 id，导致点任一方案只切换第一个 → 全局去重
   migrateTaskPlanIds(result);
   // 状态对账（关键）：从使用记录重新推导每个品牌的开封/用完状态，
   // 并剔除 0 天记录。这解决了「删了记录、卡片还卡在『使用中』、刷新重进也没用」
-  // 这类幽灵状态 —— 因为云端/本地存的陈旧 opened 字段会在装载时被纠正回来。
+  // 这类幽灵状态 —— 因为存档/本地存的陈旧 opened 字段会在装载时被纠正回来。
   reconcileDBState(result);
   return result;
 }
@@ -2443,7 +1726,7 @@ function isVariantDone(v, item) {
   if ((parseFloat(v.stock) || 0) > 0 && !(item && isOneShotItem(item))) return false;
   return true;
 }
-// 数据自愈：启动/云端同步后，把「标记了用完但仍有库存」的普通变体恢复为待开封
+// 数据自愈：启动时把「标记了用完但仍有库存」的普通变体恢复为待开封
 function migrateDirtyUsedUp() {
   var fixed = 0;
   DB.zones.forEach(function(zone) {
@@ -2788,7 +2071,7 @@ var currentSearchQuery = '';
 function openSettings() { showPage('settings'); }
 
 // ========== 全局重绘入口 ==========
-// 云同步 / 手动刷新后调用：重绘当前页面 + 卡片详情（若开着）
+// 手动刷新后调用：重绘当前页面 + 卡片详情（若开着）
 function renderAll() {
   refreshCurrentPage();
   if (currentDetailItem && currentDetailZone) {
@@ -3330,51 +2613,6 @@ function validPeriodRecords(item) {
   });
 }
 
-// 预估当前总库存还能用多少天（基于历史消耗速率）
-function estimateStockDaysLeft(item, totalStock, variants) {
-  if (!item.usageRecords || item.usageRecords.length === 0) return null;
-  var records = validPeriodRecords(item);
-  if (records.length === 0) return null;
-  // 统计总消耗量和首次使用日期
-  var totalQty = 0, totalContent = 0, allContent = true, earliestDate = null;
-  records.forEach(function(r) {
-    totalQty += (r.qty || 1);
-    if (r.contentUsed > 0) totalContent += r.contentUsed; else allContent = false;
-    var start = new Date(r.startDate);
-    if (!earliestDate || start < earliestDate) earliestDate = start;
-  });
-  if (totalQty === 0) return null;
-  // 从首次使用到今天经过多少天
-  var totalDays = daysBetween(earliestDate, new Date());
-  if (totalDays < 1) totalDays = 1;
-  // 多规格开封记录：库存本身就是含量口径，直接按「每天消耗多少含量」折算
-  // 注意：入参 totalStock 是件数口径，不能直接除以含量速率 —— 用剩余含量（支×每支g）
-  if (allContent && totalContent > 0) {
-    var scE = itemStockContent(item, variants);
-    if (scE !== null) {
-      var perDay = totalContent / totalDays;
-      if (perDay <= 0) return null;
-      return Math.round(scE / perDay);
-    }
-  }
-  var avgDaysPerUnit = totalDays / totalQty;
-  // 剩余库存换算成"套"：消耗记录 qty 记的是套餐数，pack 模式 stock 是小单位总数，需除以每套含数
-  var isPackMode = isSetPackMode(item);
-  var avgPq = 1;
-  if (isPackMode && variants && variants.length) {
-    avgPq = variants.reduce(function(s, v) { return s + (v.packQty || 1); }, 0) / variants.length;
-  }
-  var remainingPacks = isPackMode ? (totalStock / Math.max(1, avgPq)) : totalStock;
-  // 如果有使用中的变体，减去已用天数
-  var activeVariant = variants.find(function(v) { return v.opened && !v.usedUp; });
-  if (activeVariant && activeVariant.openDate) {
-    var usedDays = daysBetween(new Date(activeVariant.openDate), new Date());
-    var remainingInCurrent = Math.max(0, avgDaysPerUnit - usedDays);
-    return Math.round(remainingInCurrent + Math.max(0, remainingPacks - 1) * avgDaysPerUnit);
-  }
-  return Math.round(remainingPacks * avgDaysPerUnit);
-}
-
 // ========== 消耗速率计算 ==========
 // 基于"首次使用日期到今天"的总时间跨度，计算平均月/年消耗
 // 消耗速率的单位名：pack 模式记录的是"开了几套"→套；unit 模式→小单位（优先变体的 packUnit，如 瓶/袋/包）
@@ -3800,42 +3038,6 @@ function buyAdviceOf(item) {
     if (aq > 1) extra = '≈' + round1(st.rate * 12 * aq) + mainPackUnit(item) + '/年';
   }
   return { main: main, detail: extra || null };
-}
-
-// ========== 预估使用中变体的剩余天数 ==========
-// 基于"首次使用到今天"的总时间跨度，预估剩余可用天数
-function estimateOpenedDaysLeft(item, variants) {
-  if (!item.usageRecords || item.usageRecords.length === 0) return null;
-  var records = validPeriodRecords(item);
-  if (records.length === 0) return null;
-
-  // 统计总消耗量和首次使用日期
-  var totalQty = 0, totalContent = 0, allContent = true, earliestDate = null;
-  records.forEach(function(r) {
-    totalQty += (r.qty || 1);
-    if (r.contentUsed > 0) totalContent += r.contentUsed; else allContent = false;
-    var start = new Date(r.startDate);
-    if (!earliestDate || start < earliestDate) earliestDate = start;
-  });
-  if (totalQty === 0) return null;
-  var totalDays = daysBetween(earliestDate, new Date());
-  if (totalDays < 1) totalDays = 1;
-  var avgDaysPerUnit = totalDays / totalQty;
-
-  // 找到当前使用中的变体
-  var activeVariant = variants.find(function(v) { return v.opened && !v.usedUp; });
-  if (!activeVariant || !activeVariant.openDate) return null;
-
-  // 已使用天数
-  var usedDays = daysBetween(new Date(activeVariant.openDate), new Date());
-  // 多规格：库存是含量口径，直接按「剩余含量 ÷ 每天消耗含量」估
-  if (allContent && totalContent > 0) {
-    var perDayC = totalContent / totalDays;
-    if (perDayC <= 0) return null;
-    return Math.round((activeVariant.stock || 0) / perDayC - usedDays);
-  }
-  // 预估剩余天数 = 平均周期 - 已使用天数
-  return Math.round(avgDaysPerUnit - usedDays);
 }
 
 // ========== 首页 AI 摘要卡 ==========
@@ -5869,7 +5071,7 @@ window.addEventListener('unhandledrejection', function(ev) {
 
 document.addEventListener('DOMContentLoaded', async function() {
   // 分段防崩（第 14 轮）：存储被 iOS 清空/损坏后，任何一步迁移抛异常都会
-  // 中断整个回调 —— 表现为页面空白 + 云端状态永远卡在「初始化...」。
+  // 中断整个回调 —— 表现为页面空白。
   // 每一步独立兜底，确保 UI 一定被拉起来。
   try { await loadDB(); } catch (e) { console.error('loadDB失败', e); }
   // 自愈历史脏数据（旧版本「用完了」不清库存导致的假折叠 + 多规格套数口径）
@@ -5880,34 +5082,9 @@ document.addEventListener('DOMContentLoaded', async function() {
   try { migrateTaskParent(); } catch (e) { console.error('migrateTaskParent失败', e); }
   // 立即用本地数据渲染首页（不等待网络，秒开）
   try { showPage('home'); } catch (e) { console.error('showPage失败', e); }
-  // 立即更新云端状态 UI（避免卡在静态"初始化..."文字）
-  try { updateCloudUI(); } catch (e) { console.error('updateCloudUI失败', e); }
 
   // 检查是否有新版本（有则提示并自动刷新）
   try { checkAppUpdate(); } catch (e) {}
-
-  // 初始化认证 + 云端同步，全部后台进行，不阻塞界面
-  setTimeout(async function() {
-    try {
-      await initAuth();
-      if (currentUser) {
-        var cloudChanged = await syncFromCloud();
-        if (cloudChanged) {
-          // 若因为「云端本机不一致」弹了选择框，此时不要重绘页面把弹窗一起冲掉
-          if (!document.getElementById('modal-overlay').classList.contains('show')) {
-            migrateDirtyUsedUp();
-            migrateSpecPacks();
-            migrateSpecTwoLayer();
-            migratePackUnit();
-            migrateTaskParent();
-            renderAll();
-          }
-        }
-      }
-    } catch(e) {
-      console.error('云端初始化失败', e);
-    }
-  }, 50);
 
   // 清理无用的临时变量/缓存标记（如果有）
   try { delete window._openVariantId; } catch(e) {}
@@ -5926,15 +5103,6 @@ document.addEventListener('DOMContentLoaded', async function() {
   });
   document.getElementById('modal-overlay').addEventListener('click', function(e) {
     if (e.target === this) closeModal();
-  });
-
-  // 网络恢复时自动同步
-  window.addEventListener('online', function() {
-    updateCloudUI();
-    if (currentUser) queueCloudSync();
-  });
-  window.addEventListener('offline', function() {
-    updateCloudUI();
   });
 });
 
@@ -10741,36 +9909,10 @@ function renderReport() {
 function renderSettings() {
   var html = '';
 
-  // 云同步状态
-  html += '<div class="section-title">云同步</div>';
-  html += '<div class="setting-group">';
-  var statusText = '未登录';
-  if (currentUser) {
-    if (cloudSyncInProgress) statusText = '同步中...';
-    else if (cloudSyncState.pending) statusText = '待同步';
-    else if (cloudSyncState.lastSyncAt) statusText = '已同步 ' + formatDateTime(cloudSyncState.lastSyncAt);
-    else statusText = '已登录';
-  }
-  html += '<div class="setting-row" onclick="manualSync()"><div class="setting-label">☁️ 同步状态</div><div class="setting-value" id="settings-cloud-status">' + statusText + '</div></div>';
-  // 诊断信息：显示具体错误
-  if (cloudSyncState.message) {
-    html += '<div style="padding:8px 12px;font-size:12px;color:var(--danger);line-height:1.5;background:rgba(255,59,48,0.08);border-radius:8px;margin:6px 0">' + escapeHtml(cloudSyncState.message) + '</div>';
-  }
-  if (currentUser && currentUser.email && !currentUser.email.endsWith('@jiayou.app')) {
-    html += '<div class="setting-row"><div class="setting-label">📧 已绑定邮箱</div><div class="setting-value">' + escapeHtml(currentUser.email) + '</div></div>';
-  }
-  html += '<button class="btn btn-primary btn-full" style="margin-top:10px;" onclick="manualSync()">立即同步</button>';
-  if (!currentUser) {
-    html += '<button class="btn btn-outline btn-full" style="margin-top:8px;" onclick="retryCloudLogin()">🔄 重试登录</button>';
-  }
-  // 第 14 轮：凭证丢失时的救援入口 —— 允许手动指定云端账号登录，把数据拉回来
-  html += '<button class="btn btn-ghost btn-full" style="margin-top:8px;" onclick="openCloudAccountForm()">🔑 手动填入云端账号（数据救援）</button>';
-  html += '</div>';
-
   // 数据管理
   html += '<div class="section-title">数据管理</div>';
   html += '<div class="setting-group">';
-  html += '<div style="padding:10px 12px;font-size:12px;line-height:1.6;color:var(--text-secondary)">🔒 数据安全：云端与手机不一致时，App 会弹窗让你亲自选择以哪边为准，绝不自动覆盖你的记录。点「📤 导出数据」可随时把全部数据存成本地 JSON 文件备份。</div>';
+  html += '<div style="padding:10px 12px;font-size:12px;line-height:1.6;color:var(--text-secondary)">🔒 数据安全：全部数据保存在这台设备本地。点「📤 导出数据」可随时把全部数据存成本地 JSON 文件备份（建议存到 iCloud 文件库，换机时用「📥 导入数据」恢复）。</div>';
   html += '<div class="setting-row" onclick="exportJSON()"><div class="setting-label">📤 导出数据（JSON）</div><div class="setting-value">备份到文件</div></div>';
   html += '<div class="setting-row" onclick="document.getElementById(\'import-input\').click()"><div class="setting-label">📥 导入数据</div><div class="setting-value">从文件恢复</div></div>';
   html += '<div class="setting-row" onclick="runBackupSelfCheck()"><div class="setting-label">🛡️ 备份自检</div><div class="setting-value">' + (backupCheckResult || '检查导出/导入是否正常') + '</div></div>';
@@ -10817,8 +9959,25 @@ function renderSettings() {
 // ========== 数据导入导出 ==========
 // 备份自检结果缓存（每次大更新后应保持「正常」，一旦失效说明导出/导入链路被破坏）
 var backupCheckResult = '';
+// 数据指纹：用「物品数 / 记录数 / 委托数」的轻量统计代替逐字节比较，
+// 用于「导出→导入」往返自检时判断内容是否一致。
+function dbFingerprint(db) {
+  var zones = (db && db.zones) || [];
+  var items = 0, records = 0, tasks = ((db && db.tasks) || []).length;
+  zones.forEach(function (z) {
+    (z.items || []).forEach(function (it) {
+      items++;
+      records += ((it.usageRecords || []).length);
+    });
+  });
+  return { items: items, records: records, tasks: tasks };
+}
+function fingerprintsDiffer(a, b) {
+  if (!a || !b) return true;
+  return a.items !== b.items || a.records !== b.records || a.tasks !== b.tasks;
+}
 // 不影响真实数据的往返自检：序列化当前 DB → 反序列化 → 跑一遍 mergeDB → 比对指纹。
-// 不写库、不碰云端，纯粹验证「导出/导入」这条保命链路是否完好。
+// 不写库，纯粹验证「导出/导入」这条保命链路是否完好。
 function runBackupSelfCheck() {
   try {
     var json = JSON.stringify(DB);
