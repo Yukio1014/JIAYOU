@@ -133,6 +133,21 @@ body {
   flex-wrap: nowrap; align-items: stretch;
 }
 .act-row > button { flex: 1 1 0; min-width: 0; }
+/* 【第 25 轮】年报顶部四大类 + 已归档：一行四列，只做入口不显示数字 */
+.report-cat-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+  padding: 0 16px 12px;
+}
+.report-cat-cell {
+  background: var(--bg); border-radius: 10px; padding: 10px 4px;
+  text-align: center; cursor: pointer; border: 1.5px solid transparent;
+  transition: background .15s, border-color .15s;
+}
+.report-cat-cell.open { background: rgba(0,105,92,0.10); border-color: rgba(0,105,92,0.35); }
+.report-cat-txt {
+  font-size: 12px; font-weight: 600; color: var(--text-primary);
+  display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .act-mini {
   display: flex; flex-direction: row; align-items: center; justify-content: center;
   gap: 4px; padding: 8px 2px; font-size: 15px; line-height: 1;
@@ -1558,10 +1573,6 @@ function variantIsMultiSpec(v) {
   if (!any) return false;                       // 都没填容量 → 退化为单一规格（防均值乱算）
   return Object.keys(seen).length > 1;           // 容量有差异 → 多规格
 }
-function itemIsMultiSpec(item) {
-  var v = ((item && item.variants) || []).find(function (x) { return variantSpecsOf(x).length; });
-  return v ? variantIsMultiSpec(v) : false;
-}
 // 均值单件容量（ml/g 等含量单位才有意义；片/粒类返回 0）
 function variantAvgPiece(v) {
   var ss = variantSpecsOf(v); if (!ss.length) return 0;
@@ -1572,11 +1583,6 @@ function variantAvgPiece(v) {
   return Math.round(variantSpecPerSet(v) / pieces * 100) / 100;
 }
 // 物品级均值：取第一个有明细的变体（同物品各变体单位一致）
-function itemAvgPieceOf(item) {
-  var v = ((item && item.variants) || []).find(function (x) { return variantSpecsOf(x).length; });
-  return v ? variantAvgPiece(v) : 0;
-}
-
 // 规格行展示文本："日用 3包×5片 = 15片"
 function specLineText(s) {
   var nm = String(s.name || '').trim();
@@ -1689,25 +1695,6 @@ function instantTotalStock(item) {
 //   ② 规格单位含 g/kg/ml/L → 1 份 = 1 包，日常只按「包」扣减显示（热泡茶 → 1包），
 //      容量仅作为年度汇总/采购建议的后台基数，绝不出现在日常扣减 UI 上；
 //   ③ 计数单位不一致（片+粒混填）→ 统一叫「份」；无任何单位 → 「份」。
-function instantCountUnit(item) {
-  if (!item) return '份';
-  var vs = (item.variants && item.variants.length) ? item.variants : [];
-  var units = [];
-  var pushU = function (u) { u = String(u || '').trim(); if (u && units.indexOf(u) < 0) units.push(u); };
-  vs.forEach(function (v) {
-    var spC = variantSpecsOf(v);
-    if (spC.length) spC.forEach(function (s) { pushU(s.unit); });
-    else pushU(v.packUnit);
-  });
-  if (!units.length) return '份';
-  var hasContent = units.some(function (u) { return isContentUnitText(u); });
-  if (hasContent) return '包';
-  if (units.length === 1) return units[0];
-  return '份';
-}
-function instantStockUnit(item) {
-  return instantCountUnit(item);
-}
 // 有效库存：排除标记了「不再买」的品牌（它们不算进补货提醒）
 function getActiveStock(item) {
   if (item.variants && item.variants.length > 0) {
@@ -1926,7 +1913,7 @@ function variantBoughtCapacity(v) {   // 历史累计购入总容量 = 套餐数
   var one = variantOneSetCapacity(v);
   return { qty: Math.round(one.qty * variantPacksBought(v) * 100) / 100, unit: one.unit };
 }
-function variantTotalCapacity(v) { return variantBoughtCapacity(v); }  // 兼容旧名
+  // 兼容旧名
 function variantUnitPrice(v) {        // 单价（每单位多少钱）；无法计算 → null
   var cap = variantBoughtCapacity(v);
   var tp = parseFloat(v.totalPrice);
@@ -1999,7 +1986,6 @@ function variantPackText(v, item) {
 }
 // 按含量单位折算可比单价文本（kg→每kg；g/ml→每100g/每100ml；L→每L）
 // 比价文本（唯一口径）：「每 <单位原文> 约 X 元」
-function unitPricePerWeightText(v) { return unitPriceTextOf(v); }
 function variantPriceCompareText(v) { return unitPriceTextOf(v); }
 // 跨品牌比价：同物品内按单价升序，标出最划算的一款
 function cheapestVariantOf(item) {
@@ -2289,27 +2275,6 @@ function matchItem(item, zone, rawQ) {
     if (okAll) return { level: 3, via: '近似 · ' + fields[k].label, field: fields[k].text };
   }
   return null;
-}
-// 统一搜索入口：scope = 'all' 或某个 zoneId
-function searchItems(query, scope) {
-  var out = [];
-  var rawQ = String(query || '').trim();
-  if (!rawQ) return out;
-  DB.zones.forEach(function (zone) {
-    if (scope && scope !== 'all' && String(scope) !== String(zone.id)) return;
-    (zone.items || []).forEach(function (it) {
-      var m = matchItem(it, zone, rawQ);
-      if (m) out.push({ item: it, zone: zone, level: m.level, via: m.via, field: m.field });
-    });
-  });
-  // 排序：命中档位优先（L1 > L2 > L3），同档内归档的排后面，再按名称
-  out.sort(function (a, b) {
-    if (a.level !== b.level) return a.level - b.level;
-    var aa = !!a.item.archived, bb = !!b.item.archived;
-    if (aa !== bb) return aa ? 1 : -1;
-    return String(a.item.name || '').localeCompare(String(b.item.name || ''), 'zh');
-  });
-  return out;
 }
 // 兼容旧调用点：全 App 模糊匹配（L1~L3 全档位）
 function matchesSearch(item, zone, q) { return !!matchItem(item, zone, q); }
@@ -2759,7 +2724,7 @@ function stockBarClass(item, status) {
 //        instant 即时型：点【消耗】扣数字，归零自动闭环（0 时按钮置灰）。
 //        （旧 count / spec / combo 一律归为 period）
 // 铁律④：没有闭环记录 = 没有数据。一律显示「📭 缺数据」，绝不推算任何数字。
-// 铁律⑤：采购建议 = Math.ceil(年消耗 − 当前剩余含在用)；≤0 → 「库存充足，暂无需采购」。
+// 铁律⑤：采购建议 = Math.ceil(年消耗件数 − 当前剩余件数)；≤0 → 「库存充足，暂无需采购」。【第 26 轮】件数与容量彻底剥离，容量只作并列展示。
 // 铁律⑥：区间并集计跨度 —— 并行开封 / 同锚点多条盘点流水绝不重复计时。
 // ==========================================================================
 var R24_DAYS_PER_MONTH = 31;
@@ -2873,10 +2838,33 @@ function inUseAmountOf(item) {
   });
   return Math.round(t * 100) / 100;
 }
-// 当前剩余（含在用）：未开 + 在用实物。库存口径与速率口径完全一致（同为「单位原文」）。
+// 【第 26 轮 · 反变量污染】当前剩余 = 纯「件数」口径（个/包/片/瓶），绝不混入容量数字！
+// 旧版把「未开容量 940g」和「在用 1 个」直接相加得出 941 个 —— 两套单位相加是绝对禁止的。
+//   有规格明细 → specRemainPieces（片类=片数；容量类=剩余包数）
+//   无明细（牙膏式：规格10个/套 × 120g/个）→ v.stock 本身就是件数（支/个），绝不再乘 packWeight
+// 速率（perMonth）也是件数口径 → restNow ÷ perMonth 才是真正的可用月数。
+// 容量口径单独走 restCapOf，两者只并列展示、绝不相加。
 function restNowOf(item) {
   if (!item) return 0;
   if (consumeModelOf(item) === 'instant') return instantTotalStock(item);
+  var t = 0;
+  (item.variants || []).forEach(function (v) { t += variantRestPieces(v); });
+  return Math.round(t * 100) / 100;
+}
+// 某品牌变体的剩余「件数」（与 restNowOf 同源，绝不混入容量）
+function variantRestPieces(v) {
+  if (!v) return 0;
+  var sp = variantSpecsOf(v);
+  if (sp.length) {
+    var t = 0;
+    sp.forEach(function (s) { t += specRemainPieces(v, s); });
+    return Math.round(t * 100) / 100;
+  }
+  return parseFloat(v.stock) || 0;
+}
+// 当前剩余容量（g/ml）：与 restNowOf 同源但独立计算，只作并列展示，绝不与件数相加
+function restCapOf(item) {
+  if (!item) return 0;
   var t = 0;
   (item.variants || []).forEach(function (v) {
     var sp = variantSpecsOf(v);
@@ -2886,7 +2874,39 @@ function restNowOf(item) {
       t += (parseFloat(v.stock) || 0) * (parseFloat(v.packWeight) || 1);
     }
   });
-  return Math.round((t + inUseAmountOf(item)) * 100) / 100;
+  return Math.round(t * 100) / 100;
+}
+// 平均「每件」容量（牙膏=120g/支、洗发水=480ml/瓶、猫粮=5kg/包）：Σ购入容量 ÷ Σ购入件数
+function avgCapOf(item) {
+  var capT = 0, pcsT = 0;
+  ((item && item.variants) || []).forEach(function (v) {
+    var sp = variantSpecsOf(v);
+    if (sp.length) {
+      sp.forEach(function (s) {
+        var n = variantPacksBought(v) * specPackCount(s);
+        pcsT += n;
+        capT += n * specPackQty(s) * specContentOf(s);
+      });
+    } else {
+      var n2 = variantPacksBought(v) * (parseFloat(v.packQty) || 1);
+      var w = parseFloat(v.packWeight) || 0;
+      if (w > 0) { pcsT += n2; capT += n2 * w; }
+    }
+  });
+  return (pcsT > 0 && capT > 0) ? Math.round(capT / pcsT * 100) / 100 : 0;
+}
+// 某品牌变体的「每件容量」：牙膏=120g/支；规格明细型=每包含量×每份规格
+function perPieceCapOf(v) {
+  if (!v) return null;
+  var sp = variantSpecsOf(v);
+  if (sp.length) {
+    var q = specPackQty(sp[0]) * specContentOf(sp[0]);
+    var u = String(sp[0].unit || v.packWeightUnit || '').trim();
+    return (q > 0) ? { qty: q, unit: u } : null;
+  }
+  var w = parseFloat(v.packWeight);
+  if (w > 0) return { qty: w, unit: String(v.packWeightUnit || v.weightUnit || '').trim() };
+  return null;
 }
 // 历史累计购入总量（口径与 restNowOf 完全同源）：Σ 变体「购入件数 × 单件量」
 // 清空记录时库存必须回滚到这个数 —— 「记录没了，库存却少了」是绝不能接受的错账。
@@ -2952,21 +2972,97 @@ function calcUsageRate(item) { var st = statsOf(item); return st ? (st.perMonth 
 // 含量口径已彻底废除（废除一切单位换算）。保留空实现仅为兼容旧调用点。
 function contentRateOf(item) { return null; }
 // 均值单件量：仅作「一份有多少」的展示参考，绝不参与速率/建议计算
-function variantAvgPiece(v) {
-  var ss = variantSpecsOf(v); if (!ss.length) return 0;
-  var pieces = variantSpecPerSetPieces(v);
-  if (!(pieces > 0)) return 0;
-  return Math.round(variantSpecPerSet(v) / pieces * 100) / 100;
+// ---------- 【第 25 轮】双口径展示：库存单位数（包/份/片）+ 容量数（kg/ml）----------
+// 这不是单位换算：每份装多少（规格里的 content / 旧数据 packWeight）是用户自己录进去的原文，
+// 这里只是把「1.9 包」和「1.9 包 × 5kg/包 = 9.5kg」这两个数并列写出来，让用户一眼看到两种口径。
+// 每份只装 1 个（content=1，如姨妈巾 1片/片）时不加括号 —— 括号里跟主数字一模一样是废话。
+function unitCapacityOf(item) {
+  if (!item) return null;
+  // 平均每件容量（多品牌/多规格按购入量加权）：牙膏 120g/支+100g/支 → 111.1g/支
+  var avg = avgCapOf(item);
+  if (!(avg > 0)) return null;
+  // 容量单位：规格明细单位 > 重量单位 > 主单位
+  var capUnit = '';
+  ((item.variants) || []).forEach(function (v) {
+    if (capUnit) return;
+    var sp = variantSpecsOf(v);
+    if (sp.length) capUnit = String(sp[0].unit || '').trim();
+    else capUnit = String(v.packWeightUnit || v.weightUnit || '').trim();
+  });
+  if (!capUnit) capUnit = mainPackUnit(item);
+  // mismatch=true：规格明细的「单位」字段被填成了容量单位（如 480ml/瓶 的 unit='ml'），
+  // 而记录 qty 实际是「包数」—— 此时主数字若直接拼 unit 会变成「0.3ml」这种错话，
+  // 必须拆成「0.3份（约144ml）」。
+  var mismatch = false;
+  var sp0 = variantSpecsOf(item.variants[0]);
+  if (sp0.length && isContentUnitText(sp0[0].unit) && specPackQty(sp0[0]) === 1 && specContentOf(sp0[0]) > 1) mismatch = true;
+  return { qty: avg, unit: capUnit, mismatch: mismatch };
 }
-function itemAvgPieceOf(item) {
-  var v = ((item && item.variants) || []).find(function (x) { return variantSpecsOf(x).length; });
-  return v ? variantAvgPiece(v) : 0;
+// 剩余容量的展示单位：优先容量单位（g/kg/ml），没有才退回主单位
+function capacityUnitOf(item) {
+  var c = unitCapacityOf(item);
+  return (c && c.unit) ? c.unit : mainPackUnit(item);
 }
-// 速率展示文本：纯数字 + 单位原文（原样拼接，无任何换算）
-function rateValueText(item, perMonth, suffix) {
-  return trimNum(round1(perMonth)) + mainPackUnit(item) + (suffix || '');
+// 「1.9包（约9.5kg）」—— 件数为主、容量为辅（用于月/年消耗、采购建议、年需求）。
+// 铁律：两个数字是乘法关系（件数 × 每件容量），绝不许相加、绝不许互相冒充。
+function dualUnitText(num, item) {
+  var u = mainPackUnit(item);
+  var cap = unitCapacityOf(item);
+  var n = round1(num);
+  if (!cap || !(cap.qty > 1) || !cap.unit) return trimNum(n) + escapeHtml(u);
+  if (cap.unit !== u) return trimNum(n) + escapeHtml(u) + '（约' + trimNum(round1(n * cap.qty)) + escapeHtml(cap.unit) + '）';
+  // 规格明细把「单位」填成了容量单位（如 480ml/瓶）→ 主数字改用「份」，容量进括号
+  if (cap.mismatch) return trimNum(n) + '份（约' + trimNum(round1(n * cap.qty)) + escapeHtml(cap.unit) + '）';
+  return trimNum(n) + escapeHtml(u);
+}
+// 「7个（约840g）」—— 使用记录的数量文案：件数为主、容量为辅（乘法关系，绝不许相加/互冒充）
+// 单位一律 escapeHtml，防止用户自填单位里带尖括号把页面结构撑坏
+function recQtyText(q, item) {
+  var n = parseFloat(q) || 0;
+  var u = mainPackUnit(item);
+  var cap = unitCapacityOf(item);
+  var txt;
+  // mismatch：规格把「单位」填成了容量单位（480ml/瓶）→ 主数字改用「份」，容量进括号
+  if (cap && cap.mismatch) txt = trimNum(round1(n)) + '份';
+  else txt = trimNum(round1(n)) + escapeHtml(u);
+  if (cap && cap.qty > 1 && cap.unit && isContentUnitText(cap.unit)) {
+    txt += '（约' + trimNum(round1(n * cap.qty)) + escapeHtml(cap.unit) + '）';
+  }
+  return txt;
+}
+// 「9个（≈940g）」—— 当前剩余的件数与容量并列（采购建议 / 详情页当前库存行专用）
+function dualRestText(item) {
+  var cap = unitCapacityOf(item);
+  var main = mainPackUnit(item);
+  // 规格把「单位」填成了容量单位（480ml/瓶）→ 主数字改用「份」，否则会说出「4ml」这种错话
+  var a = (cap && cap.mismatch)
+    ? trimNum(round1(restNowOf(item))) + '份'
+    : trimNum(round1(restNowOf(item))) + escapeHtml(main);
+  if (cap && cap.qty > 1 && cap.unit && isContentUnitText(cap.unit)
+      && (cap.unit !== main || cap.mismatch)) {
+    a += '（≈' + trimNum(round1(restCapOf(item))) + escapeHtml(cap.unit) + '）';
+  }
+  return a;
+}
+// 卡片右侧「剩余」= 剩余库存（随每次消耗/盘点实时变动）：有容量概念报容量，否则报件数
+function restTextOf(item) {
+  var cap = unitCapacityOf(item);
+  if (cap && cap.qty > 1 && cap.unit && isContentUnitText(cap.unit)
+      && (cap.unit !== mainPackUnit(item) || cap.mismatch)) {
+    return trimNum(round1(restCapOf(item))) + escapeHtml(cap.unit);
+  }
+  return trimNum(round1(restNowOf(item))) + escapeHtml(mainPackUnit(item));
+}
+// 右侧数字字号自适应：以 6 个字符（如「1920ml」）为设计基准，超长自动缩小，绝不挤掉产品名
+function autoNumFont(txt) {
+  var n = String(txt || '').length;
+  if (n <= 4) return 15;
+  if (n <= 6) return 13.5;
+  if (n <= 8) return 12;
+  return 11;
 }
 
+// 速率展示文本：纯数字 + 单位原文（原样拼接，无任何换算）
 // ========== 统计层：统一产出「月消耗 / 年消耗 / 当前剩余 / 建议采购」==========
 function statsOf(item) {
   if (!item) return null;
@@ -2980,11 +3076,14 @@ function statsOf(item) {
     piecesPerSet: 1, unitSmall: unit,
     restNow: 0, restSmall: 0, monthsLeft: null,
     usedThisYear: 0, closedCount: 0, noClosedData: true,
-    totalQty: 0, spanDays: 0, breakdown: []
+    totalQty: 0, spanDays: 0, breakdown: [],
+    cap: null, capUnit: unit
   };
   if (!item) return out;
   out.restNow = restNowOf(item);
   out.restSmall = out.restNow;
+  out.cap = unitCapacityOf(item);
+  out.capUnit = capacityUnitOf(item);
 
   if (model === 'instant') {
     // 即时型：每次打卡 = 一次完整消耗。月份数 = 跨度 ÷ 31（下限 1）；年 = (总耗 ÷ 月份数) × 12
@@ -3044,23 +3143,25 @@ function statsOf(item) {
 }
 
 // ========== 采购建议 ==========
-// 公式：Math.ceil(年消耗 − 当前剩余含在用)；≤0 → 库存充足
+// 公式：Math.ceil(年消耗件数 − 当前剩余件数)；≤0 → 库存充足（容量只并列展示，绝不参与缺口运算）
 function buyAdviceOf(item) {
   var st = statsOf(item);
   if (!st) return null;
   if (st.noClosedData) return { main: NO_DATA_TEXT, detail: null, noData: true };
+  // 缺口 = 年消耗件数 − 当前剩余件数（两者同为件数口径，容量只在展示里并列出现）
   var need = Math.ceil(st.perYearRaw - st.restNow);
-  var u = escapeHtml(st.unit);
   if (!(need > 0)) {
     return {
       main: SUFFICIENT_TEXT,
-      detail: '年耗 ≈' + trimNum(round1(st.perYearRaw)) + u + ' · 当前还剩 ' + trimNum(st.restNow) + u,
+      // 【第 26 轮】当前剩余 = 剩余件数（可并列容量），绝不再把容量当件数拼进这句话
+      detail: '年耗 ≈' + dualUnitText(st.perYearRaw, item) + ' · 当前还剩 ' + dualRestText(item),
       noData: false, sufficient: true
     };
   }
   return {
-    main: '建议囤 <strong>' + need + ' ' + u + '</strong>（约够一年）',
-    detail: '年耗 ≈' + trimNum(round1(st.perYearRaw)) + u + ' · 当前剩 ' + trimNum(st.restNow) + u
+    // 【第 25 轮】建议量同时给「包数 + 容量」：建议囤 21包（约105kg）
+    main: '建议囤 <strong>' + dualUnitText(need, item) + '</strong>（约够一年）',
+    detail: '年耗 ≈' + dualUnitText(st.perYearRaw, item) + ' · 当前剩 ' + dualRestText(item)
       + ' · 已闭环 ' + st.closedCount + ' 次',
     noData: false
   };
@@ -3179,12 +3280,6 @@ function monthsLeftSentenceOf(st) {
 }
 
 // 建议采购的一句话依据（把 buyAdviceOf.main 的 HTML 洗成纯文本）
-function adviceMainText(item) {
-  var adv = buyAdviceOf(item);
-  if (!adv) return '';
-  return String(adv.main || '').replace(/<[^>]+>/g, '');
-}
-
 // 主入口：把 DB 里所有消耗品凑成年报
 function buildAnnualReport() {
   var out = {
@@ -3543,19 +3638,24 @@ function renderItemCard(item, zone) {
   // ========== 第一段（第 13 轮重排）：产品名 + 核心库存数并排一行（粗体大字），图标竖向堆叠 ==========
   // 模型 ⚡/⌛ 与状态 💭/🌀/⚠️/❗️ 从横排改为竖排（上下堆叠），只占一个图标的宽度，
   // 释放出来的横向空间全部还给「标题（左）+ 核心数据（右）」
+  // 【第 25 轮】右侧主数字 = 当前剩余库存（容量口径，随每次消耗/盘点实时变动）。
+  // 例：洗发水剩 1920ml、猫粮剩 15kg、姨妈巾剩 60片 —— 一律「数字 + 容量单位原文」。
   var heroTxtC = '', heroSubC = '';
   if (!isDurable) {
-    var stkFullC = String(stockSummaryOf(item));
-    var stkPartsC = stkFullC.split('·');
-    // 【第 17 轮】主数字只留纯库存量（如 1920ml），去掉括号折算（约5.1份）——
-    // 名称是第一视觉重心，库存只是附属信息，长折算文本会把名称挤没
-    heroTxtC = stkPartsC[0].replace(/（[^）]*）/g, '').replace(/\([^)]*\)/g, '').trim();
-    heroSubC = stkPartsC.slice(1).join('·').trim();
+    var st25 = null;
+    try { st25 = statsOf(item); } catch (e) { st25 = null; }
+    heroTxtC = restTextOf(item);
+    // 副行补一句「在用 N」提示（有正在消耗中的实物时）
+    if (st25 && st25.model !== 'instant') {
+      var iuC = inUseAmountOf(item);
+      if (iuC > 0) heroSubC = '· 在用 ' + trimNum(round1(iuC)) + mainPackUnit(item);
+    }
   }
   html += '<div style="display:flex;align-items:center;gap:6px">';
   html += '<div class="card-name" style="flex:1;min-width:0">' + escapeHtml(item.name) + '</div>';
   if (!isDurable && heroTxtC) {
-    html += '<span class="card-hero" style="flex-shrink:0;text-align:right">' + escapeHtml(heroTxtC) + '</span>';
+    // 字号自适应：以 6 字符（如「1920ml」）为基准，超长自动缩小，保证不挤掉产品名
+    html += '<span class="card-hero" style="flex-shrink:0;text-align:right;font-size:' + autoNumFont(heroTxtC) + 'px;white-space:nowrap">' + escapeHtml(heroTxtC) + '</span>';
   }
   if (stL) {
     var mdlC = (cModelC === 'instant') ? '⚡' : '⌛';
@@ -3585,14 +3685,14 @@ function renderItemCard(item, zone) {
   } else {
     // ========== 第二段（第 13 轮）：灰色小字行（库存构成 + 可用天数，同一行、左对齐、可换行）==========
     // 核心数据（如 41片）已上移到第一行与标题并排；本行只放灰色辅助小字，行距保持不挤压
+    // 【第 25 轮】主标题下方固定留一行「可用天数」：
+    //   有闭环数据 → 「可用 ≈ X 天」；没有闭环 → 「📭 缺少数据」，等有数据后自动更新。
+    //   （绝不再出现整行空着、或拿「使用中」硬凑天数的情况）
     var daysTxtC = cardDaysText(item, status);
-    if (heroSubC || daysTxtC) {
-      html += '<div class="card-sec" style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">';
-      if (heroSubC) html += '<span class="card-hero-sub">' + escapeHtml(heroSubC) + '</span>';
-      // 可用天数：全卡第二个（也是最后一个）被强调的数据，不做加粗，只做深灰
-      if (daysTxtC) html += '<span class="card-days">' + escapeHtml(daysTxtC) + '</span>';
-      html += '</div>';
-    }
+    html += '<div class="card-sec" style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">';
+    if (heroSubC) html += '<span class="card-hero-sub">' + escapeHtml(heroSubC) + '</span>';
+    html += '<span class="card-days">' + escapeHtml(daysTxtC) + '</span>';
+    html += '</div>';
 
     // ========== 第三段：操作按钮（底部，压缩高度）==========
     html += '<div class="card-price-zone" style="display:flex;gap:7px">';
@@ -3610,21 +3710,25 @@ function renderItemCard(item, zone) {
   return html;
 }
 
-// 第 12 轮：卡片第二行的「可用天数」文案 —— 只在数据算得出来时显示，避免乱报
-// 口径与状态标签保持一致：数据不足一律留空（不显示「? 天」这种废话）
+// 【第 25 轮】卡片「可用天数」文案 —— 必须与详情页、年报同一套 statsOf 口径：
+//   有闭环记录 → 「可用 ≈ X 天」（X = 当前剩余 ÷ 月消耗 × 31 天）；
+//   无闭环记录 → 「📭 缺少数据」，绝不拿「使用中」硬凑天数，等有完整周期后自动更新。
+//   保质期是事实提醒，优先级高于消耗预估。
 function cardDaysText(item, status) {
   try {
-    var st = status || getItemStatus(item);
-    if (!st) return '';
-    // 保质期临近优先（这是事实提醒）
-    if (st.expired) return '';
-    if (st.expiring && st.daysLeft !== null && st.daysLeft !== undefined) return '· 剩 ' + st.daysLeft + ' 天过期';
-    var d = st.estDaysLeft;
-    if (d === null || d === undefined) return '';
-    d = Math.max(0, Math.round(d));
-    if (d > 365 * 2) return '';
-    return '· 可用 ≈ ' + d + ' 天';
-  } catch (e) { return ''; }
+    var stS = status;
+    if (!stS) { try { stS = getItemStatus(item); } catch (e) { stS = null; } }
+    if (stS && stS.expired) return '已过期';
+    if (stS && stS.expiring && stS.daysLeft !== null && stS.daysLeft !== undefined) return '剩 ' + stS.daysLeft + ' 天过期';
+    var st = statsOf(item);
+    if (!st || st.noClosedData) return '📭 缺少数据';
+    // 【第 26 轮】件数与容量彻底剥离：可用天数 = 剩余件数 ÷ 月消耗件数，容量只作展示参考
+    var pm = st.perMonth;
+    if (!(pm > 0)) return '📭 缺少数据';
+    var d = st.restNow / pm * R24_DAYS_PER_MONTH;
+    if (!isFinite(d)) return '📭 缺少数据';
+    return '可用 ≈ ' + Math.max(0, Math.round(d)) + ' 天';
+  } catch (e) { return '📭 缺少数据'; }
 }
 
 // ========== 状态对账（Reconcile）==========
@@ -4249,7 +4353,8 @@ function renderCardFront(item, zone) {
 
   if (zone.type === 'consumable') {
     var status = getItemStatus(item);
-    var totalStock = getTotalStock(item);
+    // 【第 26 轮】「库存」一律走件数口径 restNowOf（规格明细型按剩余件数算），绝不混入容量
+    var totalStock = restNowOf(item);
     if (totalStock !== undefined) {
       var threshold = item.stockThreshold || 1;
       var maxBar = Math.max(totalStock, threshold * 3);
@@ -4356,22 +4461,15 @@ function renderCardBack(item, zone) {
     // 第 12 轮：即时型 5 按钮压成同一行（flex-wrap:nowrap），图标为主 + 极小文字；
     //          最后一个按钮由「补货」改为「委托」（补货属于委托流程的一环）
     if (isInstantB) {
-      var lastInstIdx = -1;
-      for (var lb = (item.usageRecords || []).length - 1; lb >= 0; lb--) {
-        if (item.usageRecords[lb] && item.usageRecords[lb].instant) { lastInstIdx = lb; break; }
-      }
-      var canUndo = (lastInstIdx >= 0);
-      var opBtn = 'btn btn-outline btn-sm act-mini';
-      // 【第 24 轮】即时型归零即自动闭环 → 库存为 0 时【消耗】【批量】按钮一律置灰，杜绝点了才提示
+      // 【第 25 轮】删掉「回退 / 批量」两个按钮，只剩 消耗 / 盘点 / 委托 三个 ——
+      //   一行三等分（flex:1 1 0），间距与周期型完全一致，视觉更整齐。
+      //   【第 24 轮】即时型归零即自动闭环 → 库存为 0 时【消耗】一律置灰，杜绝点了才提示
       var instLeftB = instantTotalStock(item);
+      var opBtn = 'btn btn-outline btn-sm act-mini';
       html += '<div class="act-row">';
       html += '<button class="' + opBtn + '"'
         + (instLeftB > 0 ? '' : ' disabled style="opacity:.45"')
         + ' onclick="' + (instLeftB > 0 ? 'punchInstantPick(\'' + item.id + '\')' : 'toast(\\\'已经用完了，先补货\\\')') + '">✨<i>消耗</i></button>';
-      html += '<button class="' + opBtn + '"' + (canUndo ? '' : ' style="opacity:0.4"') + ' onclick="' + (canUndo ? 'unpunchInstant(\\\'' + item.id + '\\\',\\\'' + instantTargetVariant(item) + '\\\')' : 'toast(\\\'还没有可回退的消耗记录\\\')') + '">↺<i>回退</i></button>';
-      html += '<button class="' + opBtn + '"'
-        + (instLeftB > 0 ? '' : ' disabled style="opacity:.45"')
-        + ' onclick="' + (instLeftB > 0 ? 'batchPunchInstant(\'' + item.id + '\',\'' + instantTargetVariant(item) + '\')' : 'toast(\\\'已经用完了，先补货\\\')') + '">🪄<i>批量</i></button>';
       html += '<button class="' + opBtn + '" onclick="openStockAuditForm(\'' + item.id + '\')">⚖️<i>盘点</i></button>';
       html += '<button class="' + opBtn + '" onclick="taskFromItem(\'' + zone.id + '\',\'' + item.id + '\')">💸<i>委托</i></button>';
       html += '</div>';
@@ -4414,12 +4512,15 @@ function renderCardBack(item, zone) {
       var iuH = instantUsedQty(item);
       var iuUnitH = (item.variants && item.variants[0] ? (item.variants[0].packUnit || mainPackUnit(item)) : mainPackUnit(item)) || '份';
       if (iuH > 0) rateLine = '今年已用 ' + trimNum(iuH) + ' ' + escapeHtml(iuUnitH);
-    } else if (rateB > 0) {
-      // 【第 22 轮】年化统一 365 天精确折算；/年 后缀让 rateValueText 走「总含量 ÷ 闭环天数 × 365」路径
-      rateLine = '月消耗量 ' + rateValueText(item, rateB, '') + ' · 年消耗量 ' + rateValueText(item, annualize(rateB), '/年');
-      if (isSetPackMode(item)) {
-        var aqH = avgPackQtyOf(item);
-        if (aqH > 1) rateLine += ' · 年需求 ≈' + round1(annualize(rateB) * aqH) + escapeHtml(mainPackUnit(item));
+    } else {
+      // 【第 25 轮】周期型必须同时给「包数 + 容量」两个口径：
+      //   月消耗量 1.9包（约9.5kg） · 年消耗量 22.7包（约113.6kg） · 年需求 ≈22.7包（约113.6kg）
+      // 单位全部引用规格里录入的原文，绝不臆造单位。
+      var stH = statsOf(item);
+      if (stH && !stH.noClosedData && stH.perMonth > 0) {
+        rateLine = '月消耗量 ' + dualUnitText(stH.perMonth, item)
+          + ' · 年消耗量 ' + dualUnitText(stH.perYearRaw, item)
+          + ' · 年需求 ≈' + dualUnitText(stH.perYearRaw, item);
       }
     }
     if (rateLine) {
@@ -4447,9 +4548,13 @@ function renderCardBack(item, zone) {
             + advB.detail + '</div>';
         }
         if (stAllB.monthsLeft !== null && stAllB.monthsLeft !== undefined) {
-          // 【第 24 轮】口径统一：当前剩余（含在用）+ 单位原文，不再有「含量/件数/套」三套说法
-          var uLeft = trimNum(stAllB.restNow) + escapeHtml(stAllB.unit);
-          html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">当前库存 ' + uLeft + '，约够用 ' + Math.max(0, Math.round(stAllB.monthsLeft)) + ' 个月</div>';
+          // 【第 26 轮】当前剩余 = 剩余件数（并列剩余容量），绝不用容量冒充件数
+          var uLeft = dualRestText(item);
+          // 不足 1 个月时说「约 X 天」更直观（0 个月没有信息量）
+          var durTxt = (stAllB.monthsLeft < 1)
+            ? '约 ' + Math.max(1, Math.round(stAllB.monthsLeft * R24_DAYS_PER_MONTH)) + ' 天'
+            : '约够用 ' + Math.max(1, Math.round(stAllB.monthsLeft)) + ' 个月';
+          html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">当前库存 ' + uLeft + '，' + durTxt + '</div>';
         }
       } else if (rateBv > 0) {
         // 有速率但暂无采购量建议：给半年/一年参考量（原底部块内容，随上移保留）
@@ -4738,7 +4843,7 @@ function renderCardBack(item, zone) {
         var iuQty = instantUsedQty(item);
         var iuUnit = (item.variants && item.variants[0] ? (item.variants[0].packUnit || mainPackUnit(item)) : mainPackUnit(item)) || '份';
         html += '<div class="back-row"><span class="back-label">今年已用</span><span class="back-value" style="color:var(--accent);font-weight:700">' + trimNum(iuQty) + ' ' + escapeHtml(iuUnit) + '</span></div>';
-        html += '<div class="back-row"><span class="back-label">剩余</span><span class="back-value">' + trimNum(getTotalStock(item)) + ' ' + escapeHtml(iuUnit) + '</span></div>';
+        html += '<div class="back-row"><span class="back-label">剩余</span><span class="back-value">' + trimNum(restNowOf(item)) + ' ' + escapeHtml(iuUnit) + '</span></div>';
         var iuSt = statsOf(item);
         if (iuSt && iuSt.rate > 0 && iuSt.monthsLeft !== null) {
           html += '<div class="back-row"><span class="back-label">按当前速度</span><span class="back-value">还能用 ≈ ' + round1(iuSt.monthsLeft) + ' 个月</span></div>';
@@ -4750,7 +4855,7 @@ function renderCardBack(item, zone) {
           html += '<div style="font-size:11px;font-weight:600;color:var(--text-tertiary);margin-bottom:4px">按品牌分账</div>';
           vsIu.forEach(function (v) {
             var usedV = instantUsedQty(item, v.id);
-            var leftV = parseFloat(v.stock) || 0;
+            var leftV = variantRestPieces(v);
             html += '<div class="back-row" style="padding:3px 0"><span class="back-label" style="color:var(--text-secondary)">' + escapeHtml(v.brand || '未命名') + '</span>'
               + '<span class="back-value" style="font-size:12px">已用 ' + trimNum(usedV) + escapeHtml(iuUnit) + ' · 剩 ' + trimNum(leftV) + escapeHtml(iuUnit) + '</span></div>';
           });
@@ -4758,10 +4863,7 @@ function renderCardBack(item, zone) {
         }
       } else if (rate > 0) {
         // 第 10 轮：月消耗量 / 年消耗量已上移至「总库存」下方信息区，此处不再重复
-        if (isSetPackMode(item)) {
-          var aq0 = avgPackQtyOf(item);
-          if (aq0 > 1) html += '<div class="back-row"><span class="back-label">年需求容量</span><span class="back-value">≈ ' + round1(annualize(rate)*aq0) + escapeHtml(mainPackUnit(item)) + '/年</span></div>';
-        }
+        // 【第 26 轮】旧版在这里把「年需求件数 × 每套件数」标成「年需求容量」—— 那是拿件数冒充容量，已删除。
       }
       // --- 第 17 轮：详细「建议采购」已上移至顶部信息区（紧贴月/年消耗量），此处删除重复块 ---
       var stAll = statsOf(item);
@@ -4775,7 +4877,6 @@ function renderCardBack(item, zone) {
       // --- 历史台账记录 ---
       if (hasRecsO) {
         html += '<div class="usage-log" style="margin-top:8px">';
-        var aqR = avgPackQtyOf(item);
         var allP = item.usageRecords.map(function(r, oi) { return { r: r, oi: oi }; });
         var actAll = allP.filter(function(w) { return !w.r.endDate && !w.r.instant && !w.r.isAudit && w.r.startDate; });
         var restAll = allP.filter(function(w) { return !(!w.r.endDate && !w.r.instant && !w.r.isAudit && w.r.startDate); });
@@ -4785,19 +4886,18 @@ function renderCardBack(item, zone) {
           var startStr = r.startDate ? formatDate(r.startDate) : (r.date ? formatDate(r.date) : '');
           var vsR0 = item.variants || [];
           var vR0 = r.variantId ? vsR0.find(function(x) { return x.id === r.variantId; }) : null;
+          // 【第 26 轮 · 铁律】件数为主、容量为辅 →「7个（约840g）」
+          // 旧版把「每套件数 9」乘进括号得到「1个（≈9个）」——那是拿件数冒充容量，已彻底禁止。
           var qtyTxt;
+          var capU26 = capacityUnitOf(item);
           if (r.specText) {
-            qtyTxt = r.specText;
-            if (r.contentUsed > 0) qtyTxt += '（≈' + trimNum(round1(r.contentUsed)) + (vR0 ? weightUnitOf(vR0) : '') + '）';
-          } else {
-            qtyTxt = (r.qty||1) + rateUnitName(item);
-            if (isSetPackMode(item) && aqR > 1) qtyTxt += '（≈' + round1((r.qty||1) * aqR) + escapeHtml(mainPackUnit(item)) + '）';
-            else if (!isSetPackMode(item)) {
-              var vR = vR0;
-              if (!vR) vR = vsR0.find(function(x) { return (parseFloat(x.packWeight) || 0) > 0; });
-              var wR = vR ? (parseFloat(vR.packWeight) || 0) : 0;
-              if (wR > 0) qtyTxt += '（≈' + trimNum(round1((r.qty||1) * wR)) + weightUnitOf(vR) + '）';
+            qtyTxt = escapeHtml(r.specText);
+            // 只有容量类规格（g/ml）才补括号；片/粒类的 contentUsed 本身就是片数，补了会变成「≈15kg」这种错话
+            if (r.contentUsed > 0 && isContentUnitText(capU26)) {
+              qtyTxt += '（约' + trimNum(round1(r.contentUsed)) + escapeHtml(capU26) + '）';
             }
+          } else {
+            qtyTxt = recQtyText(r.qty || 1, item);
           }
           var recTxt;
           if (r.type === 'surplus') {
@@ -5249,7 +5349,7 @@ function manualRefresh() {
 
 // ========== 自动更新检查 ==========
 // deploy.py 部署时会把 1791388211 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791479884';
+var APP_VERSION = '1791485037';
 
 function checkAppUpdate(manual) {
   try {
@@ -5962,12 +6062,6 @@ function unpunchInstant(itemId, variantId) {
 
 // 即时消耗型：点「消耗一份」时作用在哪个品牌上
 // 规则：优先还有库存的品牌；多个都有 → 取第一个（用户可在卡片里切换品牌后单独点）
-function instantTargetVariant(item) {
-  var vs = (item.variants || []).filter(function (v) { return !v.usedUp && (parseFloat(v.stock) || 0) > 0; });
-  if (!vs.length) return (item.variants && item.variants[0]) ? item.variants[0].id : '';
-  return vs[0].id;
-}
-
 // 【第 10 轮 · 修 Bug】即时型「点消耗」必须让用户明确选了哪个品牌。
 // 【第 13 轮 · 级联选择】多品牌时第一步选品牌；品牌下还有规格明细（如「修护型面膜」下的
 // 「胶原蛋白面膜 / 玻尿酸面膜」）时，第二步**必须**继续选具体规格，绝不能跳过、
@@ -6706,7 +6800,7 @@ function renderConsumableVariantRows() {
     // 🧩：展开/收起「规格明细」（组合消耗型按子规格记录用；普通品牌不用管）
     html += '<button type="button" class="vside-btn h' + (specsOpen ? ' on spec' : '') + '" onclick="toggleVariantSpecsOpen(' + i + ')">🧩<small>规格' + ((v.specs || []).length ? ' ' + v.specs.length : '') + '</small></button>';
     // ❌：这个品牌用完就不再买了（= noRestock，不再计入补货提醒）
-    html += '<button type="button" class="vside-btn h' + (v.noRestock ? ' on' : '') + '" onclick="toggleVariantNoRestock(' + i + ')">❌<small>不再买</small></button>';
+    html += '<button type="button" class="vside-btn h' + (v.noRestock ? ' on' : '') + '" onclick="toggleEditVariantNoRestock(' + i + ')">❌<small>不再买</small></button>';
     if (variants.length > 1) {
       html += '<button type="button" class="vside-btn h" title="删除这个品牌" onclick="removeConsumableVariantRow(' + i + ')">🗑<small>删除</small></button>';
     }
@@ -6781,7 +6875,7 @@ function toggleVariantSpecsOpen(i) {
   renderVariantList();
 }
 // ❌ 切换「不再买」（用完不回购，不再计入补货提醒）
-function toggleVariantNoRestock(i) {
+function toggleEditVariantNoRestock(i) {
   var v = (window._editVariants || [])[i]; if (!v) return;
   v.noRestock = !v.noRestock;
   renderVariantList();
@@ -7564,7 +7658,9 @@ function buildYearStats(year) {
           var w = parseFloat(v.packWeight) || 0;
           if (w > 0) { wAvg = w; wAvgUnit = weightUnitOf(v); }
         });
-        if (wAvg > 0) {
+        // 【第 26 轮】只有真·容量单位（g/ml/kg…）才允许出现在括号里；
+        // 片/粒类即便误填了 packWeight，也绝不能把「件数 × 重量」说成容量。
+        if (wAvg > 0 && isContentUnitText(wAvgUnit)) {
           // 若这一年的记录带 contentUsed（规格开封时算过含量），优先用它
           var contentSum = 0, hasContent = false;
           (it.usageRecords || []).forEach(function (r) {
@@ -7828,7 +7924,7 @@ function openYearReview(year) {
     html += '<div style="min-width:0"><strong>' + escapeHtml(e.name) + '</strong>';
     html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px">' + e.zoneIcon + ' ' + escapeHtml(e.zoneName) + ' · ' + escapeHtml(e.categoryPath) + '</div></div>';
     html += '<div style="text-align:right;flex-shrink:0"><div style="font-weight:700">' + (e.estimated ? '约 ' : '') + '¥' + e.spend.toFixed(2) + '</div>';
-    html += '<div style="font-size:11px;color:var(--text-secondary)">用了 ' + e.qty + e.unit + (e.capQty > 0 ? '（≈' + e.capQty + escapeHtml(e.capUnit) + '）' : '') + '</div></div>';
+    html += '<div style="font-size:11px;color:var(--text-secondary)">用了 ' + e.qty + escapeHtml(e.unit) + (e.capQty > 0 && isContentUnitText(e.capUnit) ? '（≈' + e.capQty + escapeHtml(e.capUnit) + '）' : '') + '</div></div>';
     html += '</div>';
     var meta = [];
     if (e.unitPrice > 0) meta.push('均价 ¥' + e.unitPrice.toFixed(2) + '/' + e.unit);
@@ -10114,15 +10210,22 @@ function taskEdit(id) { taskOpenForm(id); }
 var reportFoldState = {};     // 大类折叠：{ catKey: true }；默认全折叠
 var reportCrossQuery = '';    // 顶部跨年搜索词
 
-function reportToggle(key) { reportFoldState[key] = !reportFoldState[key]; renderReport(); }
+function reportToggle(key) { reportFoldState[key] = !(reportFoldState[key] === false); renderReport(); }
 function reportOnCrossSearch(v) { reportCrossQuery = String(v || ''); renderReport(); }
 function reportClearCrossSearch() { reportCrossQuery = ''; renderReport(); }
+
+// 【第 25 轮】年报只认补给品下的四大类，绝不再把「日用清洁·日用」「馋逼佬·宠物王国」
+// 这种二级分类单独拆成一个面板 —— 一律并到它的一级大类底下，展开后直接列产品。
+var MAIN_CATEGORIES = ['面子工程', '日用清洁', '馋逼佬', '休闲悦己'];
+var ARCHIVED_KEY = 'cat___archived';
 
 // 大类 key：分类路径的第一级（跨领地合并，同名大类算同一个）
 function itemTopCategory(item, zone) {
   var p = (zone && item.categoryId) ? (getCategoryPath(zone.id, item.categoryId) || '') : '';
-  var t = String(p).split(' / ')[0] || '';
+  // 分类路径形如「日用清洁 · 身体沐浴」或「馋逼佬 / 宠物王国」——一律取第一段
+  var t = String(p).split(/\s*[·•/|]\s*/)[0] || '';
   t = String(t).trim();
+  if (MAIN_CATEGORIES.indexOf(t) >= 0) return t;
   return t || '未分类';
 }
 
@@ -10143,6 +10246,8 @@ function reportCardOf(it, zone) {
     perYear: noData ? null : st.perYearRaw,
     perYearQty: noData ? null : st.perYearQty,
     restNow: st ? st.restNow : 0,
+    yearText: dualUnitText(st ? st.perYearRaw : 0, it),      // 「22.7包（约113.6kg）」
+    restText: restTextOf(it),                                // 当前剩余（件数为主，容量类并列容量）
     monthsLeft: st ? st.monthsLeft : null,
     unitPriceText: upText,
     adviceText: adv ? String(adv.main || '').replace(/<[^>]+>/g, '') : '',
@@ -10157,18 +10262,25 @@ function buildCategoryReport() {
     empty: true, emptyReason: '', asOf: new Date(),
     cats: [], counts: { items: 0, noData: 0, archived: 0, cats: 0 }
   };
-  var map = {}, order = [];
+  // 四大类常驻（顺序固定），已归档单独一组，其余（未命中四大类的）追加到末尾
+  var map = {}, order = MAIN_CATEGORIES.slice();
+  order.forEach(function (k) { map[k] = { key: 'cat_' + k, title: k, rows: [] }; });
+  var archivedRows = [];
   DB.zones.forEach(function (zone) {
     if (zone.type !== 'consumable') return;
     (zone.items || []).forEach(function (it) {
+      out.counts.items++;
+      if (it.archived) { archivedRows.push(reportCardOf(it, zone)); out.counts.archived++; return; }
       var top = itemTopCategory(it, zone);
       if (!map[top]) { map[top] = { key: 'cat_' + top, title: top, rows: [] }; order.push(top); }
       map[top].rows.push(reportCardOf(it, zone));
-      out.counts.items++;
-      if (it.archived) out.counts.archived++;
     });
   });
-  out.cats = order.map(function (k) { return map[k]; });
+  out.cats = order.map(function (k) { return map[k]; })
+    .filter(function (c) { return MAIN_CATEGORIES.indexOf(c.title) >= 0 || c.rows.length > 0; });
+  if (archivedRows.length) {
+    out.cats.push({ key: ARCHIVED_KEY, title: '已归档', rows: archivedRows, archived: true });
+  }
   out.cats.forEach(function (c) {
     c.noDataCount = c.rows.filter(function (r) { return r.noData; }).length;
     c.rows.sort(function (a, b) {
@@ -10183,6 +10295,11 @@ function buildCategoryReport() {
     c.dataCount = c.rows.filter(function (r) { return !r.noData; }).length;
   });
   out.cats.sort(function (a, b) {
+    if (!!a.archived !== !!b.archived) return a.archived ? 1 : -1;   // 「已归档」永远排最后
+    var ia = MAIN_CATEGORIES.indexOf(a.title), ib = MAIN_CATEGORIES.indexOf(b.title);
+    if (ia >= 0 && ib >= 0) return ia - ib;                          // 四大类顺序固定：面子工程→日用清洁→馋逼佬→休闲悦己
+    if (ia >= 0) return -1;                                          // 四大类排在其他分类之前
+    if (ib >= 0) return 1;
     if (a.dataCount !== b.dataCount) return b.dataCount - a.dataCount;
     return b.sumYear - a.sumYear;
   });
@@ -10256,9 +10373,9 @@ function renderReportRow(e) {
   if (e.noData) {
     html += '<div style="flex-shrink:0;font-size:11px;font-weight:600;color:#9aa0a6;background:#f1f3f4;border-radius:6px;padding:3px 7px">📭 缺数据</div>';
   } else {
-    html += '<div style="flex-shrink:0;text-align:right">';
-    html += '<div style="font-size:15px;font-weight:700;color:var(--text-primary)">' + trimNum(round1(e.perYear)) + ' ' + escapeHtml(e.unit) + '/年</div>';
-    html += '<div style="font-size:11px;color:var(--text-secondary)">剩 ' + trimNum(e.restNow) + ' ' + escapeHtml(e.unit) + '</div>';
+    html += '<div style="flex-shrink:0;text-align:right;max-width:56%">';
+    html += '<div style="font-size:13px;font-weight:700;color:var(--text-primary);line-height:1.3">' + escapeHtml(e.yearText || '') + '/年</div>';
+    html += '<div style="font-size:11px;color:var(--text-secondary)">剩 ' + escapeHtml(e.restText || '') + '</div>';
     html += '</div>';
   }
   html += '</div>';
@@ -10346,26 +10463,29 @@ function renderReport() {
     return;
   }
 
-  html += '<div style="display:flex;gap:8px;padding:0 16px 12px">';
-  html += '<div style="flex:1;background:var(--bg);border-radius:10px;padding:8px;text-align:center"><div style="font-size:16px;font-weight:700">' + r.counts.cats + '</div><div style="font-size:11px;color:var(--text-secondary)">大类</div></div>';
-  html += '<div style="flex:1;background:var(--bg);border-radius:10px;padding:8px;text-align:center"><div style="font-size:16px;font-weight:700">' + r.counts.items + '</div><div style="font-size:11px;color:var(--text-secondary)">产品</div></div>';
-  html += '<div style="flex:1;background:var(--bg);border-radius:10px;padding:8px;text-align:center"><div style="font-size:16px;font-weight:700">' + r.counts.noData + '</div><div style="font-size:11px;color:var(--text-secondary)">缺数据</div></div>';
-  html += '<div style="flex:1;background:var(--bg);border-radius:10px;padding:8px;text-align:center"><div style="font-size:16px;font-weight:700">' + r.counts.archived + '</div><div style="font-size:11px;color:var(--text-secondary)">已归档</div></div>';
+  // 【第 25 轮】顶部一行四列：四大类 + 已归档。只做入口，不带任何数字统计。
+  html += '<div class="report-cat-grid">';
+  r.cats.forEach(function (c) {
+    var open = reportFoldState[c.key] === false;
+    html += '<div class="report-cat-cell' + (open ? ' open' : '') + '" onclick="reportToggle(\'' + escapeHtml(c.key) + '\')">'
+      + '<span class="report-cat-txt">' + escapeHtml(c.title) + '</span></div>';
+  });
   html += '</div>';
 
   r.cats.forEach(function (c) {
     var folded = reportFoldState[c.key] !== false;   // 默认全折叠
     html += '<div class="report-group">';
     html += '<div class="report-group-head" onclick="reportToggle(\'' + escapeHtml(c.key) + '\')">';
-    html += '<span class="report-group-icon">🗂️</span>';
+    html += '<span class="report-group-icon">' + (c.archived ? '📦' : '🗂️') + '</span>';
     html += '<span class="report-group-title">' + escapeHtml(c.title) + '</span>';
-    html += '<span class="report-group-count">' + c.rows.length + '</span>';
     html += '<span class="report-group-arrow' + (folded ? ' folded' : '') + '">⌄</span>';
     html += '</div>';
-    html += '<div class="report-group-hint">' + c.rows.length + ' 件 · 有数据 ' + c.dataCount + ' 件'
-      + (c.noDataCount ? ' · 📭 缺数据 ' + c.noDataCount + ' 件' : '') + '（展开后按年耗降序）</div>';
+    html += '<div class="report-group-hint">展开后直接列产品 · 按年耗降序</div>';
     if (!folded) {
       html += '<div class="report-group-body">';
+      if (!c.rows.length) {
+        html += '<div style="font-size:12px;color:var(--text-tertiary);padding:10px 2px">这个大类下还没有产品</div>';
+      }
       c.rows.forEach(function (e) { html += renderReportRow(e); });
       html += '</div>';
     }
