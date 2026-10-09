@@ -1266,7 +1266,7 @@ function mergeDB(defaults, loaded) {
   }
   // 补给品套餐模型迁移（只增字段，零破坏：stock/totalPrice/price 原值不动）
   migrateConsumablePackages(result);
-  // 规格两层结构迁移（packCount 包数 × packQty 每包含量 × content 每份规格）
+  // 规格两层结构迁移（packCount 包数 × packQty 每包含量 × content 每件规格）
   // 关键：旧数据可能存着旧单层结构（只有 qty/content），合并时必须就地升级，
   // 不能依赖调用方事后再补跑 —— 否则 specPackQty 读不到会退回默认 1 造成口径错乱
   migrateSpecTwoLayer(result);
@@ -1396,10 +1396,10 @@ function genId() {
 // ========== 子物品（品牌变体）辅助 ==========
 // 库存摘要（人话版）：套餐数 + 容量，如「4套 · ≈200ml」；没有套餐数据则退回「200ml」
 // ---------- 变体级混合规格：每个品牌（变体）自己可选，互不干扰 ----------
-// 两层数量模型（新）：每个规格 = 包数(packCount) × 每包含量(packQty) × 每份规格(content) + 单位(unit)
-//   例：姨妈巾 日用 3包 × 5片/包 × 1片/份 = 15片
+// 两层数量模型（新）：每个规格 = 包数(packCount) × 每包含量(packQty) × 每件规格(content) + 单位(unit)
+//   例：姨妈巾 日用 3包 × 5片/包 × 1片/件 = 15片
 // 兼容一层旧数据：没有 packCount/packQty 的规格视为 packCount=qty、packQty=1
-//   → 洗衣凝珠 {qty:3, content:44} = 3包 × 1粒/包 × 44粒/份 = 132粒（数值不变）
+//   → 洗衣凝珠 {qty:3, content:44} = 3包 × 1粒/包 × 44粒/件 = 132粒（数值不变）
 function specPackCount(s) { // 规格的「包数」
   if (s.packCount !== undefined && s.packCount !== null && s.packCount !== '') return +s.packCount || 0;
   return +s.qty || 0; // 兼容一层旧数据
@@ -1408,14 +1408,14 @@ function specPackQty(s) { // 规格的「每包含量」
   var p = parseFloat(s.packQty);
   return (isFinite(p) && p > 0) ? p : 1; // 兼容一层旧数据；空 = 1
 }
-function specContentOf(s) { // 每份规格（如每片 1 片、每毫升 1ml）；留空/0 → 按 1（与保存口径一致）
+function specContentOf(s) { // 每件规格（如每片 1 片、每毫升 1ml）；留空/0 → 按 1（与保存口径一致）
   var c = parseFloat(s && s.content);
   return (isFinite(c) && c > 0) ? c : 1;
 }
 // 表单回显用：保留用户原本填的空字符串（空 = 按 1 计算，但不预填任何数字）
 function specPackCountRaw(s) { if (s.packCount !== undefined && s.packCount !== null && s.packCount !== '') return s.packCount; return (s.qty !== undefined && s.qty !== null && s.qty !== '') ? s.qty : ''; }
 function specPackQtyRaw(s) { return (s.packQty !== undefined && s.packQty !== null && s.packQty !== '') ? s.packQty : ''; }
-function specTotalOf(s) { // 该规格总含量 = 包数 × 每包含量 × 每份规格
+function specTotalOf(s) { // 该规格总含量 = 包数 × 每包含量 × 每件规格
   return specPackCount(s) * specPackQty(s) * specContentOf(s);
 }
 function specPiecesOf(s) { // 该规格总件数（v1.7 双轨制件数口径）
@@ -1426,7 +1426,7 @@ function specPiecesOf(s) { // 该规格总件数（v1.7 双轨制件数口径）
 function variantSpecsOf(v) {
   return ((v && v.specs) || []).filter(function (s) { return specPackCount(s) > 0 && (+s.packQty > 0 || +s.qty > 0 || +s.content > 0); });
 }
-function variantSpecContent(v) { // 总含量（库存口径）= Σ 各规格剩余包数 × 每包含量 × 每份规格
+function variantSpecContent(v) { // 总含量（库存口径）= Σ 各规格剩余包数 × 每包含量 × 每件规格
   var ss = variantSpecsOf(v); if (!ss.length) return 0;
   return variantSpecStockCalc(v);
 }
@@ -1444,7 +1444,7 @@ function variantSpecUnit(v) {
 //   specs[i]        = 「一套里装了什么」（单套构成），永不被套餐数折算写回
 //   specs[i].openPacks = 该规格「已开出的包数」（跨套累计，唯一消耗来源）
 //   v.packCount     = 购入套餐数（用户填写，消耗不改动，仅作记录/单价折算）
-//   v.stock         = Σ 各规格「(套餐数 × 单套包数 − 已开包数) × 每包含量 × 每份规格」
+//   v.stock         = Σ 各规格「(套餐数 × 单套包数 − 已开包数) × 每包含量 × 每件规格」
 // 购入套餐数：留空按 1；填 0 就是 0
 function variantPacksBought(v) {
   var raw = (v && v.packCount !== undefined && v.packCount !== null) ? String(v.packCount) : '';
@@ -1452,7 +1452,7 @@ function variantPacksBought(v) {
   var n = parseFloat(raw);
   return isFinite(n) ? n : 0;
 }
-// 单套构成合计（含量）：Σ 每种规格 = 包数 × 每包含量 × 每份规格
+// 单套构成合计（含量）：Σ 每种规格 = 包数 × 每包含量 × 每件规格
 function variantSpecPerSet(v) {
   var ss = variantSpecsOf(v); if (!ss.length) return 0;
   var t = 0; ss.forEach(function (s) { t += specTotalOf(s); });
@@ -1476,7 +1476,7 @@ function variantHasSpecs(v) {
 // specs[i].openPacks = 该规格「已开出的包数」（跨套累计，仅用于算剩余）
 // v.packCount        = 购入套餐数（记录，不随消耗变化）
 // 剩余包数(spec)     = 购入套餐数 × 单套内包数 − 已开包数
-// 剩余库存           = Σ_spec 剩余包数 × 每包含量 × 每份规格    ← 精确，不依赖「套」的凑整
+// 剩余库存           = Σ_spec 剩余包数 × 每包含量 × 每件规格    ← 精确，不依赖「套」的凑整
 // 剩余套数           = min_spec (剩余包数 ÷ 单套内包数)         ← 展示用，小数保留
 function specOpenPacks(s) { var n = parseFloat(s && s.openPacks); return isFinite(n) && n > 0 ? n : 0; }
 // 某规格剩余未开包数（购买总量口径）
@@ -1497,7 +1497,7 @@ function variantPacksLeftCalc(v) {
   });
   return isFinite(m) ? Math.round(m * 100) / 100 : 0;
 }
-// 该变体剩余总含量（= Σ 各规格剩余包数 × 每包含量 × 每份规格）
+// 该变体剩余总含量（= Σ 各规格剩余包数 × 每包含量 × 每件规格）
 function variantSpecStockCalc(v) {
   var ss = variantSpecsOf(v); if (!ss.length) return 0;
   var t = 0;
@@ -1506,7 +1506,7 @@ function variantSpecStockCalc(v) {
   });
   return Math.round(t * 100) / 100;
 }
-// 该变体剩余总件数。v1.7 双轨制：1 包 = 1 件（份）——
+// 该变体剩余总件数。v1.7 双轨制：1 包 = 1 件（件）——
 // 含量单位（ml/g/kg/L）的规格，件数就是剩余包数（绝不能拿 ml 数冒充件数）；
 // 片/粒类（每包含 N 片）件数 = 剩余包数 × 每包含量（片数），保持旧口径。
 function variantSpecPiecesCalc(v) {
@@ -1519,9 +1519,9 @@ function variantSpecPiecesCalc(v) {
 }
 
 // ===== 【第 13 轮】即时消耗型 × 规格明细：按规格打卡扣减 =====
-// specs[i].usedQty = 该规格「已消耗份数」：
-//   片/粒类（每包含 N 片）：1 份 = 1 片 → 剩余 = 剩余包数×每包含量 − usedQty
-//   含量单位（ml/g/kg/L）：1 份 = 1 包 → 消耗直接记 openPacks（usedQty 恒 0）
+// specs[i].usedQty = 该规格「已消耗件数」：
+//   片/粒类（每包含 N 片）：1 件 = 1 片 → 剩余 = 剩余包数×每包含量 − usedQty
+//   含量单位（ml/g/kg/L）：1 件 = 1 包 → 消耗直接记 openPacks（usedQty 恒 0）
 // 兼容：旧数据 usedQty 缺失 → 0；组合消耗型走 openPacks 口径，完全不受影响。
 function specUsedQty(s) {
   var n = parseFloat(s && s.usedQty);
@@ -1535,7 +1535,7 @@ function specRemainPieces(v, s) {
   var total = specPacksRemaining(v, s) * specPackQty(s);
   return Math.max(0, Math.round((total - specUsedQty(s)) * 100) / 100);
 }
-// 该规格剩余「含量」（片/粒类还要乘每份规格 content；含量单位同包数口径）
+// 该规格剩余「含量」（片/粒类还要乘每件规格 content；含量单位同包数口径）
 function specRemainContent(v, s) {
   var base = specPacksRemaining(v, s) * specPackQty(s) * specContentOf(s);
   if (isContentUnitText(s && s.unit)) {
@@ -1545,9 +1545,9 @@ function specRemainContent(v, s) {
 }
 
 // ===== v1.7 双轨制：单一规格 / 混合规格 =====
-// 单一规格（明细只有 1 行）：1 份 = 实际容量（如 400ml/份）。
-// 混合规格（明细 ≥ 2 行）：均值单件容量 = 总容量 ÷ 总件数（1520ml ÷ 4 件 = 380ml/份），
-//   均值只用于「年度采购决策」和「份数折算展示」；开封/消耗永远按实际所选规格容量。
+// 单一规格（明细只有 1 行）：1 件 = 实际容量（如 400ml/件）。
+// 混合规格（明细 ≥ 2 行）：均值单件容量 = 总容量 ÷ 总件数（1520ml ÷ 4 件 = 380ml/件），
+//   均值只用于「年度采购决策」和「件数折算展示」；开封/消耗永远按实际所选规格容量。
 function variantIsMixed(v) {
   return variantSpecsOf(v).length > 1;
 }
@@ -1583,9 +1583,9 @@ function variantSpecText(v) { // "日用 3包×5片 = 15片 + 夜用 2包×3片 
   return parts.join(' + ') + ' = ' + trimNum(variantSpecPerSet(v)) + (ss[0].unit || '') + '/套';
 }
 function stockSummaryOf(item) {
-  // 【第 19 轮 · 即时消耗】即时型的消耗标的物永远是规格单位（片/粒/包/个/份），
+  // 【第 19 轮 · 即时消耗】即时型的消耗标的物永远是规格单位（片/粒/包/个/件），
   // 容量(ml/g)对其无意义 —— 每次用就是"用一个"，与容量无关。
-  // 故库存只报"还能再用多少次（份/包）"，绝不显示容量、绝不算套餐数。
+  // 故库存只报"还能再用多少次（件/包）"，绝不显示容量、绝不算套餐数。
   if (consumeModelOf(item) === 'instant') {
     return round1(instantTotalStock(item)) + instantStockUnit(item);
   }
@@ -1619,17 +1619,12 @@ function stockSummaryOf(item) {
   });
   var st = getTotalStock(item) || 0;
 
-  // 组合消耗型：主口径 = 剩余含量（如 1520ml），并按均值折算「约 N 份」；
-  // 「原 N 套」仅作购买记录补充说明（v1.7 双轨制：份 = 含量 ÷ 均值单件容量）
+  // 组合消耗型：主口径 = 剩余含量（如 1520ml），并按均值折算「约 N 件」；
+  // 「原 N 套」仅作购买记录补充说明（v1.7 双轨制：件 = 含量 ÷ 均值单件容量）
   if (hasCombo) {
-    var cuMain = wOrder[0] || (item.unit || '件');
-    var totalC = round1(comboSpecPieces);
-    var head = totalC + cuMain;
-    // 均值折算份数：优先取本物品首个有明细变体的均值
-    // 【第 27 轮】容量口径（ml/g）不再折算「约 N 份」—— 那是画蛇添足的二次换算
-    var avgS = 0;
-    vs.forEach(function (v) { if (!avgS && variantSpecsOf(v).length) { var a = variantAvgPiece(v); if (a > 0) avgS = a; } });
-    if (avgS > 0 && totalC > 0 && !isContentUnitText(cuMain)) head += '（约 ' + round1(totalC / avgS) + ' 份）';
+    // 【第 28 轮】总库存直接报剩余容量（各容量单位分组并列），
+    // 绝不再拿「总容量 ÷ 均值单包容量」去折算出第二个口径 —— 那是二次换算，已废除。
+    var head = wOrder.map(function (u) { return round1(wTotals[u]) + u; }).join(' · ');
     if (comboSetsBought > 0) head += ' · 原 ' + trimNum(comboSetsBought) + ' 套';
     return head;
   }
@@ -1655,9 +1650,9 @@ function getTotalStock(item) {
   }
   return item.stock || 0;
 }
-// 【第 19 轮 · 即时消耗】即时型消耗标的物永远是「规格单位」（片/粒/包/个/份），
+// 【第 19 轮 · 即时消耗】即时型消耗标的物永远是「规格单位」（片/粒/包/个/件），
 // 绝不按容量(ml/g)计算与显示。容量对本模型无意义：每次用就是"用一个"，与容量大小无关。
-// 因此即时型的"剩余库存"= 还能再用多少次（份/包计数），而非含量。
+// 因此即时型的"剩余库存"= 还能再用多少次（件/包计数），而非含量。
 // 【第 20 轮】加总口径 = specRemainPieces（剩余「件数」：片类=片数、g/ml 类=包数），
 //   绝不直接用 specPacksRemaining（那是剩余「包数」，面膜 3 包会被错显示成"3片"）。
 function instantTotalStock(item) {
@@ -1676,9 +1671,9 @@ function instantTotalStock(item) {
 }
 // 【第 20 轮】即时型日常扣减的「计数单位」（按钮/库存/速率统一用它）：
 //   ① 规格单位全是片/粒/包/个等计数单位且一致 → 直接用（面膜 → 1片）；
-//   ② 规格单位含 g/kg/ml/L → 1 份 = 1 包，日常只按「包」扣减显示（热泡茶 → 1包），
+//   ② 规格单位含 g/kg/ml/L → 1 件 = 1 包，日常只按「包」扣减显示（热泡茶 → 1包），
 //      容量仅作为年度汇总/采购建议的后台基数，绝不出现在日常扣减 UI 上；
-//   ③ 计数单位不一致（片+粒混填）→ 统一叫「份」；无任何单位 → 「份」。
+//   ③ 计数单位不一致（片+粒混填）→ 统一叫「件」；无任何单位 → 「件」。
 // 有效库存：排除标记了「不再买」的品牌（它们不算进补货提醒）
 function getActiveStock(item) {
   if (item.variants && item.variants.length > 0) {
@@ -1721,8 +1716,8 @@ function migrateDirtyUsedUp() {
 }
 
 // 数据自愈②：多规格变体的「套数」口径统一（v1.6：明细 = 单套构成）
-// 旧版落账把规格份数和写进 packCount（如姨妈巾显示成「67套 × ¥45.34」、库存只算一套 67片）
-// v1.6 起：specs 恒为「单套构成」，库存 = Σ 各规格(套餐数 × 单套包数 − 已开包数) × 每包含量 × 每份规格
+// 旧版落账把规格件数和写进 packCount（如姨妈巾显示成「67套 × ¥45.34」、库存只算一套 67片）
+// v1.6 起：specs 恒为「单套构成」，库存 = Σ 各规格(套餐数 × 单套包数 − 已开包数) × 每包含量 × 每件规格
 //   存量明细无法可靠判断是「单套构成」还是「全部总量」→ 一律保守按「全部总量」处理：
 //   packCount 归 1 批（1 套 = 全部总量，库存数值完全不变），并标记 specsFolded=true。
 //   这样旧数据在展示与消耗上自洽；用户重新编辑保存时，填上真实套餐数即可切换成「单套构成」口径。
@@ -1776,7 +1771,7 @@ function consumeModelOf(item) {
   if (m === 'unit') return 'period';
   return 'period';
 }
-// 迁移：specs 从一层(qty×content)升级为两层(packCount包数 × packQty每包含量 × content每份规格)
+// 迁移：specs 从一层(qty×content)升级为两层(packCount包数 × packQty每包含量 × content每件规格)
 // 原则：库存数值必须不变 —— qty=3,content=44 → packCount=3,packQty=1,content=44（3×1×44=132，与旧值一致）
 function migrateSpecTwoLayer(target) {
   var db = target || DB;
@@ -1881,7 +1876,7 @@ function itemStockContent(item, onlyVariants) {
 //   例：3 套 ×（日用 2包×5片 + 护垫 1包×5片）= 3 × 15 = 45 片
 // 单价   = 套餐总价 ÷ 总容量
 // 显示   = 「每 片 约 1.02 元」—— 单位就是用户自己填的那个词，系统不做任何 ml↔L / g↔kg 折算
-function variantOneSetCapacity(v) {   // 单套（一份套餐）的总容量
+function variantOneSetCapacity(v) {   // 单套（一件套餐）的总容量
   var sp = variantSpecsOf(v);
   if (sp.length) {
     var t = 0;
@@ -1910,13 +1905,13 @@ function unitPriceTextOf(v) {
   var up = variantUnitPrice(v);
   if (up === null || !isFinite(up)) return '';
   var cap = variantBoughtCapacity(v);
-  var u = cap.unit || '份';
+  var u = cap.unit || '件';
   var shown = up < 0.01 ? up.toFixed(4) : (up < 1 ? up.toFixed(3) : up.toFixed(2));
   return '每 ' + u + ' 约 ' + trimNum(parseFloat(shown)) + ' 元';
 }
 // 库存展示文本：packQty>1 时显示"X套 (+余Y个)"
 function variantPackText(v, item) {
-  // 【第 19 轮 · 即时消耗】即时型绝不显示容量：剩余 = 还能再用多少次（份/包），按规格单位计数
+  // 【第 19 轮 · 即时消耗】即时型绝不显示容量：剩余 = 还能再用多少次（件/包），按规格单位计数
   // 【第 20 轮】加总用 specRemainPieces（片类=片数），单位用 instantCountUnit（g/ml 类→「包」）
   if (consumeModelOf(item) === 'instant') {
     var spAllI = variantSpecsOf(v);
@@ -1933,7 +1928,7 @@ function variantPackText(v, item) {
     // 绝不让购入总量（历史入库）混进这一行 —— 用户必须一眼看出"现在还能用多少"，
     // 而且这个数要可验算（如：日用 2包×5片 + 护垫 1包×5片 = 15片）。
     var u0 = variantSpecUnit(v);
-    var leftW = variantSpecContent(v);           // Σ 未开包 × 每包含量 × 每份规格（动态求和）
+    var leftW = variantSpecContent(v);           // Σ 未开包 × 每包含量 × 每件规格（动态求和）
     var leftPacks = 0, perSpecParts = [];
     spAll.forEach(function (s) {
       var rp = specPacksRemaining(v, s);
@@ -2570,9 +2565,9 @@ function getItemStatus(item) {
     shelfPercent: 100, daysLeft: null, estDaysLeft: null, monthsLeft: null
   };
 
-  // 【第 27 轮】库存判断一律用统一口径剩余（容量口径物品=剩余容量，件口径=件数），
+  // 【第 28 轮】库存/告警走「件数」（阈值 item.stockThreshold 本身也是件数），
   // 绝不再用 getActiveStock 直加 v.stock（规格变体的 v.stock 存的是容量数，直加会把 ml 当件）
-  var totalStock = restAmountOf(item);
+  var totalStock = restPacksOf(item);
 
   // 保质期：取所有variants中最早过期的（不再买的品牌不参与提醒计算）
   var allVariants = (item.variants && item.variants.length > 0) ? item.variants : [item];
@@ -2762,7 +2757,7 @@ function closedSpanDays(recs) {
 }
 
 // ---------- 单位：纯文本，永不换算 ----------
-// 统一「单位原文」：变体规格单位 > 变体件数单位 > 物品单位 > 「份」
+// 统一「单位原文」：变体规格单位 > 变体件数单位 > 物品单位 > 「件」
 function variantMainUnit(v) {
   var sp = variantSpecsOf(v);
   if (sp.length) {
@@ -2786,9 +2781,9 @@ function mainPackUnit(item) {
   }
   var _u = String((item && item.unit) || '').trim();
   if (_u) return _u;
-  return '份';
+  return '件';
 }
-// R24：速率单位 = 库存单位 = 展示单位，三者同源（旧版「套/ml/份」三套口径已废除）
+// R24：速率单位 = 库存单位 = 展示单位，三者同源（旧版「套/ml/件」三套口径已废除）
 function rateUnitName(item) { return mainPackUnit(item); }
 function instantCountUnit(item) { return mainPackUnit(item); }
 function instantStockUnit(item) { return mainPackUnit(item); }
@@ -2807,29 +2802,144 @@ function isSetPackMode(item) {
 function round1(x) { return Math.round((+x || 0) * 10) / 10; }
 
 // ---------- 库存：纯数字，剩余 vs 累计购入严格分离 ----------
-// 「在用」= 已开启但还没点【用完】的记录，其 qty 就是这一包的量（纯数字，原样计入）
+// 「在用」= 已开启但还没点【用完】的记录：只数件数（几条就是几件在手上）。
+// 绝不能再把规格记录的 qty 加进来 —— 那是单包容量（如 460ml），加进去就成了「460 件在用」。
 function inUseAmountOf(item) {
   var t = 0;
   (item && item.usageRecords ? item.usageRecords : []).forEach(function (r) {
     if (!r || r.instant || r.type === 'surplus' || r.endDate) return;
-    t += (parseFloat(r.qty) || 0);
+    t += recordPacks(item, r);
   });
   return Math.round(t * 100) / 100;
 }
-// 【第 26 轮 · 反变量污染】当前剩余 = 纯「件数」口径（个/包/片/瓶），绝不混入容量数字！
-// 旧版把「未开容量 940g」和「在用 1 个」直接相加得出 941 个 —— 两套单位相加是绝对禁止的。
-//   有规格明细 → specRemainPieces（片类=片数；容量类=剩余包数）
-//   无明细（牙膏式：规格10个/套 × 120g/个）→ v.stock 本身就是件数（支/个），绝不再乘 packWeight
-// 速率（perMonth）也是件数口径 → restNow ÷ perMonth 才是真正的可用月数。
-// 容量口径单独走 restCapOf，两者只并列展示、绝不相加。
-function restNowOf(item) {
+// ==========================================================================
+// ===== 【第 28 轮】件数 与 容量 彻底分开，按公式死算 ======================
+// 就三步，绝不搞任何换算、绝不设任何中间概念：
+//   ① 点「开启 / 用完 / 盘点」—— 只扣件数（包 / 瓶 / 个），绝不动容量；
+//   ② 算总账 —— 总容量 = 件数 × 单包容量（唯一的乘法，只在这里做一次）；
+//   ③ 采购建议 —— 年消耗容量 − 剩余容量，全是容量（ml / g / 片）相减。
+//
+// 前几轮我自作聪明写了「统一换算」函数和「件」这个万能单位，结果 ml 被标成「个」、
+// 78 又被拿去乘单包容量 →「建议囤 931个（36万ml）」。全部作废，按公式死算。
+// ==========================================================================
+
+// ---------- 件数单位：包 / 瓶 / 个 / 件 ----------
+// 规格单位若被填成 ml/g 这类容量单位，一律跳过 —— 那是容量，不是件数
+function packUnitOf(item) {
+  var vs = (item && item.variants) || [];
+  var i, u;
+  for (i = 0; i < vs.length; i++) {
+    u = String((vs[i] && vs[i].packUnit) || '').trim();
+    if (u && !isContentUnitText(u)) return u;
+  }
+  u = String((item && item.unit) || '').trim();
+  if (u && !isContentUnitText(u)) return u;
+  return '件';
+}
+
+// ---------- 容量单位：ml / g / 片 ----------
+function capUnitOf(item) {
+  if (!item) return '';
+  if (consumeModelOf(item) === 'instant') return mainPackUnit(item);
+  var vs = item.variants || [], i, u, sp;
+  for (i = 0; i < vs.length; i++) {              // ① 规格里填的单位
+    sp = variantSpecsOf(vs[i]);
+    if (!sp.length) continue;
+    u = String(sp[0].unit || '').trim();
+    if (u) return u;
+  }
+  for (i = 0; i < vs.length; i++) {              // ② 变体的单包含量单位
+    u = String((vs[i] && (vs[i].packWeightUnit || vs[i].weightUnit)) || '').trim();
+    if (u) return u;
+  }
+  u = String(item.unit || '').trim();            // ③ 物品单位
+  return u || mainPackUnit(item);
+}
+
+// ---------- 单包容量：1 件（1 包 / 1 瓶 / 1 个）里装了多少 ----------
+// 就是「套餐数 × 规格数 × 单包容量」里的最后一个因子，商品档案的固定属性
+function specCapPerPack(s) { return specPackQty(s) * specContentOf(s); }
+function capPerPackOf(item, r) {
+  if (!item) return 0;
+  if (consumeModelOf(item) === 'instant' || (r && r.instant)) return 1;
+  var vs = (item.variants) || [];
+  var v = (r && r.variantId) ? vs.find(function (x) { return x.id === r.variantId; }) : null;
+  if (!v) v = vs[0];
+  if (!v) return 0;
+  var sp = variantSpecsOf(v);
+  if (sp.length) {
+    if (r && r.specName) {
+      var s = sp.find(function (x) { return String(x.name || '').trim() === String(r.specName).trim(); });
+      if (s) return specCapPerPack(s);
+    }
+    return specCapPerPack(sp[0]);
+  }
+  return parseFloat(v.packWeight) || 0;
+}
+// 平均单包容量：只在展示时把「件数」翻译成「容量」，绝不参与速率与采购建议
+function avgCapPerPackOf(item) {
+  if (!item) return 0;
+  if (consumeModelOf(item) === 'instant') return 1;
+  var capT = 0, pcsT = 0;
+  ((item.variants) || []).forEach(function (v) {
+    var sp = variantSpecsOf(v);
+    if (sp.length) {
+      sp.forEach(function (s) {
+        var n = variantPacksBought(v) * specPackCount(s);
+        pcsT += n;
+        capT += n * specCapPerPack(s);
+      });
+    } else {
+      var n2 = variantPacksBought(v) * (parseFloat(v.packQty) || 1);
+      var w = parseFloat(v.packWeight) || 0;
+      if (w > 0) { pcsT += n2; capT += n2 * w; }
+    }
+  });
+  return (pcsT > 0 && capT > 0) ? Math.round(capT / pcsT * 100) / 100 : 0;
+}
+
+// ---------- 一条记录：用了几件 / 用了多少容量 ----------
+// 存量老数据的 qty 语义不统一（有的存容量 460、有的存件数 1），按来源直接分清楚：
+//   盘点流水 → auditPacks（包差就是件数）
+//   规格开封 → contentUsed（开封时已经算好的含量）
+//   其余     → qty 本身就是件数
+function recordPacks(item, r) {
+  if (!r) return 0;
+  var q = parseFloat(r.qty) || 0;
+  if (r.instant || consumeModelOf(item) === 'instant') return q;        // 打卡 1 次 = 1 件
+  if (r.auditPacks !== undefined && r.auditPacks !== null && r.auditPacks !== '') {
+    return Math.abs(parseFloat(r.auditPacks) || 0);                     // 盘点：包差就是件数
+  }
+  var per = capPerPackOf(item, r);
+  var used = parseFloat(r.contentUsed) > 0 ? Math.abs(parseFloat(r.contentUsed)) : 0;
+  if (used > 0) {                                                       // 开封时已算好的含量 → 件数 = 含量 ÷ 单包容量
+    return per > 0 ? Math.max(1, Math.round(used / per)) : Math.max(1, q);
+  }
+  if (per > 0 && q > per) return Math.max(1, Math.round(q / per));      // qty 比单包容量大 → qty 存的是容量
+  if (per > 0 && Math.abs(q - per) < 0.01) return 1;                    // qty 正好等于单包容量 → 开了 1 件
+  return q;                                                             // 其余：qty 本身就是件数
+}
+// 唯一的乘法：总容量 = 件数 × 单包容量
+function recordCap(item, r) {
+  if (!r) return 0;
+  var q = parseFloat(r.qty) || 0;
+  if (r.instant || consumeModelOf(item) === 'instant') return q;
+  if (parseFloat(r.contentUsed) > 0) return Math.abs(parseFloat(r.contentUsed));
+  var per = capPerPackOf(item, r);
+  if (per > 0 && q >= per - 0.01) return q;                             // qty 本身就是容量，直接用
+  return recordPacks(item, r) * (per > 0 ? per : 1);                    // 件数 × 单包容量
+}
+
+// ---------- 还剩多少：件数与容量分开算，永不相加 ----------
+// 剩余件数（个 / 包 / 片）—— 只用于库存展示与告警阈值，绝不进速率与建议
+function restPacksOf(item) {
   if (!item) return 0;
   if (consumeModelOf(item) === 'instant') return instantTotalStock(item);
   var t = 0;
   (item.variants || []).forEach(function (v) { t += variantRestPieces(v); });
   return Math.round(t * 100) / 100;
 }
-// 某品牌变体的剩余「件数」（与 restNowOf 同源，绝不混入容量）
+// 某品牌变体的剩余件数（与 restPacksOf 同源，绝不混入容量）
 function variantRestPieces(v) {
   if (!v) return 0;
   var sp = variantSpecsOf(v);
@@ -2840,9 +2950,10 @@ function variantRestPieces(v) {
   }
   return parseFloat(v.stock) || 0;
 }
-// 当前剩余容量（g/ml）：与 restNowOf 同源但独立计算，只作并列展示，绝不与件数相加
+// 剩余容量（ml / g / 片）= Σ 各规格「剩余包数 × 每包含量 × 每件规格」
 function restCapOf(item) {
   if (!item) return 0;
+  if (consumeModelOf(item) === 'instant') return instantTotalStock(item);
   var t = 0;
   (item.variants || []).forEach(function (v) {
     var sp = variantSpecsOf(v);
@@ -2855,91 +2966,8 @@ function restCapOf(item) {
   return Math.round(t * 100) / 100;
 }
 
-// ============ 【第 27 轮 · 统一口径】速率 / 剩余 / 缺口全程同口径 ============
-// 教训（洗头膏事件）：多品牌变体单位不一致（潘婷=个、off relax=ml）时，
-// mainPackUnit 只会取第一个变体的「个」，而闭环记录的 qty 其实是 ml（每包含量原文口径）。
-// 于是一边把 78ml 标成「78个」，一边又拿它去乘每件容量 → 「建议囤931个（约36万ml）」的灾难。
-// 铁律（用户定版，必须永远遵守）：
-//   ① 纯数字计算，单位文本原样引用 —— 底层算出 78 且口径是 ml，就直接显示「78ml」，
-//      绝不允许换成「个」，更不允许拿它去乘容量；
-//   ② 容量乘法只允许出现在「总容量 = 套餐数×规格包数×每包含量」这一处；
-//      反推速率、采购建议、可用天数时绝对禁止再乘每包容量；
-//   ③ 剩余与速率必须同口径，才能相减出采购缺口（936ml − 2420ml → 库存充足）。
-// 物品数量口径 = 闭环记录实际使用的单位（按 qty 加权取众数）；即时型永远是件/片口径。
-function recordUnitOf(item, r) {
-  var vs = (item && item.variants) || [];
-  var v = r && r.variantId ? vs.find(function (x) { return x.id === r.variantId; }) : null;
-  if (!v) v = vs[0];
-  if (!v) return mainPackUnit(item);
-  var sp = variantSpecsOf(v);
-  if (r && r.specName) {
-    var s = sp.find(function (x) { return String(x.name || '').trim() === String(r.specName).trim(); });
-    if (s) { var su = String(s.unit || '').trim(); if (su) return su; }
-  }
-  return variantMainUnit(v) || mainPackUnit(item);
-}
-function quantityUnitOf(item) {
-  if (!item) return '';
-  if (consumeModelOf(item) === 'instant') return mainPackUnit(item);   // 打卡 qty=件，绝不变 ml
-  var tally = {};
-  validPeriodRecords(item).forEach(function (r) {
-    var u = recordUnitOf(item, r);
-    if (!u) return;
-    tally[u] = (tally[u] || 0) + (parseFloat(r.qty) || 0);
-  });
-  var best = '', bestQ = -1;
-  Object.keys(tally).forEach(function (u) {
-    if (tally[u] > bestQ) { bestQ = tally[u]; best = u; }
-  });
-  if (best) return best;
-  // 无闭环记录：有规格明细 → 第一个规格的单位原文；否则主单位
-  var v0 = ((item.variants) || []).find(function (v) { return variantSpecsOf(v).length; });
-  if (v0) { var su = String(variantSpecsOf(v0)[0].unit || '').trim(); if (su) return su; }
-  return mainPackUnit(item);
-}
-// 与 quantityUnitOf 同口径的「当前剩余」：容量口径物品报剩余容量，件口径物品报剩余件数
-function restAmountOf(item) {
-  var u = quantityUnitOf(item);
-  if (isContentUnitText(u)) return restCapOf(item);
-  return restNowOf(item);
-}
-// 把一条闭环记录的消耗量换算到物品统一数量口径（unit = quantityUnitOf）：
-//   件/包/片口径 → qty 原样（开封记录 qty 本身就是件/片/每包含量原文口径）；
-//   容量口径（ml/g）→ 优先 contentUsed（开封/盘点已算好的含量）；
-//     记录口径本身是容量单位（规格开封 qty=每包含量）→ 原样；
-//     只有包数/件数的记录（盘点包差、无规格开封）→ × 平均每件容量换算成容量。
-function recordAmountOf(item, r, unit) {
-  var q = parseFloat(r && r.qty) || 0;
-  if (!(q > 0)) return 0;
-  if (!isContentUnitText(unit)) return q;
-  if (r.contentUsed > 0) return r.contentUsed;
-  var ru = recordUnitOf(item, r);
-  if (isContentUnitText(ru)) return q;
-  var cap = unitCapacityOf(item);
-  if (cap && cap.qty > 0) return q * cap.qty;
-  return q;
-}
-// 平均「每件」容量（牙膏=120g/支、洗发水=480ml/瓶、猫粮=5kg/包）：Σ购入容量 ÷ Σ购入件数
-function avgCapOf(item) {
-  var capT = 0, pcsT = 0;
-  ((item && item.variants) || []).forEach(function (v) {
-    var sp = variantSpecsOf(v);
-    if (sp.length) {
-      sp.forEach(function (s) {
-        var n = variantPacksBought(v) * specPackCount(s);
-        pcsT += n;
-        capT += n * specPackQty(s) * specContentOf(s);
-      });
-    } else {
-      var n2 = variantPacksBought(v) * (parseFloat(v.packQty) || 1);
-      var w = parseFloat(v.packWeight) || 0;
-      if (w > 0) { pcsT += n2; capT += n2 * w; }
-    }
-  });
-  return (pcsT > 0 && capT > 0) ? Math.round(capT / pcsT * 100) / 100 : 0;
-}
-// 某品牌变体的「每件容量」：牙膏=120g/支；规格明细型=每包含量×每份规格
-// 历史累计购入总量（口径与 restNowOf 完全同源）：Σ 变体「购入件数 × 单件量」
+// 某品牌变体的「每件容量」：牙膏=120g/支；规格明细型=每包含量×每件规格
+// 历史累计购入总量（口径与 restPacksOf 完全同源）：Σ 变体「购入件数 × 单件量」
 // 清空记录时库存必须回滚到这个数 —— 「记录没了，库存却少了」是绝不能接受的错账。
 function boughtTotalOf(item) {
   if (!item) return 0;
@@ -2975,7 +3003,7 @@ function boughtTotalOf(item) {
 function periodBreakdown(item) {
   var out = [];
   if (!item) return out;
-  var unit = mainPackUnit(item);
+  var unit = capUnitOf(item) || mainPackUnit(item);
   var all = validPeriodRecords(item);
   (item.variants || []).forEach(function (v) {
     var sp = variantSpecsOf(v);
@@ -2984,12 +3012,12 @@ function periodBreakdown(item) {
       var nm = String(s.name || '').trim() || '规格';
       var sub = all.filter(function (r) { return String(r.specName || '').trim() === nm; });
       var q = 0;
-      sub.forEach(function (r) { q += (parseFloat(r.qty) || 0); });
+      sub.forEach(function (r) { q += recordCap(item, r); });   // 总容量 = 件数 × 单包容量
       var dd = closedSpanDays(sub);
       var pm = (q > 0 && dd > 0) ? (q / dd * R24_DAYS_PER_MONTH) : 0;
       var rest = Math.round(specRemainContent(v, s) * 100) / 100;
       out.push({
-        name: nm, unit: String(s.unit || '').trim() || unit,
+        name: nm, unit: unit,
         perMonth: pm, perYear: annualize(pm), rest: rest,
         monthsLeft: pm > 0 ? (rest / pm) : null
       });
@@ -2998,91 +3026,38 @@ function periodBreakdown(item) {
   return out;
 }
 
-// ---------- 速率：两模型，固定月制 ----------
+
+// ---------- 速率：固定月制（月 = 日均 × 31，年 = 月 × 12）----------
+// 速率一律走容量：月消耗容量 = 日均容量 × 31
 function calcUsageRate(item) { var st = statsOf(item); return st ? (st.perMonth || 0) : 0; }
 // 含量口径已彻底废除（废除一切单位换算）。保留空实现仅为兼容旧调用点。
 function contentRateOf(item) { return null; }
-// 均值单件量：仅作「一份有多少」的展示参考，绝不参与速率/建议计算
-// ---------- 【第 25 轮】双口径展示：库存单位数（包/份/片）+ 容量数（kg/ml）----------
-// 这不是单位换算：每份装多少（规格里的 content / 旧数据 packWeight）是用户自己录进去的原文，
-// 这里只是把「1.9 包」和「1.9 包 × 5kg/包 = 9.5kg」这两个数并列写出来，让用户一眼看到两种口径。
-// 每份只装 1 个（content=1，如姨妈巾 1片/片）时不加括号 —— 括号里跟主数字一模一样是废话。
-function unitCapacityOf(item) {
-  if (!item) return null;
-  // 平均每件容量（多品牌/多规格按购入量加权）：牙膏 120g/支+100g/支 → 111.1g/支
-  var avg = avgCapOf(item);
-  if (!(avg > 0)) return null;
-  // 容量单位：规格明细单位 > 重量单位 > 主单位
-  var capUnit = '';
-  ((item.variants) || []).forEach(function (v) {
-    if (capUnit) return;
-    var sp = variantSpecsOf(v);
-    if (sp.length) capUnit = String(sp[0].unit || '').trim();
-    else capUnit = String(v.packWeightUnit || v.weightUnit || '').trim();
-  });
-  if (!capUnit) capUnit = mainPackUnit(item);
-  // mismatch=true：规格明细的「单位」字段被填成了容量单位（如 480ml/瓶 的 unit='ml'），
-  // 而记录 qty 实际是「包数」—— 此时主数字若直接拼 unit 会变成「0.3ml」这种错话，
-  // 必须拆成「0.3份（约144ml）」。
-  var mismatch = false;
-  var sp0 = variantSpecsOf(item.variants[0]);
-  if (sp0.length && isContentUnitText(sp0[0].unit) && specPackQty(sp0[0]) === 1 && specContentOf(sp0[0]) > 1) mismatch = true;
-  return { qty: avg, unit: capUnit, mismatch: mismatch };
+
+// ---------- 写文案：数字 + 单位原文，原样拼接，绝不换算、绝不二次乘法 ----------
+// 「936.5ml」
+function capText(num, item) { return trimNum(round1(num)) + escapeHtml(capUnitOf(item)); }
+// 「2420ml」—— 剩余容量（卡片 / 采购建议 / 可用天数专用）
+function restCapText(item) { return capText(restCapOf(item), item); }
+// 「9个（≈936g）」—— 件数在前、容量在后（详情页库存行 / 年报专用）
+function restPackText(item) {
+  var pu = packUnitOf(item), cu = capUnitOf(item);
+  var pc = restPacksOf(item), cp = restCapOf(item);
+  if (!cu || cu === pu) return trimNum(round1(pc)) + escapeHtml(pu);
+  return trimNum(round1(pc)) + escapeHtml(pu) + '（≈' + trimNum(round1(cp)) + escapeHtml(cu) + '）';
 }
-// 剩余容量的展示单位：物品口径本身就是容量单位 → 直接用口径单位；否则取容量单位，没有才退主单位
-function capacityUnitOf(item) {
-  var u = quantityUnitOf(item);
-  if (isContentUnitText(u)) return u;
-  var c = unitCapacityOf(item);
-  return (c && c.unit) ? c.unit : mainPackUnit(item);
-}
-// 「1.9包（约9.5kg）」或「78ml」—— 速率/年需求的数量文案。
-// 【第 27 轮铁律】口径本身是容量单位（ml/g…）→ 纯数字 + 单位原文，绝无括号、绝不再乘每包容量！
-// 只有件/包/片口径且每件容量已知时，才允许「件数 × 每件容量」并列一次（乘法关系，仅展示）。
-function dualUnitText(num, item) {
-  var u = quantityUnitOf(item) || mainPackUnit(item);
-  var n = round1(num);
-  if (isContentUnitText(u)) return trimNum(n) + escapeHtml(u);
-  var cap = unitCapacityOf(item);
-  if (cap && cap.qty > 1 && cap.unit && isContentUnitText(cap.unit) && cap.unit !== u) {
-    return trimNum(n) + escapeHtml(u) + '（约' + trimNum(round1(n * cap.qty)) + escapeHtml(cap.unit) + '）';
-  }
-  return trimNum(n) + escapeHtml(u);
-}
-// 「7个（约840g）」或「720ml」—— 使用记录的数量文案。
-// unit 缺省取物品口径；容量口径（ml/g）→ 纯数字+单位原文，绝不再乘；件口径 → 件数为主、容量括号为辅。
-function recQtyText(q, item, unit) {
-  var n = parseFloat(q) || 0;
-  var u = unit || quantityUnitOf(item) || mainPackUnit(item);
-  if (isContentUnitText(u)) return trimNum(round1(n)) + escapeHtml(u);
-  var cap = unitCapacityOf(item);
-  if (cap && cap.qty > 1 && cap.unit && isContentUnitText(cap.unit) && cap.unit !== u) {
-    return trimNum(round1(n)) + escapeHtml(u) + '（约' + trimNum(round1(n * cap.qty)) + escapeHtml(cap.unit) + '）';
-  }
-  return trimNum(round1(n)) + escapeHtml(u);
-}
-// 「9个（≈936g）」或「2420ml」—— 当前剩余文案（采购建议 / 详情页当前库存行专用）。
-// 容量口径物品 → 直接报剩余容量（如「2420ml」）；件口径 → 件数为主、容量并列。
-function dualRestText(item) {
-  var u = quantityUnitOf(item) || mainPackUnit(item);
-  if (isContentUnitText(u)) return trimNum(round1(restCapOf(item))) + escapeHtml(u);
-  var a = trimNum(round1(restNowOf(item))) + escapeHtml(u);
-  var cap = unitCapacityOf(item);
-  if (cap && cap.qty > 1 && cap.unit && isContentUnitText(cap.unit) && cap.unit !== u) {
-    a += '（≈' + trimNum(round1(restCapOf(item))) + escapeHtml(cap.unit) + '）';
-  }
-  return a;
-}
-// 卡片右侧「剩余」= 剩余库存（随每次消耗/盘点实时变动）：
-// 容量口径物品报容量（1920ml/2420ml）；件口径物品有容量概念时报容量，否则报件数
+// 卡片右侧大字 = 剩余容量（只关心还剩多少容量，不关心还剩几件）
 function restTextOf(item) {
-  var u = quantityUnitOf(item) || mainPackUnit(item);
-  if (isContentUnitText(u)) return trimNum(round1(restCapOf(item))) + escapeHtml(u);
-  var cap = unitCapacityOf(item);
-  if (cap && cap.qty > 1 && cap.unit && isContentUnitText(cap.unit) && cap.unit !== u) {
-    return trimNum(round1(restCapOf(item))) + escapeHtml(cap.unit);
-  }
-  return trimNum(round1(restNowOf(item))) + escapeHtml(u);
+  var pu = packUnitOf(item), cu = capUnitOf(item);
+  if (!cu || cu === pu) return trimNum(round1(restPacksOf(item))) + escapeHtml(pu);
+  return capText(restCapOf(item), item);
+}
+// 「开启 1个（约104g）」—— 件数在前、容量在后
+function recTextOf(item, r) {
+  var p = recordPacks(item, r);
+  var c = recordCap(item, r);
+  var pu = packUnitOf(item), cu = capUnitOf(item);
+  if (!cu || cu === pu || !(c > 0)) return trimNum(round1(p)) + escapeHtml(pu);
+  return trimNum(round1(p)) + escapeHtml(pu) + '（约' + trimNum(round1(c)) + escapeHtml(cu) + '）';
 }
 // 右侧数字字号自适应：以 6 个字符（如「1920ml」）为设计基准，超长自动缩小，绝不挤掉产品名
 function autoNumFont(txt) {
@@ -3098,32 +3073,34 @@ function autoNumFont(txt) {
 function statsOf(item) {
   if (!item) return null;
   var model = consumeModelOf(item);
-  // 【第 27 轮】口径 = 闭环记录实际单位（ml 规格物品就是 ml，绝不再取「第一个变体」的单位）
-  var unit = quantityUnitOf(item) || mainPackUnit(item);
+  // 【第 28 轮】速率与建议一律用容量单位原文（ml / g / 片）
+  var unit = capUnitOf(item) || mainPackUnit(item);
   var out = {
     model: model, unit: unit,
     perMonth: 0, perYearRaw: 0, perYearQty: 0, months: 0,
     rate: 0, rateUnit: unit + '/月',
     contentRate: 0, contentUnit: unit, contentPerMonth: 0,
     piecesPerSet: 1, unitSmall: unit,
-    restNow: 0, restSmall: 0, monthsLeft: null,
+    restNow: 0, restSmall: 0, restCap: 0, restPacks: 0, monthsLeft: null,
     usedThisYear: 0, closedCount: 0, noClosedData: true,
-    totalQty: 0, spanDays: 0, breakdown: [],
+    totalQty: 0, totalCap: 0, totalPacks: 0, spanDays: 0, breakdown: [],
     cap: null, capUnit: unit
   };
   if (!item) return out;
-  // 【第 27 轮】剩余必须与速率同口径：容量口径物品报剩余容量（如 2420ml），件口径报件数
-  out.restNow = restAmountOf(item);
-  out.restSmall = out.restNow;
-  out.cap = unitCapacityOf(item);
-  out.capUnit = capacityUnitOf(item);
+  // 剩余：件数与容量分开存，永不相加。restNow 统一指向「剩余容量」（旧字段名保留兼容）
+  out.restCap = restCapOf(item);
+  out.restPacks = restPacksOf(item);
+  out.restNow = out.restCap;
+  out.restSmall = out.restCap;
+  out.cap = { qty: avgCapPerPackOf(item), unit: capUnitOf(item) };
+  out.capUnit = unit;
 
   if (model === 'instant') {
     // 即时型：每次打卡 = 一次完整消耗。月份数 = 跨度 ÷ 31（下限 1）；年 = (总耗 ÷ 月份数) × 12
     var recs = closedInstantRecords(item);
     var totalQ = 0, firstD = null, lastD = null;
     recs.forEach(function (r) {
-      totalQ += (parseFloat(r.qty) || 0);
+      totalQ += recordPacks(item, r);
       var d = new Date(r.startDate || r.endDate);
       if (isNaN(d.getTime())) return;
       if (!firstD || d < firstD) firstD = d;
@@ -3144,20 +3121,20 @@ function statsOf(item) {
       out.rate = out.perMonth;
       out.contentRate = out.perMonth;
       out.contentPerMonth = out.perMonth;
-      out.monthsLeft = out.perMonth > 0 ? (out.restNow / out.perMonth) : null;
+      out.monthsLeft = out.perMonth > 0 ? (out.restCap / out.perMonth) : null;
     }
     return out;
   }
 
-  // period 周期型：日均 = Σ 闭环 qty ÷ 区间并集天数；月 = 日均 × 31；年 = 月 × 12
+  // period 周期型：总容量 = Σ（件数 × 单包容量）；日均 = 总容量 ÷ 区间并集天数；
+  // 月 = 日均 × 31；年 = 月 × 12。件数在这一步之后彻底退场。
   var pr = validPeriodRecords(item);
   var tq = 0;
-  // 【第 27 轮】每条记录先换算到物品统一口径再求和：ml 口径物品的盘点流水（qty=包差）
-  // 走 contentUsed，绝不能把「3 包」当「3ml」混进容量总数
-  pr.forEach(function (r) { tq += recordAmountOf(item, r, unit); });
+  pr.forEach(function (r) { tq += recordCap(item, r); });
   var sp2 = closedSpanDays(pr);
   out.closedCount = pr.length;
-  out.totalQty = Math.round(tq * 100) / 100;
+  out.totalCap = Math.round(tq * 100) / 100;
+  out.totalQty = out.totalCap;
   out.spanDays = sp2;
   out.noClosedData = !(pr.length > 0) || !(tq > 0) || !(sp2 > 0);
   if (!out.noClosedData) {
@@ -3171,32 +3148,34 @@ function statsOf(item) {
     out.contentUnit = unit;
     out.contentPerMonth = out.perMonth;
     out.months = sp2 / R24_DAYS_PER_MONTH;
-    out.monthsLeft = out.perMonth > 0 ? (out.restNow / out.perMonth) : null;
+    out.monthsLeft = out.perMonth > 0 ? (out.restCap / out.perMonth) : null;
   }
   out.breakdown = periodBreakdown(item);
   return out;
 }
 
 // ========== 采购建议 ==========
-// 公式：Math.ceil(年消耗件数 − 当前剩余件数)；≤0 → 库存充足（容量只并列展示，绝不参与缺口运算）
+// 主数字就是容量：建议囤 = ceil(年消耗容量 − 当前剩余容量)，≤0 → 库存充足。
+// 容量才是真正花钱买到的量；件数绝不进这个减法，只在括号里告诉你大概要买几件。
 function buyAdviceOf(item) {
   var st = statsOf(item);
   if (!st) return null;
   if (st.noClosedData) return { main: NO_DATA_TEXT, detail: null, noData: true };
-  // 缺口 = 年消耗件数 − 当前剩余件数（两者同为件数口径，容量只在展示里并列出现）
-  var need = Math.ceil(st.perYearRaw - st.restNow);
+  var need = Math.ceil(st.perYearRaw - st.restCap);
   if (!(need > 0)) {
     return {
       main: SUFFICIENT_TEXT,
-      // 【第 26 轮】当前剩余 = 剩余件数（可并列容量），绝不再把容量当件数拼进这句话
-      detail: '年耗 ≈' + dualUnitText(st.perYearRaw, item) + ' · 当前还剩 ' + dualRestText(item),
+      detail: '年耗 ≈' + capText(st.perYearRaw, item) + ' · 当前还剩 ' + restCapText(item),
       noData: false, sufficient: true
     };
   }
+  // 括号里告诉你大概要买几件；单位跟容量一样时（如片/片）就不重复写
+  var per = avgCapPerPackOf(item);
+  var pu = packUnitOf(item);
+  var packTip = (per > 1 && pu !== capUnitOf(item)) ? '（≈' + Math.ceil(need / per) + pu + '）' : '';
   return {
-    // 【第 25 轮】建议量同时给「包数 + 容量」：建议囤 21包（约105kg）
-    main: '建议囤 <strong>' + dualUnitText(need, item) + '</strong>（约够一年）',
-    detail: '年耗 ≈' + dualUnitText(st.perYearRaw, item) + ' · 当前剩 ' + dualRestText(item)
+    main: '建议囤 <strong>' + capText(need, item) + '</strong>' + packTip + '（约够一年）',
+    detail: '年耗 ≈' + capText(st.perYearRaw, item) + ' · 当前剩 ' + restCapText(item)
       + ' · 已闭环 ' + st.closedCount + ' 次',
     noData: false
   };
@@ -3458,7 +3437,7 @@ function buildAnnualReport() {
   }
 
   // 5. 历史档案：已删除的物品从年度档案里捞回来
-  // 档案生成时速率四要素已一并固化（rateText/leftText/adviceText），删除不影响这份数据
+  // 档案生成时速率四要素已一并固化（rateText/leftText/adviceText），删除不影响这件数据
   var liveIds = {};
   all.forEach(function (r) { liveIds[r.item.id] = 1; });
   var histMap = {};
@@ -3683,7 +3662,7 @@ function renderItemCard(item, zone) {
     // 副行补一句「在用 N」提示（有正在消耗中的实物时）
     if (st25 && st25.model !== 'instant') {
       var iuC = inUseAmountOf(item);
-      if (iuC > 0) heroSubC = '· 在用 ' + trimNum(round1(iuC)) + mainPackUnit(item);
+      if (iuC > 0) heroSubC = '· 在用 ' + trimNum(round1(iuC)) + packUnitOf(item);
     }
   }
   html += '<div style="display:flex;align-items:center;gap:6px">';
@@ -3757,10 +3736,10 @@ function cardDaysText(item, status) {
     if (stS && stS.expiring && stS.daysLeft !== null && stS.daysLeft !== undefined) return '剩 ' + stS.daysLeft + ' 天过期';
     var st = statsOf(item);
     if (!st || st.noClosedData) return '📭 缺少数据';
-    // 【第 26 轮】件数与容量彻底剥离：可用天数 = 剩余件数 ÷ 月消耗件数，容量只作展示参考
+    // 【第 28 轮】可用天数 = 剩余容量 ÷ 月消耗容量 × 31（两边都是容量，同口径相除）
     var pm = st.perMonth;
     if (!(pm > 0)) return '📭 缺少数据';
-    var d = st.restNow / pm * R24_DAYS_PER_MONTH;
+    var d = st.restCap / pm * R24_DAYS_PER_MONTH;
     if (!isFinite(d)) return '📭 缺少数据';
     return '可用 ≈ ' + Math.max(0, Math.round(d)) + ' 天';
   } catch (e) { return '📭 缺少数据'; }
@@ -3930,7 +3909,7 @@ function _recBriefText(item, r) {
   var vR = r.variantId ? vsR.find(function (x) { return x.id === r.variantId; }) : null;
   var bTxt = vR ? escapeHtml(vR.brand || '') + ' · ' : '（无品牌）';
   var dTxt = r.startDate ? formatDate(r.startDate) : (r.date ? formatDate(r.date) : '未记日期');
-  var u = (vR && vR.packUnit) || mainPackUnit(item) || '份';
+  var u = (vR && vR.packUnit) || mainPackUnit(item) || '件';
   if (r.type === 'surplus') return '📥 ' + bTxt + '盘盈入库 +' + trimNum(r.qty) + ' ' + escapeHtml(u) + ' · ' + dTxt;
   if (r.isAudit) return '⚖️ ' + bTxt + '盘点 ' + trimNum(r.qty) + ' ' + escapeHtml(rateUnitName(item)) + ' · ' + dTxt + (r.endDate ? ' → ' + formatDate(r.endDate) : '');
   if (r.instant) return '✨ ' + bTxt + (r.batch ? '批量 ' : '') + '消耗 ' + trimNum(r.qty) + ' ' + escapeHtml(instantCountUnit(item)) + ' · ' + dTxt;
@@ -4070,7 +4049,7 @@ function openUsageEdit(itemId, idx) {
     return;
   }
   if (r.instant) {
-    var iuU = (function () { var v0 = (item.variants || []).find(function (x) { return x.id === r.variantId; }); return (v0 && v0.packUnit) || mainPackUnit(item) || '份'; })();
+    var iuU = (function () { var v0 = (item.variants || []).find(function (x) { return x.id === r.variantId; }); return (v0 && v0.packUnit) || mainPackUnit(item) || '件'; })();
     html += '<div style="font-size:12px;color:var(--orange);margin-bottom:10px">✨ 即时打卡记录' + (r.batch ? '（批量）' : '') + ' · 修改数量会自动同步剩余库存</div>';
     html += '<div class="form-group"><label class="form-label">本次消耗数量（' + iuU + '）</label><input type="number" class="form-input" id="ur-qty" step="1" min="1" value="' + (r.qty || 1) + '"></div>';
     html += '<div class="form-group"><label class="form-label">消耗日期</label><input type="date" class="form-input" id="ur-start" value="' + fmt(r.startDate) + '"></div>';
@@ -4108,7 +4087,7 @@ function saveInstantRecordEdit(itemId, idx) {
   q = Math.floor(q);
   if (q < 1) { toast('数量至少为 1'); return; }
   var v = (item.variants || []).find(function (x) { return x.id === r.variantId; });
-  var u = (v && v.packUnit) || mainPackUnit(item) || '份';
+  var u = (v && v.packUnit) || mainPackUnit(item) || '件';
   var oldQ = parseFloat(r.qty) || 0;
   var delta = Math.round((q - oldQ) * 100) / 100;   // >0 需再扣；<0 需退回
   if (v) {
@@ -4246,11 +4225,11 @@ function resetStockToBought(item) {
     if (sp.length) {
       (v.specs || []).forEach(function (s) {
         s.openPacks = 0;            // 已开包数归零 → 未开包数回到满额
-        s.usedQty = 0;              // 即时型已消耗份数归零
+        s.usedQty = 0;              // 即时型已消耗件数归零
         s.__openPack = false;
         s.qty = Math.round(specPackCount(s) * specPackQty(s) * 100) / 100;
       });
-      v.stock = variantSpecContent(v);   // = Σ 购入件数 × 每包含量 × 每份规格
+      v.stock = variantSpecContent(v);   // = Σ 购入件数 × 每包含量 × 每件规格
     } else {
       // 无规格明细：剩余件数 = 购入套餐数 × 每套件数
       var per = parseFloat(v.packQty) || 1;
@@ -4388,8 +4367,8 @@ function renderCardFront(item, zone) {
 
   if (zone.type === 'consumable') {
     var status = getItemStatus(item);
-    // 【第 27 轮】「库存」走统一口径（容量口径物品=剩余容量），文案由 dualRestText 拼单位
-    var totalStock = restAmountOf(item);
+    // 【第 28 轮】「库存」走件数口径，文案由 restPackText 拼成「9个（≈936g）」
+    var totalStock = restPacksOf(item);
     if (totalStock !== undefined) {
       var threshold = item.stockThreshold || 1;
       var maxBar = Math.max(totalStock, threshold * 3);
@@ -4401,7 +4380,7 @@ function renderCardFront(item, zone) {
         var avgPqF = item.variants.reduce(function(s, v) { return s + (v.packQty || 1); }, 0) / item.variants.length;
         packHintF = '（约 ' + Math.floor(totalStock / avgPqF) + ' 套）';
       }
-      html += '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:13px;color:var(--text-secondary)">库存</span><span style="font-weight:700">' + dualRestText(item) + packHintF + '</span></div>';
+      html += '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:13px;color:var(--text-secondary)">库存</span><span style="font-weight:700">' + restPackText(item) + packHintF + '</span></div>';
       html += '<div class="stock-bar ' + barClass + '"><div class="stock-fill" style="width:' + pct + '%"></div></div>';
       html += '</div>';
     }
@@ -4529,7 +4508,7 @@ function renderCardBack(item, zone) {
     html += '<span style="flex:1"></span>';
     var stockTxt18 = escapeHtml(stockSummaryOf(item));
     if (iuDtl18 && iuDtl18.qty > 0) {
-      stockTxt18 += ' <span style="font-size:11px;color:var(--orange);font-weight:500">· 🔥使用中 ' + trimNum(iuDtl18.qty) + ' ' + escapeHtml(mainPackUnit(item)) + '</span>';
+      stockTxt18 += ' <span style="font-size:11px;color:var(--orange);font-weight:500">· 🔥使用中 ' + trimNum(iuDtl18.qty) + ' ' + escapeHtml(packUnitOf(item)) + '</span>';
     }
     html += '<span style="font-size:14px;color:var(--text-primary);font-weight:600">' + stockTxt18 + '</span>';
     html += '</div>';
@@ -4543,7 +4522,7 @@ function renderCardBack(item, zone) {
     var rateLine = '';
     if (cModelR === 'instant') {
       var iuH = instantUsedQty(item);
-      var iuUnitH = (item.variants && item.variants[0] ? (item.variants[0].packUnit || mainPackUnit(item)) : mainPackUnit(item)) || '份';
+      var iuUnitH = (item.variants && item.variants[0] ? (item.variants[0].packUnit || capUnitOf(item)) : capUnitOf(item)) || '件';
       if (iuH > 0) rateLine = '今年已用 ' + trimNum(iuH) + ' ' + escapeHtml(iuUnitH);
     } else {
       // 【第 25 轮】周期型必须同时给「包数 + 容量」两个口径：
@@ -4551,9 +4530,9 @@ function renderCardBack(item, zone) {
       // 单位全部引用规格里录入的原文，绝不臆造单位。
       var stH = statsOf(item);
       if (stH && !stH.noClosedData && stH.perMonth > 0) {
-        rateLine = '月消耗量 ' + dualUnitText(stH.perMonth, item)
-          + ' · 年消耗量 ' + dualUnitText(stH.perYearRaw, item)
-          + ' · 年需求 ≈' + dualUnitText(stH.perYearRaw, item);
+        rateLine = '月消耗量 ' + capText(stH.perMonth, item)
+          + ' · 年消耗量 ' + capText(stH.perYearRaw, item)
+          + ' · 年需求 ≈' + capText(stH.perYearRaw, item);
       }
     }
     if (rateLine) {
@@ -4581,8 +4560,8 @@ function renderCardBack(item, zone) {
             + advB.detail + '</div>';
         }
         if (stAllB.monthsLeft !== null && stAllB.monthsLeft !== undefined) {
-          // 【第 26 轮】当前剩余 = 剩余件数（并列剩余容量），绝不用容量冒充件数
-          var uLeft = dualRestText(item);
+          // 【第 28 轮】当前剩余 = 剩余容量（与月/年消耗同口径，才能算出可用月数）
+          var uLeft = restCapText(item);
           // 不足 1 个月时说「约 X 天」更直观（0 个月没有信息量）
           var durTxt = (stAllB.monthsLeft < 1)
             ? '约 ' + Math.max(1, Math.round(stAllB.monthsLeft * R24_DAYS_PER_MONTH)) + ' 天'
@@ -4594,7 +4573,7 @@ function renderCardBack(item, zone) {
         var hasSpecRecsH = (item.usageRecords || []).some(function (r) { return r.specText; });
         var crH = contentRateOf(item);
         var cpuH = (crH && crH.perMonth > 0 && rateBv > 0) ? (crH.perMonth / rateBv) : 0;
-        var recUnitH = hasSpecRecsH ? '份' : rateUnitName(item);
+        var recUnitH = hasSpecRecsH ? '件' : rateUnitName(item);
         if (crH && crH.perMonth > 0 && cpuH > 0 && itemStockContent(item) !== null) {
           html += '· 半年量：<strong>≈' + trimNum(round1(crH.perMonth * 6)) + crH.unit + '</strong>（约 ' + Math.max(1, Math.ceil(crH.perMonth * 6 / cpuH)) + ' ' + recUnitH + '）<br>';
           html += '· 一年量：<strong>≈' + trimNum(round1(annualize(crH.perMonth))) + crH.unit + '</strong>（约 ' + Math.max(1, Math.ceil(annualize(crH.perMonth) / cpuH)) + ' ' + recUnitH + '）';
@@ -4661,11 +4640,11 @@ function renderCardBack(item, zone) {
         var hasSpecs = variantSpecsOf(v).length > 0;
         var capCellHtml = '';
         if (hasSpecs) {
-          // v1.7 双轨制：有明细时「单包容量 1ml」是迁移残留（packWeight=1），改显示均值/单份容量
+          // v1.7 双轨制：有明细时「单包容量 1ml」是迁移残留（packWeight=1），改显示均值/单件容量
           var avgP = variantAvgPiece(v);
           var u0v = variantSpecUnit(v);
           if (avgP > 0) {
-            capCellHtml = '<div class="vc-meta-item"><div class="vc-meta-label">' + (variantIsMixed(v) ? '均值单件' : '单份容量') + '</div><div class="vc-meta-value">' + trimNum(avgP) + ' ' + u0v + (variantIsMixed(v) ? '/份' : '') + '</div></div>';
+            capCellHtml = '<div class="vc-meta-item"><div class="vc-meta-label">' + (variantIsMixed(v) ? '均值单件' : '单件容量') + '</div><div class="vc-meta-value">' + trimNum(avgP) + ' ' + u0v + (variantIsMixed(v) ? '/件' : '') + '</div></div>';
           }
         } else if (hasWeight) {
           var wu = weightUnitOf(v);
@@ -4694,8 +4673,8 @@ function renderCardBack(item, zone) {
         }
         html += '</div>';
 
-        // === 第 11 轮：即时型消耗记录 —— 同步展示在对应品牌条目下（与消耗概览双份留存）===
-        // 用户明确要求：消耗一份后，记录必须在「我消耗的那个品牌」下面看得见，不能只藏在底部折叠框里。
+        // === 第 11 轮：即时型消耗记录 —— 同步展示在对应品牌条目下（与消耗概览双件留存）===
+        // 用户明确要求：消耗一件后，记录必须在「我消耗的那个品牌」下面看得见，不能只藏在底部折叠框里。
         var instRecsV = (item.usageRecords || []).map(function (r, i) { return { r: r, i: i }; })
           .filter(function (w) { return w.r.instant && w.r.variantId === v.id; });
         if (instRecsV.length > 0) {
@@ -4774,7 +4753,7 @@ function renderCardBack(item, zone) {
             var perSetL = specPackCount(s);
             var actL = actRecsV.filter(function (r) { return String(r.specName || '') === String(nmL); }).length;
             if (isInstantV13) {
-              // 即时型：按「已消耗份数」显示真实剩余，点一下直接扣 1 份（级联选择的详情页捷径）
+              // 即时型：按「已消耗件数」显示真实剩余，点一下直接扣 1 件（级联选择的详情页捷径）
               // 【第 20 轮】日常扣减单位 = 计数单位（片/粒/包），绝不显示 g/ml —— 容量仅作采购基数
               var leftQ13 = specRemainPieces(v, s);
               var usedQ13 = specUsedQty(s);
@@ -4873,9 +4852,9 @@ function renderCardBack(item, zone) {
       // --- 摘要行 ---
       if (cModelR === 'instant') {
         var iuQty = instantUsedQty(item);
-        var iuUnit = (item.variants && item.variants[0] ? (item.variants[0].packUnit || mainPackUnit(item)) : mainPackUnit(item)) || '份';
+        var iuUnit = (item.variants && item.variants[0] ? (item.variants[0].packUnit || capUnitOf(item)) : capUnitOf(item)) || '件';
         html += '<div class="back-row"><span class="back-label">今年已用</span><span class="back-value" style="color:var(--accent);font-weight:700">' + trimNum(iuQty) + ' ' + escapeHtml(iuUnit) + '</span></div>';
-        html += '<div class="back-row"><span class="back-label">剩余</span><span class="back-value">' + trimNum(restNowOf(item)) + ' ' + escapeHtml(iuUnit) + '</span></div>';
+        html += '<div class="back-row"><span class="back-label">剩余</span><span class="back-value">' + trimNum(restPacksOf(item)) + ' ' + escapeHtml(iuUnit) + '</span></div>';
         var iuSt = statsOf(item);
         if (iuSt && iuSt.rate > 0 && iuSt.monthsLeft !== null) {
           html += '<div class="back-row"><span class="back-label">按当前速度</span><span class="back-value">还能用 ≈ ' + round1(iuSt.monthsLeft) + ' 个月</span></div>';
@@ -4921,7 +4900,7 @@ function renderCardBack(item, zone) {
           // 【第 26 轮 · 铁律】件数为主、容量为辅 →「7个（约840g）」
           // 旧版把「每套件数 9」乘进括号得到「1个（≈9个）」——那是拿件数冒充容量，已彻底禁止。
           var qtyTxt;
-          var capU26 = capacityUnitOf(item);
+          var capU26 = capUnitOf(item);
           if (r.specText) {
             qtyTxt = escapeHtml(r.specText);
             // 只有容量类规格（g/ml）才补括号；片/粒类的 contentUsed 本身就是片数，补了会变成「≈15kg」这种错话
@@ -4929,16 +4908,16 @@ function renderCardBack(item, zone) {
               qtyTxt += '（约' + trimNum(round1(r.contentUsed)) + escapeHtml(capU26) + '）';
             }
           } else {
-            qtyTxt = recQtyText(r.qty || 1, item);
+            qtyTxt = recTextOf(item, r);
           }
           var recTxt;
           if (r.type === 'surplus') {
-            var spU = (vR0 ? (vR0.packUnit || mainPackUnit(item)) : mainPackUnit(item)) || '份';
+            var spU = (vR0 ? (vR0.packUnit || packUnitOf(item)) : packUnitOf(item)) || '件';
             recTxt = '📥 ' + (vR0 ? escapeHtml(vR0.brand) + ' · ' : '') + '盘盈入库 +' + trimNum(r.qty) + ' ' + escapeHtml(spU) + (startStr ? ' · ' + startStr : '');
           } else if (r.isAudit) {
             // 盘点盘亏流水：显示起止周期（可 ✏️ 修改开始/结束时间——第 9 轮要求）
             var endStrA = r.endDate ? formatDate(r.endDate) : '';
-            recTxt = '⚖️ ' + (vR0 ? escapeHtml(vR0.brand) + ' · ' : '') + '盘点 ' + trimNum(r.qty) + ' ' + escapeHtml(rateUnitName(item)) + (startStr ? ' · ' + startStr + (endStrA ? ' → ' + endStrA : '') : '');
+            recTxt = '⚖️ ' + (vR0 ? escapeHtml(vR0.brand) + ' · ' : '') + '盘点 ' + recTextOf(item, r) + (startStr ? ' · ' + startStr + (endStrA ? ' → ' + endStrA : '') : '');
           } else if (r.instant) {
             var iu = instantCountUnit(item);   // 【第 20 轮】计数单位（片/包），绝不取 g/ml
             recTxt = '✨ ' + (vR0 ? escapeHtml(vR0.brand) + ' · ' : '') + (r.batch ? '批量 ' : '') + '消耗 ' + trimNum(r.qty) + ' ' + escapeHtml(iu) + (startStr ? ' · ' + startStr : '');
@@ -5379,7 +5358,7 @@ function manualRefresh() {
 
 // ========== 自动更新检查 ==========
 // deploy.py 部署时会把 1791388211 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791506254';
+var APP_VERSION = '1791509523';
 
 function checkAppUpdate(manual) {
   try {
@@ -5477,7 +5456,7 @@ function openItem(itemId) {
     html += '<div class="modal-title">' + (isOneShot ? '✨ 消耗打卡 - 选品牌' : '🔓 开封 - 选品牌') + '</div>';
     html += '<div style="text-align:center;margin-bottom:12px;font-size:14px;font-weight:600">' + escapeHtml(item.name) + '</div>';
     if (isOneShot) {
-      html += '<div style="text-align:center;margin-bottom:10px;font-size:12px;color:var(--text-secondary)">点一次扣一份，可反复点；扣到 0 自动归入「已用完」</div>';
+      html += '<div style="text-align:center;margin-bottom:10px;font-size:12px;color:var(--text-secondary)">点一次扣一件，可反复点；扣到 0 自动归入「已用完」</div>';
     }
     available.forEach(function(v) {
       // 并行展示：该品牌正在使用中的开封条数（允许 >1，如 2 瓶同时开）
@@ -5526,7 +5505,7 @@ function openVariantItem(itemId, variantId) {
   var v = item.variants.find(function(v) { return v.id === variantId; });
   if (!v) return;
 
-  // 模型③（即时消耗）：纯打卡 —— 点「消耗一份」扣 1，扣到 0 自动折叠；这里也支持撤销
+  // 模型③（即时消耗）：纯打卡 —— 点「消耗一件」扣 1，扣到 0 自动折叠；这里也支持撤销
   if (consumeModelOf(item) === 'instant') {
     // 【第 20 轮】有规格明细的即时型：打卡必须选到具体规格，绝不按 v.stock（容量口径）扣
     if (variantSpecsOf(v).length) { openPunchSpecPick(itemId, variantId); return; }
@@ -5540,9 +5519,9 @@ function openVariantItem(itemId, variantId) {
     html += '<div style="font-size:14px;color:var(--accent)">' + escapeHtml(v.brand) + '</div>';
     html += '<div style="font-size:13px;color:var(--text-secondary)">剩 ' + trimNum(iuStock) + iuUnit + ' · 今年已用 ' + trimNum(iuUsed) + iuUnit + '</div>';
     html += '</div>';
-    html += '<div style="font-size:12px;color:var(--text-secondary);text-align:center;margin-bottom:12px">点一次只扣 <b>1</b> 份（绝不整批清零）；要一次扣多份请用「🔢 批量消耗」自己填数量</div>';
+    html += '<div style="font-size:12px;color:var(--text-secondary);text-align:center;margin-bottom:12px">点一次只扣 <b>1</b> 件（绝不整批清零）；要一次扣多件请用「🔢 批量消耗」自己填数量</div>';
     html += '<div style="display:flex;gap:8px">';
-    html += '<button class="btn btn-primary btn-full" ' + (iuStock > 0 ? '' : 'disabled style="opacity:.5"') + ' onclick="punchInstant(\'' + itemId + '\',\'' + variantId + '\');closeModal()">✨ 消耗一份</button>';
+    html += '<button class="btn btn-primary btn-full" ' + (iuStock > 0 ? '' : 'disabled style="opacity:.5"') + ' onclick="punchInstant(\'' + itemId + '\',\'' + variantId + '\');closeModal()">✨ 消耗一件</button>';
     html += '<button class="btn btn-outline btn-full" ' + (iuUsed > 0 ? '' : 'disabled style="opacity:.5"') + ' onclick="unpunchInstant(\'' + itemId + '\',\'' + variantId + '\');closeModal()">↩️ 撤销一次</button>';
     html += '</div>';
     html += '<div style="display:flex;gap:8px;margin-top:8px">';
@@ -5897,7 +5876,7 @@ function confirmOpen(itemId, variantId, markAsUsed) {
 
 // ========== 模型③ 即时消耗型：纯打卡扣减 ==========
 // 语义铁律（第 8 轮统一）：
-//   ① 点一次「消耗一份」= 只扣 1 个库存，绝不整批清零；
+//   ① 点一次「消耗一件」= 只扣 1 个库存，绝不整批清零；
 //   ② 每一次打卡 = 一条**独立记录**（绝不 rec.qty += 合并成滚动批次），
 //      这样历史台账才能回答「什么时候消耗了多少」；
 //   ③ 批量扣减必须走独立入口 batchPunchInstant（用户自己输入数量），
@@ -5916,7 +5895,7 @@ function punchInstant(itemId, variantId, delta, silent) {
   var stock = parseFloat(v.stock) || 0;
   if (stock <= 0) { toast('已经用完了'); return; }
   var take = Math.min(d, stock);
-  var u = v.packUnit || mainPackUnit(item) || '份';
+  var u = v.packUnit || mainPackUnit(item) || '件';
 
   v.stock = Math.round((stock - take) * 100) / 100;
   if (!item.usageRecords) item.usageRecords = [];
@@ -5947,7 +5926,7 @@ function punchInstant(itemId, variantId, delta, silent) {
   toast('✨ 消耗 -' + trimNum(take) + u + '，剩 ' + trimNum(v.stock) + u);
 }
 
-// 【批量消耗入口】用户自己输入数量 —— 唯一允许一次扣多份的路径。
+// 【批量消耗入口】用户自己输入数量 —— 唯一允许一次扣多件的路径。
 // 绝不默认清零整批：输入框默认值恒为 1，超过库存时按库存封顶并明确提示。
 function batchPunchInstant(itemId, variantId) {
   var item = getItem(currentZoneId, itemId);
@@ -6027,7 +6006,7 @@ function deleteInstantRecordConfirm(itemId, idx) {
   var r = item.usageRecords[idx];
   if (!r.instant) return;
   var v = (item.variants || []).find(function (x) { return x.id === r.variantId; });
-  var u = (v && v.packUnit) || mainPackUnit(item) || '份';
+  var u = (v && v.packUnit) || mainPackUnit(item) || '件';
   if (!window.confirm('删除这条消耗记录？\n' + (v ? (v.brand || '') + ' · ' : '') + '-' + trimNum(r.qty) + u + (r.startDate ? ' · ' + formatDate(r.startDate) : '') + '\n删除后会把 ' + trimNum(r.qty) + u + ' 退回该品牌库存。')) return;
   deleteInstantRecord(itemId, idx);
 }
@@ -6080,7 +6059,7 @@ function unpunchInstant(itemId, variantId) {
     if (r.variantId === variantId && r.instant && (parseFloat(r.qty) || 0) > 0) { rec = r; break; }
   }
   if (!rec) { toast('没有可撤销的打卡'); return; }
-  var u = v.packUnit || mainPackUnit(item) || '份';
+  var u = v.packUnit || mainPackUnit(item) || '件';
   var back = parseFloat(rec.qty) || 0;
   item.usageRecords.splice(item.usageRecords.indexOf(rec), 1);
   revertInstantRecord(item, v, rec);
@@ -6090,24 +6069,24 @@ function unpunchInstant(itemId, variantId) {
   toast('↩️ 已撤销最近一次打卡 ' + trimNum(back) + u + '，剩 ' + trimNum(v.stock) + u);
 }
 
-// 即时消耗型：点「消耗一份」时作用在哪个品牌上
+// 即时消耗型：点「消耗一件」时作用在哪个品牌上
 // 规则：优先还有库存的品牌；多个都有 → 取第一个（用户可在卡片里切换品牌后单独点）
 // 【第 10 轮 · 修 Bug】即时型「点消耗」必须让用户明确选了哪个品牌。
 // 【第 13 轮 · 级联选择】多品牌时第一步选品牌；品牌下还有规格明细（如「修护型面膜」下的
 // 「胶原蛋白面膜 / 玻尿酸面膜」）时，第二步**必须**继续选具体规格，绝不能跳过、
-// 也绝不能默认消耗第一个规格 —— 选中具体规格后才扣那 1 份库存。
+// 也绝不能默认消耗第一个规格 —— 选中具体规格后才扣那 1 件库存。
 function punchInstantPick(itemId) {
   var item = getItem(currentZoneId, itemId) || findItemByIdGlobal(itemId);
   if (!item) return;
   if (!item.variants || !item.variants.length) { toast('这个物品还没有品牌变体'); return; }
-  var u = mainPackUnit(item) || '份';
+  var u = mainPackUnit(item) || '件';
   var avail = item.variants.filter(function (v) { return !v.usedUp && (parseFloat(v.stock) || 0) > 0; });
   if (!avail.length) { toast('所有品牌都用完了，先补货吧'); return; }
   // 只有一个可消耗品牌、且该品牌没有规格明细 → 无需任何选择，直接扣 1（保持快捷）
   if (avail.length === 1 && !variantSpecsOf(avail[0]).length) { punchInstant(item.id, avail[0].id, 1, true); return; }
 
   var html = '<div class="modal-handle"></div>';
-  html += '<div class="modal-title">✨ 消耗一份 · 第 1 步</div>';
+  html += '<div class="modal-title">✨ 消耗一件 · 第 1 步</div>';
   html += '<div style="text-align:center;margin-bottom:14px">';
   html += '<div style="font-size:16px;font-weight:700">' + escapeHtml(item.name) + '</div>';
   html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">这次消耗的是哪个品牌？</div>';
@@ -6132,7 +6111,7 @@ function punchInstantPick(itemId) {
       + '<span style="font-size:13px;color:var(--text-secondary);font-weight:500">剩 ' + trimNum(st) + su + '</span>'
       + '</button>';
   });
-  html += '<div style="font-size:11px;color:var(--text-tertiary);text-align:center;margin-top:4px">品牌下有具体规格时会继续让你选规格；要一次扣多份请进详情页用「🪄 批量」</div>';
+  html += '<div style="font-size:11px;color:var(--text-tertiary);text-align:center;margin-top:4px">品牌下有具体规格时会继续让你选规格；要一次扣多件请进详情页用「🪄 批量」</div>';
   html += '<button class="btn btn-ghost btn-full" style="margin-top:10px" onclick="closeModal()">取消</button>';
   document.getElementById('modal-content').innerHTML = html;
   document.getElementById('modal-overlay').classList.add('show');
@@ -6144,7 +6123,7 @@ function openPunchSpecPick(itemId, variantId) {
   if (!item) return;
   var v = (item.variants || []).find(function (x) { return x.id === variantId; });
   if (!v) return;
-  var u = v.packUnit || mainPackUnit(item) || '份';
+  var u = v.packUnit || mainPackUnit(item) || '件';
   var ss = variantSpecsOf(v);
   if (!ss.length) {
     // 该品牌没有规格明细 → 直接扣 1（维持原「多品牌选品牌」的快捷路径）
@@ -6152,7 +6131,7 @@ function openPunchSpecPick(itemId, variantId) {
     return;
   }
   var html = '<div class="modal-handle"></div>';
-  html += '<div class="modal-title">✨ 消耗一份 · 第 2 步</div>';
+  html += '<div class="modal-title">✨ 消耗一件 · 第 2 步</div>';
   html += '<div style="text-align:center;margin-bottom:14px">';
   html += '<div style="font-size:16px;font-weight:700">' + escapeHtml(v.brand || item.name) + '</div>';
   html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">具体是哪个规格？点哪个就扣哪个的库存</div>';
@@ -6176,8 +6155,8 @@ function openPunchSpecPick(itemId, variantId) {
   document.getElementById('modal-overlay').classList.add('show');
 }
 
-// 【第 13 轮】规格级消耗执行：选中具体规格后才扣对应的 1 份库存
-//   片/粒类：spec.usedQty += 1（1 份 = 1 片）；含量单位：spec.openPacks += 1（1 份 = 1 包）
+// 【第 13 轮】规格级消耗执行：选中具体规格后才扣对应的 1 件库存
+//   片/粒类：spec.usedQty += 1（1 件 = 1 片）；含量单位：spec.openPacks += 1（1 件 = 1 包）
 //   每次打卡独立落一条记录（带 specId/specName），撤销/删除时精确回退到该规格
 function punchInstantSpec(itemId, variantId, specIdx, silent) {
   var item = getItem(currentZoneId, itemId) || findItemByIdGlobal(itemId);
@@ -6189,7 +6168,7 @@ function punchInstantSpec(itemId, variantId, specIdx, silent) {
   if (!s) { punchInstant(itemId, variantId, 1, silent); return; }
   var isContent = isContentUnitText(s.unit);
   var leftQ = specRemainPieces(v, s);
-  var u = s.unit || v.packUnit || mainPackUnit(item) || '份';
+  var u = s.unit || v.packUnit || mainPackUnit(item) || '件';
   if (leftQ <= 0) { toast('「' + (s.name || '该规格') + '」已经用完了，换个规格或先补货'); return; }
   var nowISO = new Date().toISOString();
   if (isContent) {
@@ -6351,7 +6330,7 @@ function openRestockForm(itemId) {
   html += '<div class="form-group"><label class="form-label">补货数量</label><input type="number" class="form-input" id="restock-qty" value="1" min="0" step="0.5"></div>';
   html += '<div class="form-group"><label class="form-label">单位</label><input type="text" class="form-input" id="restock-unit" value="' + escapeHtml(item.unit||'个') + '"></div>';
   html += '</div>';
-  // 多规格品牌：补货按「规格×份数」录入（如 小样 +2、正装 +1）
+  // 多规格品牌：补货按「规格×件数」录入（如 小样 +2、正装 +1）
   html += '<div id="restock-spec-block" style="display:none"></div>';
   html += '<div class="form-row">';
   html += '<div class="form-group"><label class="form-label">总价</label><input type="number" class="form-input" id="restock-total" value="" placeholder="0"></div>';
@@ -6393,7 +6372,7 @@ function openRestockForm(itemId) {
   renderRestockSpecs(item);
 }
 
-// 多规格品牌的补货明细：按规格录份数；也支持直接按含量补
+// 多规格品牌的补货明细：按规格录件数；也支持直接按含量补
 function renderRestockSpecs(item) {
   var box = document.getElementById('restock-spec-block');
   if (!box) return;
@@ -6436,7 +6415,7 @@ function syncRestockSpecQty() {
   var setsEl = document.getElementById('restock-spec-sets');
   var sets = setsEl ? (parseFloat(setsEl.value) || 0) : 0;
   if (sets > 0 && sp.length) {
-    // 每套含量 = Σ 单套内包数 × 每包含量 × 每份规格
+    // 每套含量 = Σ 单套内包数 × 每包含量 × 每件规格
     var perSet = 0;
     sp.forEach(function (s) { perSet += specPackCount(s) * specPackQty(s) * specContentOf(s); });
     total += sets * perSet;
@@ -7031,7 +7010,7 @@ function onConsumablePriceBlur(idx, which, val) {
 function packHintOf(v, plain, item) {
   var MUL = plain ? ' × ' : ' <span style="color:var(--text-tertiary)">×</span> ';
   var DIM = plain ? function (x) { return x; } : function (x) { return '<i style="color:var(--text-tertiary)">' + x + '</i>'; };
-  // 【第 19 轮 · 即时消耗】即时型绝不算/显容量：库存构成只报"还能再用多少次（份/包）"
+  // 【第 19 轮 · 即时消耗】即时型绝不算/显容量：库存构成只报"还能再用多少次（件/包）"
   // 【第 20 轮】加总用 specRemainPieces、单位用 instantCountUnit（g/ml 类 → 「包」）
   if (item && consumeModelOf(item) === 'instant') {
     var spI = variantSpecsOf(v);
@@ -7046,7 +7025,7 @@ function packHintOf(v, plain, item) {
     return '🔢 还能再用 ' + trimNum(v.stock || 0) + instantCountUnit(item);
   }
   // 混合规格：明细 = 单套构成。v1.7 双轨制展示：
-  //   总量 = 单套总量 × 套餐数（约 N 份，按均值折算）· 未开 = 剩余未开包的容量
+  //   总量 = 单套总量 × 套餐数（约 N 件，按均值折算）· 未开 = 剩余未开包的容量
   //   「剩 X 套」在混合规格下反直觉（替换装还有 2 包却「剩 0 套」），不再展示。
   var sp = variantSpecsOf(v);
   if (sp.length) {
@@ -7066,7 +7045,7 @@ function packHintOf(v, plain, item) {
     // 【第 23 轮】这一行只描述「买进来过什么」（累计购入）；当前剩余一律在「当前库存」格展示，
     // 两个口径绝不混在一行（用户反馈：100片入库总量 + 未开15片 挤一行，根本看不出可用库存）。
     var head = '📦 累计购入 = (' + line + ')' + MUL + trimNum(pcS) + '套 = ' + trimNum(totalBought) + u0;
-    if (avg > 0) head += '（约 ' + trimNum(round1(totalBought / avg)) + ' 份）';
+    if (avg > 0) head += '（约 ' + trimNum(round1(totalBought / avg)) + ' 件）';
     if (openedPacks > 0) {
       head += '（已开 ' + trimNum(openedPacks) + ' 包）';
     }
@@ -7421,13 +7400,13 @@ function saveItem() {
       nv.packUnit = (ev.packUnit && !isContentUnitText(ev.packUnit)) ? ev.packUnit : nv.packQtyUnit; // 旧字段兼容；含量单位一律不收
       nv.packWeight = normQty(ev.packWeight);
       // 混合规格（本品牌可选）：specs = 「一套里装了什么」（单套构成），永不被套餐数折算写回
-      // 库存 = Σ 各规格(套餐数 × 单套包数 − 已开包数) × 每包含量 × 每份规格；消耗记在 specs[i].openPacks
-      // 规格两层结构：packCount(单套内包数) × packQty(每包含量) × content(每份规格)；留空 = 1，填 0 = 0
+      // 库存 = Σ 各规格(套餐数 × 单套包数 − 已开包数) × 每包含量 × 每件规格；消耗记在 specs[i].openPacks
+      // 规格两层结构：packCount(单套内包数) × packQty(每包含量) × content(每件规格)；留空 = 1，填 0 = 0
       nv.specs = (ev.specs || []).map(function (s) {
         var spc_ = (s.packCount !== undefined && s.packCount !== null && s.packCount !== '') ? (parseFloat(s.packCount) || 0) : ((+s.qty || 0) > 0 ? +s.qty : 1);
         var spq_ = (s.packQty !== undefined && s.packQty !== null && s.packQty !== '') ? (parseFloat(s.packQty) || 0) : 1;
         var sct_ = (s.content !== undefined && s.content !== null && s.content !== '') ? (+s.content || 0) : 1;
-        // 【第 13 轮】即时消耗型的规格级已消耗份数必须随表单带回，编辑保存不得清零
+        // 【第 13 轮】即时消耗型的规格级已消耗件数必须随表单带回，编辑保存不得清零
         return { name: (s.name || '').trim(), packCount: spc_, packQty: spq_, content: sct_, unit: (s.unit || '').trim(), qty: Math.round(spc_ * spq_ * 100) / 100, openPacks: specOpenPacks(s), usedQty: specUsedQty(s) };
       }).filter(function (s) { return +s.packCount > 0; });
       if (nv.specs.length) {
@@ -7452,7 +7431,7 @@ function saveItem() {
             });
           }
           if (!(keep > 0) && oldSpecs[si]) keep = specOpenPacks(oldSpecs[si]);
-          // 【第 13 轮】规格级已消耗份数（即时型）：同样按「名称+单位」从旧数据兜底继承
+          // 【第 13 轮】规格级已消耗件数（即时型）：同样按「名称+单位」从旧数据兜底继承
           if (!(keepUsed > 0)) {
             oldSpecs.forEach(function (os) {
               if (keepUsed > 0) return;
@@ -7468,7 +7447,7 @@ function saveItem() {
           s.usedQty = Math.max(0, Math.round(keepUsed * 100) / 100);
           s.qty = Math.round(specPackCount(s) * specPackQty(s) * 100) / 100; // 兼容字段：单套内包数 × 每包含量
         });
-        // ③ 库存 = Σ 各规格剩余包数 × 每包含量 × 每份规格
+        // ③ 库存 = Σ 各规格剩余包数 × 每包含量 × 每件规格
         nv.stock = variantSpecStockCalc(nv);
         // ④ 父级规格行已被明细接管：不再从明细反写 packQty（避免「套数 × 每套含」的旧矛盾）
         nv.specsFolded = true;
@@ -7631,7 +7610,7 @@ function buildYearStats(year) {
         var d = r.endDate || r.startDate || r.date;
         if (!d) return;
         if (new Date(d).getFullYear() !== year) return;
-        yq += (r.qty || 1);
+        yq += (recordCap(it, r) || 1);
         times += 1;
         if (r.startDate && r.endDate) {
           var dd = daysBetween(new Date(r.startDate), new Date(r.endDate));
@@ -7670,46 +7649,16 @@ function buildYearStats(year) {
         estimated = true;
       }
       if (yq <= 0 && spend <= 0) return; // 这一年没有任何动静，不进档案
-      // 年报表展示口径：【第 27 轮】unitName 必须取「物品数量口径」的原文 ——
-      // ml 规格物品的记录 qty 本身就是 ml（如 720），绝不能再标成「个」，
-      // 也绝不再拿 720 去乘每包容量（旧版曾算出 36 万 ml 的荒谬数）。
-      var model = consumeModelOf(it);
-      var qUnit27 = quantityUnitOf(it);
-      var capUnit = mainPackUnit(it);
-      var unitName = (qUnit27 || it.unit || capUnit || '个');
+      // 年报表展示口径：【第 28 轮】数量一律用容量（ml/g/片）—— 容量才是花钱买到的量。
+      // 记录里的数量已经在 recordCap 里做过「件数 × 单包容量」这唯一一次乘法，
+      // 这里直接拿来用，绝不再乘第二次（旧版曾算出 36 万 ml 的荒谬数）。
+      var unitName = capUnitOf(it) || it.unit || '件';
       var mainQty = Math.round(yq * 10) / 10;
-      var capQty = 0, showCapUnit = capUnit;
-      if (model === 'combo') {
-        unitName = (it.variants && it.variants[0] ? variantSpecUnit(it.variants[0]) : '') || it.unit || '件';
-        capQty = 0;                     // combo 的 qty 已是片/件，不再折算
-      } else if (isContentUnitText(qUnit27)) {
-        // 数量口径本身是容量单位（ml/g）→ qty 已是容量，绝不加括号、绝不再乘
-        capQty = 0; showCapUnit = '';
-      } else {
-        // 件/包/片口径：用「每件含量」补一个容量口径（如 3包 → ≈15kg）
-        var wAvg = 0, wAvgUnit = '';
-        (it.variants || []).forEach(function (v) {
-          var w = parseFloat(v.packWeight) || 0;
-          if (w > 0) { wAvg = w; wAvgUnit = weightUnitOf(v); }
-        });
-        // 【第 26 轮】只有真·容量单位（g/ml/kg…）才允许出现在括号里；
-        // 片/粒类即便误填了 packWeight，也绝不能把「件数 × 重量」说成容量。
-        if (wAvg > 0 && isContentUnitText(wAvgUnit)) {
-          // 若这一年的记录带 contentUsed（规格开封时算过含量），优先用它
-          var contentSum = 0, hasContent = false;
-          (it.usageRecords || []).forEach(function (r) {
-            var d = r.endDate || r.startDate || r.date;
-            if (!d || new Date(d).getFullYear() !== year) return;
-            if (r.contentUsed > 0) { contentSum += r.contentUsed; hasContent = true; }
-          });
-          capQty = hasContent ? round1(contentSum) : round1(yq * wAvg);
-          showCapUnit = wAvgUnit;
-        }
-      }
+      var capQty = 0, showCapUnit = '';
       var brands = Object.keys(brandMap).map(function(k) { return brandMap[k]; });
       totalSpend += spend;
       // 速率四要素也一并固化：物品删除后年报仍能展示它的「用得多快 / 建议买多少」
-      // （固化时物品还在，statsOf/buyAdviceOf 可正常计算；此后这份数据不再变化）
+      // （固化时物品还在，statsOf/buyAdviceOf 可正常计算；此后这件数据不再变化）
       var stY = statsOf(it);
       var advY = buyAdviceOf(it);
       items.push({
@@ -7882,7 +7831,7 @@ function openYearCleanup(year, closed, itemCount) {
 // delFinished=true → 永久删除已完结且不再补货的产品；clearRecs=true → 清掉该年及以前的记录
 function cleanupOldYear(year, delFinished, clearRecs) {
   var y = Number(year);
-  if (!window.confirm('确定执行清理吗？此操作不可撤销。\n建议先到「设置 → 📤 导出数据」备份一份。')) return;
+  if (!window.confirm('确定执行清理吗？此操作不可撤销。\n建议先到「设置 → 📤 导出数据」备份一件。')) return;
   var deleted = 0, cleared = 0;
   DB.zones.forEach(function (z) {
     if (z.type !== 'consumable') return;
@@ -8219,7 +8168,7 @@ function auditAnchorDate(item) {
   return d;
 }
 // 盘点流水工厂：盘亏 → 消耗记录（进速率）；盘盈 → 入库记录（不进速率，只进流水）
-// 口径与开封记录对齐：qty=份数（多规格）、contentUsed=含量、specText=展示文本、auditPacks=包数（精确回滚用）
+// 口径与开封记录对齐：qty=件数（多规格）、contentUsed=含量、specText=展示文本、auditPacks=包数（精确回滚用）
 // 【第 13 轮】unitTxt：specText 的单位（即时型按「片/粒」展示；缺省「包」，兼容组合型）
 function makeAuditRecord(anchor, now, v, specName, qty, contentUsed, diffPacks, isSurplus, unitTxt) {
   var rec = {
@@ -8249,7 +8198,7 @@ function makeAuditRecord(anchor, now, v, specName, qty, contentUsed, diffPacks, 
   return rec;
 }
 // ===== 【第 22 轮 · 共性修复】盘点口径统一 =====
-// 有规格明细的变体：库存唯一真源 = variantSpecContent（Σ 剩余包数×每包含量×每份规格）。
+// 有规格明细的变体：库存唯一真源 = variantSpecContent（Σ 剩余包数×每包含量×每件规格）。
 // v.stock 可能被历史版本写漂（如 1000 vs 明细 100），盘点页绝不能再信任它，
 // 否则「当前记录」与规格输入区口径分裂，还会产生假差额流水。
 function variantAuditStockOf(v) {
@@ -8295,10 +8244,10 @@ function openStockAuditForm(itemId) {
         var pq0 = v.packQty || 1;
         html += '<div style="font-size:12px;color:var(--orange)">使用中 · 跳过盘点' + (pq0 > 1 ? '（约 ' + Math.floor((v.stock||0)/pq0) + ' 套）' : '') + '</div>';
       } else if (spA) {
-        // 多规格：按规格清点。即时消耗型按「剩余份数（片/粒）」清点；组合消耗型按「剩余包数」清点
+        // 多规格：按规格清点。即时消耗型按「剩余件数（片/粒）」清点；组合消耗型按「剩余包数」清点
         var isInstA13 = (consumeModelOf(item) === 'instant');
         var curTxtA = isInstA13
-          ? ('当前 ' + trimNum(variantSpecPieces(v)) + variantSpecUnit(v) + '（按规格清点份数）')
+          ? ('当前 ' + trimNum(variantSpecPieces(v)) + variantSpecUnit(v) + '（按规格清点件数）')
           : ('当前 ' + trimNum(variantAuditStockOf(v)) + variantSpecUnit(v) + '（' + trimNum(variantSpecPacksLeft(v)) + ' 包未开）');
         html += '<div style="font-size:12px;color:var(--text-secondary)">' + curTxtA + '</div>';
       } else {
@@ -8310,12 +8259,12 @@ function openStockAuditForm(itemId) {
       if (isInUse) {
         html += '<div style="font-size:12px;color:var(--text-tertiary);flex-shrink:0">—</div>';
       } else if (spA) {
-        var isInstA2 = (consumeModelOf(item) === 'instant'); // 【第 13 轮】即时型：输入「剩余份数」
+        var isInstA2 = (consumeModelOf(item) === 'instant'); // 【第 13 轮】即时型：输入「剩余件数」
         html += '<div style="flex-shrink:0;width:190px">';
         spA.forEach(function (s, si) {
           var pqA = specPackQty(s), uA = s.unit || '';
           var remainA = isInstA2 ? specRemainPieces(v, s) : specPacksRemaining(v, s);
-          var unitTip = isInstA2 ? escapeHtml(uA || '份') : ('包' + (pqA !== 1 ? '(' + trimNum(pqA) + uA + ')' : ''));
+          var unitTip = isInstA2 ? escapeHtml(uA || '件') : ('包' + (pqA !== 1 ? '(' + trimNum(pqA) + uA + ')' : ''));
           html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">';
           html += '<span style="font-size:12px;color:var(--text-secondary);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(s.name || ('规格' + (si + 1))) + '</span>';
           html += '<input type="number" class="form-input audit-spec-input" data-vi="' + i + '" data-si="' + si + '" data-mode="' + (isInstA2 ? 'qty' : 'packs') + '" data-unit="' + escapeHtml(s.unit || '') + '" data-content="' + (+s.content || 0) + '" data-packqty="' + pqA + '" data-recorded-packs="' + remainA + '" value="' + remainA + '" min="0" step="1" style="width:70px;text-align:center;font-weight:600" oninput="updateAuditTotal()">';
@@ -8352,7 +8301,7 @@ function updateAuditTotal() {
     total += parseFloat(el.value) || 0;
     recorded += parseFloat(el.getAttribute('data-recorded')) || 0;
   });
-  // 多规格：剩余包数 × 每包含量 × 每份规格；即时型（qty 模式）输入的就是剩余份数（片），× 每份规格
+  // 多规格：剩余包数 × 每包含量 × 每件规格；即时型（qty 模式）输入的就是剩余件数（片），× 每件规格
   document.querySelectorAll('.audit-spec-input').forEach(function(el) {
     var c = parseFloat(el.getAttribute('data-content')) || 0;
     var pq = parseFloat(el.getAttribute('data-packqty')) || 1;
@@ -8402,7 +8351,7 @@ function saveStockAudit(itemId) {
     variants.forEach(function(v, i) {
       var spS = (v.specs && v.specs.length) ? v.specs : null;
       if (spS) {
-        // 多规格盘点。组合消耗型按「剩余包数」落账；即时消耗型按「剩余份数（片/粒）」落账
+        // 多规格盘点。组合消耗型按「剩余包数」落账；即时消耗型按「剩余件数（片/粒）」落账
         var isInstS13 = (consumeModelOf(item) === 'instant');
         var touched = false;
         var allBad = false;
@@ -8412,10 +8361,10 @@ function saveStockAudit(itemId) {
           var n = parseFloat(el.value);
           if (isNaN(n) || n < 0) { toast('请输入有效的剩余数量'); ok = false; allBad = true; return; }
           if (isInstS13) {
-            // 【第 13 轮】即时型：差额记入规格的已消耗份数（usedQty）或已开包数（含量单位），
+            // 【第 13 轮】即时型：差额记入规格的已消耗件数（usedQty）或已开包数（含量单位），
             // 构成（单套内包数）与套餐数是购买记录，绝不覆盖
             var remainNowQ = specRemainPieces(v, s);
-            var diffQ = Math.round((remainNowQ - n) * 100) / 100; // >0 盘亏份数；<0 盘盈份数
+            var diffQ = Math.round((remainNowQ - n) * 100) / 100; // >0 盘亏件数；<0 盘盈件数
             if (isContentUnitText(s.unit)) {
               s.openPacks = Math.round(Math.max(0, specOpenPacks(s) + diffQ) * 100) / 100;
             } else {
@@ -8424,11 +8373,11 @@ function saveStockAudit(itemId) {
             if (diffQ !== 0) {
               auditFlows.push(makeAuditRecord(
                 anchorA, nowA, v, (s.name || ('规格' + (si + 1))),
-                diffQ,                       // qty = 份数差额（片/粒）
+                diffQ,                       // qty = 件数差额（片/粒）
                 Math.abs(diffQ) * (+s.content > 0 ? s.content : 1), // 含量口径
-                Math.abs(diffQ),             // 回滚基数 = 份数
+                Math.abs(diffQ),             // 回滚基数 = 件数
                 diffQ < 0,
-                (s.unit || '份')             // specText 单位（片，而不是「包」）
+                (s.unit || '件')             // specText 单位（片，而不是「包」）
               ));
             }
             touched = true;
@@ -8445,7 +8394,7 @@ function saveStockAudit(itemId) {
             var pqS = specPackQty(s), cS = specContentOf(s);
             auditFlows.push(makeAuditRecord(
               anchorA, nowA, v, (s.name || ('规格' + (si + 1))),
-              sDiff * pqS,                    // qty = 份数（包数 × 每包含量）
+              sDiff * pqS,                    // qty = 件数（包数 × 每包含量）
               Math.abs(sDiff) * pqS * cS,     // 含量（与开封记录 contentUsed 同口径）
               Math.abs(sDiff),                // 包数（精确回滚用）
               sDiff < 0
@@ -8799,7 +8748,7 @@ function findVariantByName(item, brandName) {
   });
   return hit;
 }
-function planSubSpec(p) { // 每套（一份套餐）的总含量
+function planSubSpec(p) { // 每套（一件套餐）的总含量
   var subs = planSubList(p);
   if (!subs.length) return 0;
   var per = 0;
@@ -8853,7 +8802,7 @@ function parseUnitContent(unit) {
   if (/^[0-9]*$/.test(name)) name = '';
   return { v: v, u: u, name: name };
 }
-// 方案总含量：总份数 × 每份含量（单位文本可解析时），如 3套×4包×1kg = 12kg
+// 方案总含量：总件数 × 每件含量（单位文本可解析时），如 3套×4包×1kg = 12kg
 function planTotalContent(p) {
   var d = planDerived(p);
   var c = parseUnitContent(p.unit);
@@ -8908,8 +8857,8 @@ function planWeightStr(p) {
   if (d.multi) { var mt = planSpecText(p); return mt ? ('📦 ' + mt) : ''; }
   if (!(d.totalSpec > 0)) return '';
   var tc = planTotalContent(p);
-  if (tc) return '📦 ≈' + trimNum(tc.total) + tc.u; // 真总重量（套×每套含×每份含量）
-  return '📦 共 ' + trimNum(d.totalSpec) + (p.unit ? ' ' + p.unit : ' 份');
+  if (tc) return '📦 ≈' + trimNum(tc.total) + tc.u; // 真总重量（套×每套含×每件含量）
+  return '📦 共 ' + trimNum(d.totalSpec) + (p.unit ? ' ' + p.unit : ' 件');
 }
 function taskWeightStr(t) {
   var inProgress = (t.status === '进行中' || t.status === '凯旋');
@@ -8919,7 +8868,7 @@ function taskWeightStr(t) {
     var tc = planTotalContent(p);
     if (tc) { arr.push({ v: tc.total, s: tc.u }); return; }
     var d = planDerived(p);
-    if (d.totalSpec > 0) arr.push({ v: d.totalSpec, s: p.unit ? ' ' + p.unit : ' 份' });
+    if (d.totalSpec > 0) arr.push({ v: d.totalSpec, s: p.unit ? ' ' + p.unit : ' 件' });
   });
   if (arr.length === 0) return '';
   var suffixes = {};
@@ -9401,7 +9350,7 @@ function doWinSettle(ws) {
           id: genId(), name: r.name, kind: r.kind,
           packCount: cnt,                       // 单套内该规格件数
           packQty: sp,                          // 每件容量
-          content: 1,                           // 每份规格（默认 1）
+          content: 1,                           // 每件规格（默认 1）
           unit: r.unit || '',
           qty: Math.round(cnt * sp * 100) / 100,
           openPacks: 0
@@ -9415,7 +9364,7 @@ function doWinSettle(ws) {
     if (firstUnit) v.packWeightUnit = firstUnit;
     var perSetPieces = variantSpecPerSetPieces(v);
     if (perSetPieces > 0) v.packQty = perSetPieces;
-    // 库存 = Σ 剩余包数 × 每包含量 × 每份规格（自动含本次新增）
+    // 库存 = Σ 剩余包数 × 每包含量 × 每件规格（自动含本次新增）
     v.stock = variantSpecStockCalc(v);
     if (v.stock > 0) { v.usedUp = false; v.finishDate = null; }
     delete v.noRestock;   // 又买回来了 → 恢复计入补货提醒
@@ -9859,11 +9808,11 @@ function taskPlanRows() {
     html += '<div class="task-calc-label" onclick="taskToggleCalc(' + i + ')">' + taskCalcLabel(p) + '</div>';
     html += '<div id="task-calc-' + i + '" style="display:' + (p._calcOpen ? 'block' : 'none') + '">';
     html += '<div class="form-row" style="margin-bottom:8px">';
-    html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="number" class="form-input" placeholder="套餐价/份" value="' + (p.comboPrice || '') + '" onchange="taskFormPlanCalc(' + i + ',\'comboPrice\',parseFloat(this.value)||0)"></div>';
-    html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="number" class="form-input" placeholder="数量(份)" value="' + (p.qty || '') + '" onchange="taskFormPlanCalc(' + i + ',\'qty\',parseFloat(this.value)||0)"></div>';
+    html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="number" class="form-input" placeholder="套餐价/件" value="' + (p.comboPrice || '') + '" onchange="taskFormPlanCalc(' + i + ',\'comboPrice\',parseFloat(this.value)||0)"></div>';
+    html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="number" class="form-input" placeholder="数量(件)" value="' + (p.qty || '') + '" onchange="taskFormPlanCalc(' + i + ',\'qty\',parseFloat(this.value)||0)"></div>';
     html += '</div>';
     html += '<div class="form-row" style="margin-bottom:8px">';
-    html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="number" class="form-input" placeholder="每份规格" value="' + (p.spec || '') + '" onchange="taskFormPlanCalc(' + i + ',\'spec\',parseFloat(this.value)||0)"></div>';
+    html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="number" class="form-input" placeholder="每件规格" value="' + (p.spec || '') + '" onchange="taskFormPlanCalc(' + i + ',\'spec\',parseFloat(this.value)||0)"></div>';
     html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="text" class="form-input" placeholder="单位(kg/ml)" value="' + escTask(p.unit || '') + '" onchange="taskFormPlanCalc(' + i + ',\'unit\',this.value)"></div>';
     html += '</div>';
     // v1.7 规格明细：一套套餐里装了什么（正装 / 替换装 / 赠品各自一行）——凯旋时逐行核对
@@ -9948,17 +9897,17 @@ function taskCalcOutHtml(p) {
   if (d.multi) {
     var mu = planMultiUnit(p);
     var per = '每套 ' + planSpecText(p);
-    var all = trimNum(d.qty) + ' 套共 ' + trimNum(d.totalSpec) + (mu ? ' ' + escTask(mu) : ' 份');
-    return '📦 ' + per + ' · ' + all + (d.unitPrice > 0 ? ' · ⚖️ 折算 ≈' + fmtMoney(d.unitPrice) + (mu ? '/' + escTask(mu) : '/份') : '');
+    var all = trimNum(d.qty) + ' 套共 ' + trimNum(d.totalSpec) + (mu ? ' ' + escTask(mu) : ' 件');
+    return '📦 ' + per + ' · ' + all + (d.unitPrice > 0 ? ' · ⚖️ 折算 ≈' + fmtMoney(d.unitPrice) + (mu ? '/' + escTask(mu) : '/件') : '');
   }
   if (!(d.spec > 0)) return '';
   var u = p.unit || '';
-  var deriveTxt = trimNum(d.qty) + ' 套 × ' + trimNum(d.spec) + (u ? ' × ' + escTask(u) + '/套' : ' 份/套');
+  var deriveTxt = trimNum(d.qty) + ' 套 × ' + trimNum(d.spec) + (u ? ' × ' + escTask(u) + '/套' : ' 件/套');
   var tc = planTotalContent(p);
   if (tc) {
     return '📦 总重 ≈' + trimNum(tc.total) + tc.u + '（' + deriveTxt + '） · ⚖️ 折算 ≈' + fmtMoney((+p.amount || 0) / tc.total) + '/' + tc.u;
   }
-  return '📦 共 ' + trimNum(d.totalSpec) + (u ? ' ' + escTask(u) : ' 份') + '（' + deriveTxt + '） · ⚖️ 折算 ≈' + fmtMoney(d.unitPrice) + (u ? '/' + escTask(u) : '/份');
+  return '📦 共 ' + trimNum(d.totalSpec) + (u ? ' ' + escTask(u) : ' 件') + '（' + deriveTxt + '） · ⚖️ 折算 ≈' + fmtMoney(d.unitPrice) + (u ? '/' + escTask(u) : '/件');
 }
 function taskFormPlanCalc(i, field, val) {
   var p = taskState.formPlans[i]; if (!p) return;
@@ -10280,8 +10229,8 @@ function reportCardOf(it, zone) {
     perYear: noData ? null : st.perYearRaw,
     perYearQty: noData ? null : st.perYearQty,
     restNow: st ? st.restNow : 0,
-    yearText: dualUnitText(st ? st.perYearRaw : 0, it),      // 「22.7包（约113.6kg）」
-    restText: restTextOf(it),                                // 当前剩余（件数为主，容量类并列容量）
+    yearText: capText(st ? st.perYearRaw : 0, it),           // 「936.5ml」—— 年消耗容量
+    restText: restTextOf(it),                                // 当前剩余容量（如「2420ml」）
     monthsLeft: st ? st.monthsLeft : null,
     unitPriceText: upText,
     adviceText: adv ? String(adv.main || '').replace(/<[^>]+>/g, '') : '',
