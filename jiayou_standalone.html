@@ -136,7 +136,7 @@ body {
 /* 【第 25 轮】年报顶部四大类 + 已归档：一行四列，只做入口不显示数字 */
 .report-cat-grid {
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
-  padding: 0 16px 12px;
+  padding: 10px 0 0;
 }
 .report-cat-cell {
   background: var(--bg); border-radius: 10px; padding: 10px 4px;
@@ -148,6 +148,14 @@ body {
   font-size: 12px; font-weight: 600; color: var(--text-primary);
   display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* 【第 32 轮】搜索框 + 大类标签整体吸顶：切任何分类，搜索框都还悬在最上面 */
+.report-sticky {
+  position: sticky; z-index: 90;
+  margin: 0 -16px; padding: 8px 16px 10px;
+  background: var(--bg);
+  box-shadow: 0 8px 12px -10px rgba(0,0,0,0.28);
+}
+.report-cat-cell.open .report-cat-txt { color: var(--accent); }
 .act-mini {
   display: flex; flex-direction: row; align-items: center; justify-content: center;
   gap: 4px; padding: 8px 2px; font-size: 15px; line-height: 1;
@@ -254,21 +262,6 @@ body {
 }
 .report-hero-title { font-size: 19px; font-weight: 700; color: #00695C; }
 .report-hero-sub { font-size: 12px; color: #00695C; opacity: .8; margin-top: 4px; line-height: 1.5; }
-.report-hero-grid {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 14px;
-}
-.report-stat {
-  background: rgba(255,255,255,0.62); border-radius: 10px;
-  padding: 10px 4px; text-align: center;
-}
-.report-stat-num { font-size: 20px; font-weight: 700; color: #00695C; line-height: 1.1; }
-.report-stat-num.report-stat-warn { color: var(--orange); }
-.report-stat-label { font-size: 10px; color: #00695C; opacity: .75; margin-top: 3px; }
-.report-hero-spend {
-  margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(0,105,92,0.15);
-  font-size: 13px; color: #00695C;
-}
-.report-hero-spend strong { font-size: 16px; }
 
 .report-group {
   margin-bottom: 18px; background: var(--card);
@@ -2099,6 +2092,9 @@ function showPage(page) {
   document.querySelectorAll('.tabbar-item').forEach(function(t) {
     t.classList.toggle('active', t.dataset.tab === page);
   });
+
+  // 【第 32 轮】每次进年报都自动落到第一个有产品的大类（不再面对一排空壳折叠面板）
+  if (page === 'report') reportResetFold();
 
   // 第 15 轮：页面渲染防御 —— 任何渲染崩溃都显示错误卡片，绝不留空白页
   var renderers = { home: renderHome, zone: renderZone, pool: renderTasks, settings: renderSettings, report: renderReport };
@@ -5312,7 +5308,7 @@ function manualRefresh() {
 
 // ========== 自动更新检查 ==========
 // deploy.py 部署时会把 1791388211 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791514271';
+var APP_VERSION = '1791516087';
 
 function checkAppUpdate(manual) {
   try {
@@ -10154,19 +10150,63 @@ function taskFormSave(id) {
 }
 function taskEdit(id) { taskOpenForm(id); }
 
-// ========== 【第 24 轮】年报：大类折叠 + 跨年搜索 ==========
-// 结构：第一层是「大类」（跨领地合并的折叠面板），默认全折叠；
-//       展开后按年消耗降序；卡片只有四要素 —— 名称 / 年耗 / 单位容量单价 / 建议囤。
-//       无闭环 → 右上角灰色「📭 缺数据」；已归档 → 「📦 已归档」并排到末尾。
-//       顶部全局跨年搜索：多年数据加权平均（Σ消耗 ÷ Σ月份数 × 12）。
-var reportFoldState = {};     // 大类折叠：仅 false = 展开，true/缺省 = 折叠（默认全折叠）
+// ========== 【第 24 轮】年报：大类切换 + 跨年搜索 ==========
+// 【第 32 轮】交互重写：
+//   · 顶部大类标签 = 唯一切换器（单选）。点谁，下面立刻换成谁的产品列表，一次只显示一个大类。
+//   · 进入年报默认自动展开「第一个有产品的大类」，绝不再面对一排需要点的空壳折叠面板。
+//   · 大类标题右侧保留 ▼，可手动折叠 / 展开（只影响当前大类）。
+//   · 搜索框和大类标签一起吸顶，滚到哪儿都能搜全局数据。
+//   列表按年消耗降序；卡片只有四要素 —— 名称 / 年耗 / 单位容量单价 / 建议囤。
+//   无闭环 → 右上角灰色「📭 缺数据」；已归档 → 「📦 已归档」并排到末尾。
+var reportOpenCat = null;     // 当前展开的大类 key（单选：同一时刻只展开一个；null = 全部收起）
+var reportCatSet = false;     // 用户是否手动切过（true 之后不再自动替他选，尊重用户）
+var reportScrollPending = false;  // 切完大类要不要把列表滚到眼前
 var reportCrossQuery = '';    // 顶部跨年搜索词
 
-// 折叠状态只有两个值：false = 展开，true/缺省 = 折叠。点一下在两者之间切换。
-// （旧写法 !(x === false) 恒为 true，点了永远翻不到「展开」——年报大类点不开的根因）
-function reportToggle(key) { reportFoldState[key] = (reportFoldState[key] === false) ? true : false; renderReport(); }
+// 当前该展开哪个大类：用户选的优先 → 否则自动选第一个「有产品」的大类 → 都没有就选第一个
+function reportOpenKeyOf(cats) {
+  var i;
+  if (reportOpenCat) {
+    for (i = 0; i < cats.length; i++) { if (cats[i].key === reportOpenCat) return reportOpenCat; }
+  }
+  if (reportCatSet) return null;                       // 用户手动收起了 → 别再自作主张展开
+  for (i = 0; i < cats.length; i++) { if (cats[i].rows.length > 0) return cats[i].key; }
+  return cats.length ? cats[0].key : null;
+}
+// 顶部标签：唯一切换器 —— 点谁就切到谁（永远是展开态，不会点到「全收起」）
+function reportSelectCat(key) {
+  reportOpenCat = String(key || '');
+  reportCatSet = true;
+  reportScrollPending = true;
+  renderReport();
+}
+// 标题右侧 ▼：手动折叠 / 展开（只对当前大类生效）
+function reportToggle(key) {
+  var k = String(key || '');
+  reportOpenCat = (reportOpenCat === k) ? null : k;
+  reportCatSet = true;
+  renderReport();
+}
+// 每次进入年报：回到「自动展开第一个有产品的大类」的默认状态
+function reportResetFold() { reportOpenCat = null; reportCatSet = false; reportScrollPending = false; }
 function reportOnCrossSearch(v) { reportCrossQuery = String(v || ''); renderReport(); }
 function reportClearCrossSearch() { reportCrossQuery = ''; renderReport(); }
+// 写入年报内容：整块重绘会把搜索框一起换掉，这里把焦点和光标位置还回去
+function reportSetHTML(html) {
+  var ae = document.activeElement;
+  var keep = !!(ae && ae.id === 'report-cross-search');
+  var caret = 0;
+  if (keep) {
+    try { caret = (ae.selectionStart === null || ae.selectionStart === undefined) ? String(ae.value || '').length : ae.selectionStart; } catch (e) { caret = 0; }
+  }
+  document.getElementById('report-content').innerHTML = html;
+  if (keep) {
+    var el = document.getElementById('report-cross-search');
+    if (el) {
+      try { el.focus(); el.setSelectionRange(caret, caret); } catch (e2) {}
+    }
+  }
+}
 
 // 【第 25 轮】年报只认补给品下的四大类，绝不再把「日用清洁·日用」「馋逼佬·宠物王国」
 // 这种二级分类单独拆成一个面板 —— 一律并到它的一级大类底下，展开后直接列产品。
@@ -10346,15 +10386,45 @@ function renderReportRow(e) {
 function renderReport() {
   var q = String(reportCrossQuery || '').trim();
   var html = '';
+  // 吸顶条要贴在导航栏正下方（导航栏本身也是 sticky，top:0 会被它压住）
+  var navEl = document.getElementById('nav-report');
+  var navH = navEl ? (navEl.offsetHeight || 0) : 0;
 
-  // ===== 顶部：概览 + 跨年搜索 =====
+  // ===== 顶部：概览 =====
   html += '<div class="report-hero">';
   html += '<div class="report-hero-title">📊 ' + new Date().getFullYear() + ' 年报</div>';
-  html += '<div class="report-hero-sub">按大类折叠 · 展开后按年消耗降序 · 只回答「用得多快 / 该囤多少」</div>';
-  html += '<div style="margin-top:12px;display:flex;gap:8px;align-items:center">';
+  html += '<div class="report-hero-sub">点上面的大类标签直接切换 · 列表按年消耗降序 · 只回答「用得多快 / 该囤多少」</div>';
+  html += '</div>';
+
+  // ===== 吸顶：跨年搜索框（永远在最上方）+ 大类标签（唯一切换器）=====
+  html += '<div class="report-sticky" id="report-sticky-bar" style="top:' + navH + 'px">';
+  html += '<div style="display:flex;gap:8px;align-items:center">';
   html += '<input id="report-cross-search" class="form-input" style="flex:1;margin:0" placeholder="🔍 跨年搜索：如 洗发水（多年加权平均）" value="' + escapeHtml(q) + '" oninput="reportOnCrossSearch(this.value)">';
   if (q) html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0" onclick="reportClearCrossSearch()">清空</button>';
   html += '</div>';
+
+  var r = null, openKey = null;
+  if (!q) {
+    // ===== 大类标签：唯一切换器（单选，点谁下面就是谁）=====
+    r = buildCategoryReport();
+    openKey = reportOpenKeyOf(r.cats);
+    if (r.empty) {
+      html += '</div>';
+      html += '<div class="empty-state"><div class="empty-icon">📊</div>';
+      html += '<div class="empty-text">' + escapeHtml(r.emptyReason || '还没有可统计的数据') + '</div></div>';
+      html += '<div style="padding:0 20px"><button class="btn btn-outline btn-full" onclick="showPage(\'home\')">回到总览</button></div>';
+      reportSetHTML(html);
+      return;
+    }
+    // 【第 25 轮】一行四列：四大类 + 已归档。只做入口，不带任何数字统计。
+    html += '<div class="report-cat-grid">';
+    r.cats.forEach(function (c) {
+      var open = (c.key === openKey);
+      html += '<div class="report-cat-cell' + (open ? ' open' : '') + '" onclick="reportSelectCat(\'' + escapeHtml(c.key) + '\')">'
+        + '<span class="report-cat-txt">' + escapeHtml(c.title) + '</span></div>';
+    });
+    html += '</div>';
+  }
   html += '</div>';
 
   // ===== 跨年搜索结果 =====
@@ -10365,7 +10435,7 @@ function renderReport() {
       html += '<div class="empty-state"><div class="empty-icon">🔍</div>';
       html += '<div class="empty-text">' + NO_MATCH_TEXT + '</div>';
       html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:6px">换个关键词试试（支持名称 / 品牌 / 分类 / 备注 / 规格）</div></div>';
-      document.getElementById('report-content').innerHTML = html;
+      reportSetHTML(html);
       return;
     }
     html += '<div class="report-group"><div class="report-group-head">';
@@ -10402,55 +10472,48 @@ function renderReport() {
     html += '</div></div>';
     html += '<div class="report-foot"><div>数据来自你的使用记录与库存，完全本地计算，不上传。</div>';
     html += '<button class="btn btn-outline btn-full" style="margin-top:12px" onclick="showPage(\'home\')">回到总览</button></div>';
-    document.getElementById('report-content').innerHTML = html;
+    reportSetHTML(html);
     return;
   }
 
-  // ===== 大类折叠 =====
-  var r = buildCategoryReport();
-  if (r.empty) {
-    html += '<div class="empty-state"><div class="empty-icon">📊</div>';
-    html += '<div class="empty-text">' + escapeHtml(r.emptyReason || '还没有可统计的数据') + '</div></div>';
-    html += '<div style="padding:0 20px"><button class="btn btn-outline btn-full" onclick="showPage(\'home\')">回到总览</button></div>';
-    document.getElementById('report-content').innerHTML = html;
-    return;
-  }
-
-  // 【第 25 轮】顶部一行四列：四大类 + 已归档。只做入口，不带任何数字统计。
-  html += '<div class="report-cat-grid">';
-  r.cats.forEach(function (c) {
-    var open = reportFoldState[c.key] === false;
-    html += '<div class="report-cat-cell' + (open ? ' open' : '') + '" onclick="reportToggle(\'' + escapeHtml(c.key) + '\')">'
-      + '<span class="report-cat-txt">' + escapeHtml(c.title) + '</span></div>';
-  });
-  html += '</div>';
-
-  r.cats.forEach(function (c) {
-    var folded = reportFoldState[c.key] !== false;   // 默认全折叠
-    html += '<div class="report-group">';
-    html += '<div class="report-group-head" onclick="reportToggle(\'' + escapeHtml(c.key) + '\')">';
-    html += '<span class="report-group-icon">' + (c.archived ? '📦' : '🗂️') + '</span>';
-    html += '<span class="report-group-title">' + escapeHtml(c.title) + '</span>';
-    html += '<span class="report-group-arrow' + (folded ? ' folded' : '') + '">⌄</span>';
+  // ===== 当前大类：直接把产品列出来（默认第一个有产品的大类）=====
+  var cur = null;
+  r.cats.forEach(function (c) { if (c.key === openKey) cur = c; });
+  if (cur) {
+    html += '<div class="report-group" id="report-cat-panel">';
+    html += '<div class="report-group-head" onclick="reportToggle(\'' + escapeHtml(cur.key) + '\')">';
+    html += '<span class="report-group-icon">' + (cur.archived ? '📦' : '🗂️') + '</span>';
+    html += '<span class="report-group-title">' + escapeHtml(cur.title) + '</span>';
+    html += '<span class="report-group-count">' + cur.rows.length + '</span>';
+    html += '<span class="report-group-arrow">⌄</span>';
     html += '</div>';
-    html += '<div class="report-group-hint">展开后直接列产品 · 按年耗降序</div>';
-    if (!folded) {
-      html += '<div class="report-group-body">';
-      if (!c.rows.length) {
-        html += '<div style="font-size:12px;color:var(--text-tertiary);padding:10px 2px">这个大类下还没有产品</div>';
-      }
-      c.rows.forEach(function (e) { html += renderReportRow(e); });
-      html += '</div>';
+    html += '<div class="report-group-body">';
+    if (!cur.rows.length) {
+      html += '<div style="font-size:12px;color:var(--text-tertiary);padding:10px 2px">这个大类下还没有产品</div>';
     }
-    html += '</div>';
-  });
+    cur.rows.forEach(function (e) { html += renderReportRow(e); });
+    html += '</div></div>';
+  } else {
+    html += '<div style="padding:28px 16px;text-align:center;font-size:12px;color:var(--text-tertiary)">点上面的大类，就能看到它的产品列表</div>';
+  }
 
   html += '<div class="report-foot">';
   html += '<div>数据来自你的使用记录与库存，完全本地计算，不上传。</div>';
   html += '<button class="btn btn-outline btn-full" style="margin-top:12px" onclick="showPage(\'home\')">回到总览</button>';
   html += '</div>';
 
-  document.getElementById('report-content').innerHTML = html;
+  reportSetHTML(html);
+
+  // 切了大类后，把列表滚到眼前（别停在上一类的滚动位置）
+  if (reportScrollPending) {
+    reportScrollPending = false;
+    var panel = document.getElementById('report-cat-panel');
+    var bar = document.getElementById('report-sticky-bar');
+    if (panel) {
+      var y = panel.getBoundingClientRect().top + (window.scrollY || 0) - ((bar ? bar.offsetHeight : 0) + navH + 12);
+      try { window.scrollTo(0, y > 0 ? y : 0); } catch (e) {}
+    }
+  }
 }
 
 function renderSettings() {
