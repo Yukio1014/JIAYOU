@@ -2716,14 +2716,19 @@ function validPeriodRecords(item) {
   return (item && item.usageRecords ? item.usageRecords : []).filter(function (r) {
     if (!r) return false;
     if (r.instant) return false;
-    if (r.type === 'surplus') return false;
+    if (r.type === 'surplus') return false;                 // 盘盈绝不进速率
+    if (r.isAudit && !isValidAuditLoss(r)) return false;    // 盘亏：单日跨度只扣库存
     return r.startDate && r.endDate && !isZeroDayRecord(r);
   });
 }
-// 即时型（打卡）闭环记录：每次打卡本身即一次完整消耗
+// 即时型（打卡）闭环记录：每次打卡本身即一次完整消耗；
+// 【第 30 轮】盘亏（跨度>1天）同样是一次完整消耗闭环，必须进速率 —— 旧版在此处
+// 把盘点全部跳过，导致即时型物品盘点后永远「📭 缺数据」，已废除该拦截。
 function closedInstantRecords(item) {
   return (item && item.usageRecords ? item.usageRecords : []).filter(function (r) {
-    return !!(r && r.instant && r.startDate);
+    if (!r) return false;
+    if (r.instant) return !!r.startDate;   // 打卡
+    return isValidAuditLoss(r);            // 盘亏（跨度>1天）；盘盈无日期自动排除
   });
 }
 // 闭环总跨度（天）= 所有闭环记录时间区间的【并集】覆盖天数。
@@ -3051,14 +3056,19 @@ function statsOf(item) {
 
   if (model === 'instant') {
     // 即时型：每次打卡 = 一次完整消耗。月份数 = 跨度 ÷ 31（下限 1）；年 = (总耗 ÷ 月份数) × 12
+    // 【第 30 轮】盘亏记录是区间消耗（开始→结束可能差几个月），跨度必须取记录区间的两端，
+    // 绝不能只看 startDate —— 否则同日开始的盘亏跨度算成 0，年耗变成 总耗×12 的荒谬数字。
     var recs = closedInstantRecords(item);
     var totalQ = 0, firstD = null, lastD = null;
     recs.forEach(function (r) {
       totalQ += recordPacks(item, r);
-      var d = new Date(r.startDate || r.endDate);
-      if (isNaN(d.getTime())) return;
-      if (!firstD || d < firstD) firstD = d;
-      if (!lastD || d > lastD) lastD = d;
+      var ds = r.startDate ? new Date(r.startDate) : null;
+      var de = r.endDate ? new Date(r.endDate) : (r.date ? new Date(r.date) : ds);
+      [ds, de].forEach(function (d) {
+        if (!d || isNaN(d.getTime())) return;
+        if (!firstD || d < firstD) firstD = d;
+        if (!lastD || d > lastD) lastD = d;
+      });
     });
     var spanD = (firstD && lastD) ? Math.max(0, daysBetween(firstD, lastD)) : 0;
     var months = Math.max(1, spanD / R24_DAYS_PER_MONTH);
@@ -3819,6 +3829,19 @@ function reconcileItemState(item) {
 function isZeroDayRecord(r) {
   if (!r || !r.startDate || !r.endDate) return false;
   return daysBetween(new Date(r.startDate), new Date(r.endDate)) <= 0;
+}
+// ===== 【第 30 轮】盘点与速率的关联规则 =====
+//   盘亏（实际 < 系统）= 真实消耗闭环：消耗量 = 盘点差额，天数 = 结束 − 开始。
+//     跨度 >1 天 → 必须参与速率计算，绝不显示「缺数据」；
+//     单日跨度（≤1天）→ 只视为库存扣减，绝不进速率（防止 2个×372天=744个 的荒谬年耗）。
+//   盘盈（type==='surplus'，实际 > 系统）= 录入错误/翻出旧物，只用来修正库存数字，
+//     绝对不允许参与消耗速率的计算。
+function auditLossSpanDays(r) {
+  if (!r || !r.startDate || !r.endDate) return 0;
+  return daysBetween(new Date(r.startDate), new Date(r.endDate));
+}
+function isValidAuditLoss(r) {
+  return !!(r && r.isAudit && r.type !== 'surplus' && auditLossSpanDays(r) > 1);
 }
 // 清理无效记录（0 天 / 缺日期），返回清理条数
 function purgeInvalidRecords(item) {
@@ -5276,7 +5299,7 @@ function manualRefresh() {
 
 // ========== 自动更新检查 ==========
 // deploy.py 部署时会把 1791388211 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791511219';
+var APP_VERSION = '1791512978';
 
 function checkAppUpdate(manual) {
   try {
@@ -5934,7 +5957,9 @@ function instantUsedQty(item, variantId, year) {
   var y = year || new Date().getFullYear();
   return (item.usageRecords || [])
     .filter(function (r) {
-      if (!r.instant) return false;
+      if (!r) return false;
+      var isLoss = isValidAuditLoss(r);            // 盘亏 = 真实消耗，计入今年已用
+      if (!r.instant && !isLoss) return false;
       if (variantId && r.variantId !== variantId) return false;
       var d = new Date(r.endDate || r.startDate);
       return d.getFullYear() === y;
@@ -7525,6 +7550,7 @@ function buildYearStats(year) {
       var brandMap = {};
       // 消耗量：使用记录落在这一年的
       (it.usageRecords || []).forEach(function(r) {
+        if (!r || r.type === 'surplus') return;    // 盘盈只修库存，绝不进年报消耗
         var d = r.endDate || r.startDate || r.date;
         if (!d) return;
         if (new Date(d).getFullYear() !== year) return;
@@ -10108,10 +10134,12 @@ function taskEdit(id) { taskOpenForm(id); }
 //       展开后按年消耗降序；卡片只有四要素 —— 名称 / 年耗 / 单位容量单价 / 建议囤。
 //       无闭环 → 右上角灰色「📭 缺数据」；已归档 → 「📦 已归档」并排到末尾。
 //       顶部全局跨年搜索：多年数据加权平均（Σ消耗 ÷ Σ月份数 × 12）。
-var reportFoldState = {};     // 大类折叠：{ catKey: true }；默认全折叠
+var reportFoldState = {};     // 大类折叠：仅 false = 展开，true/缺省 = 折叠（默认全折叠）
 var reportCrossQuery = '';    // 顶部跨年搜索词
 
-function reportToggle(key) { reportFoldState[key] = !(reportFoldState[key] === false); renderReport(); }
+// 折叠状态只有两个值：false = 展开，true/缺省 = 折叠。点一下在两者之间切换。
+// （旧写法 !(x === false) 恒为 true，点了永远翻不到「展开」——年报大类点不开的根因）
+function reportToggle(key) { reportFoldState[key] = (reportFoldState[key] === false) ? true : false; renderReport(); }
 function reportOnCrossSearch(v) { reportCrossQuery = String(v || ''); renderReport(); }
 function reportClearCrossSearch() { reportCrossQuery = ''; renderReport(); }
 
