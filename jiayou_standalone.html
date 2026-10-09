@@ -1265,6 +1265,8 @@ function mergeDB(defaults, loaded) {
   migrateSpecTwoLayer(result);
   // 双乘修复：旧明细 content 残留 × 后填的每包含量 = 库存被乘两次（202粒→10708粒 的元凶）
   migrateSpecDoubleContent(result);
+  // 即时型维度归一：消耗只能记 usedQty，openPacks 折算过来
+  migrateInstantOpenPacks(result);
   // 历史脏数据：表单内连续添加方案曾共用同一个 id，导致点任一方案只切换第一个 → 全局去重
   migrateTaskPlanIds(result);
   // 状态对账（关键）：从使用记录重新推导每个品牌的开封/用完状态，
@@ -1523,9 +1525,13 @@ function specUsedQty(s) {
   return (isFinite(n) && n > 0) ? n : 0;
 }
 // 该规格剩余「件数」（片/粒类 = 片数；含量单位 = 包数）
+// 【第 34 轮】唯一公式：剩余件数 = 累计购入件数 − 累计消耗件数（usedQty）。
+//   累计购入件数 = 套餐数 × 单套包数 ×（含量单位 ? 1 包 : 每包含量）
+// 旧代码在含量单位分支里直接返回「剩余包数」，把 usedQty 的扣减整个吞掉 —— 即时型
+// 消耗一多就出现「60 买了 9 包却显示剩 12」这类荒谬数字。两个分支一律减 usedQty。
 function specRemainPieces(v, s) {
   if (isContentUnitText(s && s.unit)) {
-    return Math.max(0, Math.round(specPacksRemaining(v, s) * 100) / 100);
+    return Math.max(0, Math.round((specPacksRemaining(v, s) - specUsedQty(s)) * 100) / 100);
   }
   var total = specPacksRemaining(v, s) * specPackQty(s);
   return Math.max(0, Math.round((total - specUsedQty(s)) * 100) / 100);
@@ -1666,6 +1672,15 @@ function instantTotalStock(item) {
 //   ② 规格单位含 g/kg/ml/L → 1 件 = 1 包，日常只按「包」扣减显示（热泡茶 → 1包），
 //      容量仅作为年度汇总/采购建议的后台基数，绝不出现在日常扣减 UI 上；
 //   ③ 计数单位不一致（片+粒混填）→ 统一叫「件」；无任何单位 → 「件」。
+// 有效库存：排除标记了「不再买」的品牌（它们不算进补货提醒）
+// 【第 34 轮】即时型变体库存 = Σ 各规格剩余件数（= 购入件数 − 消耗件数，一维加减）
+function variantInstantStock(v) {
+  var ss = variantSpecsOf(v);
+  if (!ss.length) return Math.round((parseFloat(v.stock) || 0) * 100) / 100;
+  var t = 0;
+  ss.forEach(function (s) { t += specRemainPieces(v, s); });
+  return Math.round(t * 100) / 100;
+}
 // 有效库存：排除标记了「不再买」的品牌（它们不算进补货提醒）
 function getActiveStock(item) {
   if (item.variants && item.variants.length > 0) {
@@ -1859,6 +1874,43 @@ function migrateSpecDoubleContent(target) {
   if (fixed && typeof DB !== 'undefined' && db === DB) {
     saveDB();
     console.log('[自愈] 双乘修复：折算 ' + fixed + ' 条「每包含量 × 每件规格」双重叠加的规格明细');
+  }
+  return fixed;
+}
+
+// 数据自愈⑥：即时型维度归一 —— 消耗只能记在 usedQty，openPacks 一律折算过来
+// 背景：即时型本来没有「开封」概念，但旧版本（含盘点/打卡）把消耗写进了 specs.openPacks，
+// 而 openPacks 参与的是周期型公式「套餐数 × 单套包数 − 已开包数」。冷泡茶每规格只买 1 包，
+// 一次消耗就把整个规格清零（30 包用了 19 包却显示剩 2 包；热泡茶 60 包用了 9 包显示剩 12）。
+// 修法：instant 物品的 specs：usedQty += openPacks（件数口径，数值即真实消耗），openPacks 归 0。
+function migrateInstantOpenPacks(target) {
+  var db = target || DB;
+  if (!db || !db.zones) return 0;
+  var fixed = 0;
+  db.zones.forEach(function(zone) {
+    (zone.items || []).forEach(function(item) {
+      if (consumeModelOf(item) !== 'instant') return;
+      if (!item.variants || !item.variants.length) return;
+      var touched = false;
+      item.variants.forEach(function(v) {
+        (v.specs || []).forEach(function(s) {
+          var op = specOpenPacks(s);
+          if (op > 0) {
+            s.usedQty = Math.round((specUsedQty(s) + op) * 100) / 100;
+            s.openPacks = 0;
+            fixed++; touched = true;
+          }
+        });
+        // 即时型库存一律按「购入件数 − 消耗件数」同步（历史 v.stock 可能被旧口径写漂）
+        v.stock = variantInstantStock(v);
+        if (v.stock > 0 && v.usedUp) { v.usedUp = false; v.finishDate = null; }
+      });
+      if (touched) syncItemFromVariants(item);
+    });
+  });
+  if (fixed && typeof DB !== 'undefined' && db === DB) {
+    saveDB();
+    console.log('[自愈] 即时型维度归一：' + fixed + ' 条「已开包数」折算为「已消耗件数」');
   }
   return fixed;
 }
@@ -5259,6 +5311,7 @@ document.addEventListener('DOMContentLoaded', async function() {
   try { migrateSpecTwoLayer(); } catch (e) { console.error('migrateSpecTwoLayer失败', e); }
   try { migratePackUnit(); } catch (e) { console.error('migratePackUnit失败', e); }
   try { migrateSpecDoubleContent(); } catch (e) { console.error('migrateSpecDoubleContent失败', e); }
+  try { migrateInstantOpenPacks(); } catch (e) { console.error('migrateInstantOpenPacks失败', e); }
   try { migrateTaskParent(); } catch (e) { console.error('migrateTaskParent失败', e); }
   // 【第 22 轮】库存自愈：specs 是唯一真源，历史脏数据（如 stock=1000 vs 明细 100片）启动即修复
   try {
@@ -5348,7 +5401,7 @@ function manualRefresh() {
 
 // ========== 自动更新检查 ==========
 // deploy.py 部署时会把 1791388211 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791520067';
+var APP_VERSION = '1791557205';
 
 function checkAppUpdate(manual) {
   try {
@@ -6028,9 +6081,9 @@ function revertInstantRecord(item, v, rec) {
     });
   }
   if (s) {
-    if (isContentUnitText(s.unit)) s.openPacks = Math.max(0, Math.round((specOpenPacks(s) - back) * 100) / 100);
-    else s.usedQty = Math.max(0, Math.round((specUsedQty(s) - back) * 100) / 100);
-    v.stock = variantSpecContent(v);
+    // 【第 34 轮】即时型一维加减：撤销只退 usedQty（件数），openPacks 是周期型专用
+    s.usedQty = Math.max(0, Math.round((specUsedQty(s) - back) * 100) / 100);
+    v.stock = variantInstantStock(v);
   } else {
     v.stock = Math.round(((parseFloat(v.stock) || 0) + back) * 100) / 100;
   }
@@ -6148,7 +6201,9 @@ function openPunchSpecPick(itemId, variantId) {
 }
 
 // 【第 13 轮】规格级消耗执行：选中具体规格后才扣对应的 1 件库存
-//   片/粒类：spec.usedQty += 1（1 件 = 1 片）；含量单位：spec.openPacks += 1（1 件 = 1 包）
+// 【第 34 轮】即时型没有「开封」概念：点一次【消耗 1包】就是 usedQty += 1（件数）。
+//   spec.openPacks 是周期型「已开出的包数」，即时型永远不碰 —— 旧代码在这里写 openPacks，
+//   被「单套包数」上限（每规格只买 1 包）夹成 0，于是 30包用了19包却显示剩 2包。
 //   每次打卡独立落一条记录（带 specId/specName），撤销/删除时精确回退到该规格
 function punchInstantSpec(itemId, variantId, specIdx, silent) {
   var item = getItem(currentZoneId, itemId) || findItemByIdGlobal(itemId);
@@ -6163,12 +6218,8 @@ function punchInstantSpec(itemId, variantId, specIdx, silent) {
   var u = s.unit || v.packUnit || mainPackUnit(item) || '件';
   if (leftQ <= 0) { toast('「' + (s.name || '该规格') + '」已经用完了，换个规格或先补货'); return; }
   var nowISO = new Date().toISOString();
-  if (isContent) {
-    s.openPacks = Math.round((specOpenPacks(s) + 1) * 100) / 100;
-  } else {
-    s.usedQty = Math.round((specUsedQty(s) + 1) * 100) / 100;
-  }
-  v.stock = variantSpecContent(v); // 变体库存 = Σ 各规格剩余（含 usedQty 扣减）
+  s.usedQty = Math.round((specUsedQty(s) + 1) * 100) / 100;
+  v.stock = variantInstantStock(v); // 即时型：库存 = Σ 各规格（累计购入件数 − 累计消耗件数）
   if (v.stock <= 0) { v.usedUp = true; v.finishDate = nowISO; }
   if (!item.usageRecords) item.usageRecords = [];
   item.usageRecords.push({
@@ -7012,11 +7063,12 @@ function packHintOf(v, plain, item) {
   if (item && consumeModelOf(item) === 'instant') {
     var spI = variantSpecsOf(v);
     if (spI.length) {
-      var leftI = 0, openedI = 0;
-      spI.forEach(function (s) { leftI += specRemainPieces(v, s); openedI += specOpenPacks(s); });
+      var leftI = 0, usedI = 0;
+      // 【第 34 轮】即时型只认一维加减：已用 = Σ usedQty（含自愈折算进来的旧 openPacks）
+      spI.forEach(function (s) { leftI += specRemainPieces(v, s); usedI += specUsedQty(s); });
       var uI = instantCountUnit(item);
       var head = '🔢 还能再用 ' + trimNum(leftI) + uI;
-      if (openedI > 0) head += '（已开 ' + trimNum(openedI) + ' 包）';
+      if (usedI > 0) head += '（已用 ' + trimNum(usedI) + ' ' + uI + '）';
       return head;
     }
     return '🔢 还能再用 ' + trimNum(v.stock || 0) + instantCountUnit(item);
@@ -8381,11 +8433,8 @@ function saveStockAudit(itemId) {
             // 构成（单套内包数）与套餐数是购买记录，绝不覆盖
             var remainNowQ = specRemainPieces(v, s);
             var diffQ = Math.round((remainNowQ - n) * 100) / 100; // >0 盘亏件数；<0 盘盈件数
-            if (isContentUnitText(s.unit)) {
-              s.openPacks = Math.round(Math.max(0, specOpenPacks(s) + diffQ) * 100) / 100;
-            } else {
-              s.usedQty = Math.round(Math.max(0, specUsedQty(s) + diffQ) * 100) / 100;
-            }
+            // 【第 34 轮】即时型盘点：差额一律落到 usedQty（件数），绝不碰 openPacks
+            s.usedQty = Math.round(Math.max(0, specUsedQty(s) + diffQ) * 100) / 100;
             if (diffQ !== 0) {
               auditFlows.push(makeAuditRecord(
                 anchorA, nowA, v, (s.name || ('规格' + (si + 1))),
@@ -8420,7 +8469,7 @@ function saveStockAudit(itemId) {
         });
         if (allBad) { actual += v.stock || 0; return; }
         if (touched) {
-          v.stock = variantSpecContent(v);
+          v.stock = isInstS13 ? variantInstantStock(v) : variantSpecContent(v);
           // 套餐数是「购买记录」，盘点只校正剩余量，不覆盖
           if (!v.specsFolded) v.specsFolded = true;
           if (v.stock > 0) {
