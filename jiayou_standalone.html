@@ -1263,6 +1263,8 @@ function mergeDB(defaults, loaded) {
   // 关键：旧数据可能存着旧单层结构（只有 qty/content），合并时必须就地升级，
   // 不能依赖调用方事后再补跑 —— 否则 specPackQty 读不到会退回默认 1 造成口径错乱
   migrateSpecTwoLayer(result);
+  // 双乘修复：旧明细 content 残留 × 后填的每包含量 = 库存被乘两次（202粒→10708粒 的元凶）
+  migrateSpecDoubleContent(result);
   // 历史脏数据：表单内连续添加方案曾共用同一个 id，导致点任一方案只切换第一个 → 全局去重
   migrateTaskPlanIds(result);
   // 状态对账（关键）：从使用记录重新推导每个品牌的开封/用完状态，
@@ -1821,6 +1823,42 @@ function migratePackUnit(target) {
   if (fixed && typeof DB !== 'undefined' && db === DB) {
     saveDB();
     console.log('[自愈] 件数单位：清洗 ' + fixed + ' 个变体被误填成含量单位（ml/g/kg）的套餐内单位');
+  }
+  return fixed;
+}
+
+// 数据自愈⑤：消灭「每包含量 × 每件规格」双乘（202粒 被算成 10708粒 的元凶）
+// 背景：v1.6 前的旧明细是一层结构 { qty:3包, content:44粒/包 }，两层迁移后变成
+//   { packCount:3, packQty:1, content:44 }（数值不变）；用户随后在编辑表单把「每包含量」
+//   从 1 改成 44 → 变成 { packCount:3, packQty:44, content:44 } → 库存被乘两次：
+//   3×44×44 + 1×70×70 = 10708（真实只有 202）。编辑表单里根本没有「每件规格」输入框，
+//   content>1 全部来自旧数据残留 —— 一律折算回两层（包数 × 每包含量），绝不再乘第三层：
+//   ① packQty 留空/占位 1 → packQty=content、content=1（纯表示法归一，含量数值不变）
+//   ② packQty>1（用户已填真实每包含量）→ content=1（砍掉双乘，库存回到真实值）
+function migrateSpecDoubleContent(target) {
+  var db = target || DB;
+  if (!db || !db.zones) return 0;
+  var fixed = 0;
+  db.zones.forEach(function(zone) {
+    (zone.items || []).forEach(function(item) {
+      if (!item.variants || !item.variants.length) return;
+      var touched = false;
+      item.variants.forEach(function(v) {
+        (v.specs || []).forEach(function(s) {
+          var ct = parseFloat(s.content);
+          if (!isFinite(ct) || ct <= 1) return;            // content 空 / 1 → 无害，不动
+          var pq = parseFloat(s.packQty);
+          if (!isFinite(pq) || pq <= 1) s.packQty = ct;    // 占位 1 → 让 content 顶上当每包含量（数值不变）
+          s.content = 1;                                    // 第三层一律归 1，绝不再乘
+          fixed++; touched = true;
+        });
+      });
+      if (touched) syncItemFromVariants(item);
+    });
+  });
+  if (fixed && typeof DB !== 'undefined' && db === DB) {
+    saveDB();
+    console.log('[自愈] 双乘修复：折算 ' + fixed + ' 条「每包含量 × 每件规格」双重叠加的规格明细');
   }
   return fixed;
 }
@@ -4582,10 +4620,11 @@ function renderCardBack(item, zone) {
         // 【第 13 轮】折算单价并入价格行右侧小字：信息网格让位给「库存+容量并排 / 开封时间整行」
         html += '<span class="vc-price-note">' + variantPriceCompareText(v) + '</span>';
         html += '</div>';
-        // 信息网格（第 13 轮重排）：
-        //   第 1 行：当前库存 | 单包容量（并排同一行）
-        //   第 2 行：库存构成（整行）
-        //   第 3 行：开封时间（整行 wide）—— 占据原「单包容量」的行位，文字再长也不再折成两行
+        // 信息网格（第 33 轮重排）：全部整行铺满 —— 左边挤字、右边大片留白的问题根除
+        //   第 1 行：当前库存（整行 —— 剩余数字 + 未开包明细一行说完，绝不挤在半栏）
+        //   第 2 行：单包容量 / 均值单件（整行）
+        //   第 3 行：库存构成（整行）
+        //   第 4 行：开封时间（整行）
         var hasWeight = v.packWeight && v.packWeight > 0;
         var hasSpecs = variantSpecsOf(v).length > 0;
         var capCellHtml = '';
@@ -4594,14 +4633,14 @@ function renderCardBack(item, zone) {
           var avgP = variantAvgPiece(v);
           var u0v = variantSpecUnit(v);
           if (avgP > 0) {
-            capCellHtml = '<div class="vc-meta-item"><div class="vc-meta-label">' + (variantIsMixed(v) ? '均值单件' : '单件容量') + '</div><div class="vc-meta-value">' + trimNum(avgP) + ' ' + u0v + (variantIsMixed(v) ? '/件' : '') + '</div></div>';
+            capCellHtml = '<div class="vc-meta-item wide"><div class="vc-meta-label">' + (variantIsMixed(v) ? '均值单件' : '单件容量') + '</div><div class="vc-meta-value">' + trimNum(avgP) + ' ' + u0v + (variantIsMixed(v) ? '/件' : '') + '</div></div>';
           }
         } else if (hasWeight) {
           var wu = weightUnitOf(v);
-          capCellHtml = '<div class="vc-meta-item"><div class="vc-meta-label">单包容量</div><div class="vc-meta-value">' + round1(v.packWeight) + ' ' + wu + '</div></div>';
+          capCellHtml = '<div class="vc-meta-item wide"><div class="vc-meta-label">单包容量</div><div class="vc-meta-value">' + round1(v.packWeight) + ' ' + wu + '</div></div>';
         }
         html += '<div class="vc-meta">';
-        html += '<div class="vc-meta-item"><div class="vc-meta-label">当前库存</div><div class="vc-meta-value">' + variantPackText(v, item) + '</div></div>';
+        html += '<div class="vc-meta-item wide"><div class="vc-meta-label">当前库存</div><div class="vc-meta-value">' + variantPackText(v, item) + '</div></div>';
         if (capCellHtml) html += capCellHtml;
         html += '<div class="vc-meta-item wide"><div class="vc-meta-label">库存构成</div><div class="vc-meta-value">' + escapeHtml(packHintOf(v, true, item)) + '</div></div>';
         var vOpenDate = variantOpenDateOf(item, v); // 开封时间动态真源 = 使用记录
@@ -5219,6 +5258,7 @@ document.addEventListener('DOMContentLoaded', async function() {
   try { migrateSpecPacks(); } catch (e) { console.error('migrateSpecPacks失败', e); }
   try { migrateSpecTwoLayer(); } catch (e) { console.error('migrateSpecTwoLayer失败', e); }
   try { migratePackUnit(); } catch (e) { console.error('migratePackUnit失败', e); }
+  try { migrateSpecDoubleContent(); } catch (e) { console.error('migrateSpecDoubleContent失败', e); }
   try { migrateTaskParent(); } catch (e) { console.error('migrateTaskParent失败', e); }
   // 【第 22 轮】库存自愈：specs 是唯一真源，历史脏数据（如 stock=1000 vs 明细 100片）启动即修复
   try {
@@ -5308,7 +5348,7 @@ function manualRefresh() {
 
 // ========== 自动更新检查 ==========
 // deploy.py 部署时会把 1791388211 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791516087';
+var APP_VERSION = '1791520067';
 
 function checkAppUpdate(manual) {
   try {
@@ -6861,6 +6901,11 @@ function removeVariantSpec(i, k) {
 function setVariantSpec(i, k, field, val) {
   var v = (window._editVariants || [])[i]; if (!v || !v.specs || !v.specs[k]) return;
   v.specs[k][field] = val;
+  // 【第 33 轮】用户填「每包含量」→ 就是两层口径，立即清掉旧数据残留的「每件规格」（防双乘）
+  if (field === 'packQty' && parseFloat(val) > 0) {
+    var ctR = parseFloat(v.specs[k].content);
+    if (isFinite(ctR) && ctR > 1) v.specs[k].content = 1;
+  }
   renderVariantList();
 }
 function renderVariantList() {
@@ -7358,6 +7403,12 @@ function saveItem() {
         var spc_ = (s.packCount !== undefined && s.packCount !== null && s.packCount !== '') ? (parseFloat(s.packCount) || 0) : ((+s.qty || 0) > 0 ? +s.qty : 1);
         var spq_ = (s.packQty !== undefined && s.packQty !== null && s.packQty !== '') ? (parseFloat(s.packQty) || 0) : 1;
         var sct_ = (s.content !== undefined && s.content !== null && s.content !== '') ? (+s.content || 0) : 1;
+        // 【第 33 轮】双乘防御：content>1 只会来自旧一层结构的残留（当时 content 就是每包含量）。
+        // 表单里没有「每件规格」输入框 —— packQty>1 时再乘 content 就是 202粒→10708粒 的元凶。
+        if (sct_ > 1) {
+          if (!(spq_ > 1)) spq_ = sct_;   // 占位 1 → content 顶上当每包含量（数值不变）
+          sct_ = 1;                        // 一律两层口径：包数 × 每包含量，绝不再乘第三层
+        }
         // 【第 13 轮】即时消耗型的规格级已消耗件数必须随表单带回，编辑保存不得清零
         return { name: (s.name || '').trim(), packCount: spc_, packQty: spq_, content: sct_, unit: (s.unit || '').trim(), qty: Math.round(spc_ * spq_ * 100) / 100, openPacks: specOpenPacks(s), usedQty: specUsedQty(s) };
       }).filter(function (s) { return +s.packCount > 0; });
