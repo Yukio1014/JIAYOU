@@ -1626,9 +1626,10 @@ function stockSummaryOf(item) {
     var totalC = round1(comboSpecPieces);
     var head = totalC + cuMain;
     // 均值折算份数：优先取本物品首个有明细变体的均值
+    // 【第 27 轮】容量口径（ml/g）不再折算「约 N 份」—— 那是画蛇添足的二次换算
     var avgS = 0;
     vs.forEach(function (v) { if (!avgS && variantSpecsOf(v).length) { var a = variantAvgPiece(v); if (a > 0) avgS = a; } });
-    if (avgS > 0 && totalC > 0) head += '（约 ' + round1(totalC / avgS) + ' 份）';
+    if (avgS > 0 && totalC > 0 && !isContentUnitText(cuMain)) head += '（约 ' + round1(totalC / avgS) + ' 份）';
     if (comboSetsBought > 0) head += ' · 原 ' + trimNum(comboSetsBought) + ' 套';
     return head;
   }
@@ -2569,7 +2570,9 @@ function getItemStatus(item) {
     shelfPercent: 100, daysLeft: null, estDaysLeft: null, monthsLeft: null
   };
 
-  var totalStock = (consumeModelOf(item) === 'instant') ? instantTotalStock(item) : getActiveStock(item);   // 【第 19 轮】即时型按"份"计数
+  // 【第 27 轮】库存判断一律用统一口径剩余（容量口径物品=剩余容量，件口径=件数），
+  // 绝不再用 getActiveStock 直加 v.stock（规格变体的 v.stock 存的是容量数，直加会把 ml 当件）
+  var totalStock = restAmountOf(item);
 
   // 保质期：取所有variants中最早过期的（不再买的品牌不参与提醒计算）
   var allVariants = (item.variants && item.variants.length > 0) ? item.variants : [item];
@@ -2851,6 +2854,71 @@ function restCapOf(item) {
   });
   return Math.round(t * 100) / 100;
 }
+
+// ============ 【第 27 轮 · 统一口径】速率 / 剩余 / 缺口全程同口径 ============
+// 教训（洗头膏事件）：多品牌变体单位不一致（潘婷=个、off relax=ml）时，
+// mainPackUnit 只会取第一个变体的「个」，而闭环记录的 qty 其实是 ml（每包含量原文口径）。
+// 于是一边把 78ml 标成「78个」，一边又拿它去乘每件容量 → 「建议囤931个（约36万ml）」的灾难。
+// 铁律（用户定版，必须永远遵守）：
+//   ① 纯数字计算，单位文本原样引用 —— 底层算出 78 且口径是 ml，就直接显示「78ml」，
+//      绝不允许换成「个」，更不允许拿它去乘容量；
+//   ② 容量乘法只允许出现在「总容量 = 套餐数×规格包数×每包含量」这一处；
+//      反推速率、采购建议、可用天数时绝对禁止再乘每包容量；
+//   ③ 剩余与速率必须同口径，才能相减出采购缺口（936ml − 2420ml → 库存充足）。
+// 物品数量口径 = 闭环记录实际使用的单位（按 qty 加权取众数）；即时型永远是件/片口径。
+function recordUnitOf(item, r) {
+  var vs = (item && item.variants) || [];
+  var v = r && r.variantId ? vs.find(function (x) { return x.id === r.variantId; }) : null;
+  if (!v) v = vs[0];
+  if (!v) return mainPackUnit(item);
+  var sp = variantSpecsOf(v);
+  if (r && r.specName) {
+    var s = sp.find(function (x) { return String(x.name || '').trim() === String(r.specName).trim(); });
+    if (s) { var su = String(s.unit || '').trim(); if (su) return su; }
+  }
+  return variantMainUnit(v) || mainPackUnit(item);
+}
+function quantityUnitOf(item) {
+  if (!item) return '';
+  if (consumeModelOf(item) === 'instant') return mainPackUnit(item);   // 打卡 qty=件，绝不变 ml
+  var tally = {};
+  validPeriodRecords(item).forEach(function (r) {
+    var u = recordUnitOf(item, r);
+    if (!u) return;
+    tally[u] = (tally[u] || 0) + (parseFloat(r.qty) || 0);
+  });
+  var best = '', bestQ = -1;
+  Object.keys(tally).forEach(function (u) {
+    if (tally[u] > bestQ) { bestQ = tally[u]; best = u; }
+  });
+  if (best) return best;
+  // 无闭环记录：有规格明细 → 第一个规格的单位原文；否则主单位
+  var v0 = ((item.variants) || []).find(function (v) { return variantSpecsOf(v).length; });
+  if (v0) { var su = String(variantSpecsOf(v0)[0].unit || '').trim(); if (su) return su; }
+  return mainPackUnit(item);
+}
+// 与 quantityUnitOf 同口径的「当前剩余」：容量口径物品报剩余容量，件口径物品报剩余件数
+function restAmountOf(item) {
+  var u = quantityUnitOf(item);
+  if (isContentUnitText(u)) return restCapOf(item);
+  return restNowOf(item);
+}
+// 把一条闭环记录的消耗量换算到物品统一数量口径（unit = quantityUnitOf）：
+//   件/包/片口径 → qty 原样（开封记录 qty 本身就是件/片/每包含量原文口径）；
+//   容量口径（ml/g）→ 优先 contentUsed（开封/盘点已算好的含量）；
+//     记录口径本身是容量单位（规格开封 qty=每包含量）→ 原样；
+//     只有包数/件数的记录（盘点包差、无规格开封）→ × 平均每件容量换算成容量。
+function recordAmountOf(item, r, unit) {
+  var q = parseFloat(r && r.qty) || 0;
+  if (!(q > 0)) return 0;
+  if (!isContentUnitText(unit)) return q;
+  if (r.contentUsed > 0) return r.contentUsed;
+  var ru = recordUnitOf(item, r);
+  if (isContentUnitText(ru)) return q;
+  var cap = unitCapacityOf(item);
+  if (cap && cap.qty > 0) return q * cap.qty;
+  return q;
+}
 // 平均「每件」容量（牙膏=120g/支、洗发水=480ml/瓶、猫粮=5kg/包）：Σ购入容量 ÷ Σ购入件数
 function avgCapOf(item) {
   var capT = 0, pcsT = 0;
@@ -2961,60 +3029,60 @@ function unitCapacityOf(item) {
   if (sp0.length && isContentUnitText(sp0[0].unit) && specPackQty(sp0[0]) === 1 && specContentOf(sp0[0]) > 1) mismatch = true;
   return { qty: avg, unit: capUnit, mismatch: mismatch };
 }
-// 剩余容量的展示单位：优先容量单位（g/kg/ml），没有才退回主单位
+// 剩余容量的展示单位：物品口径本身就是容量单位 → 直接用口径单位；否则取容量单位，没有才退主单位
 function capacityUnitOf(item) {
+  var u = quantityUnitOf(item);
+  if (isContentUnitText(u)) return u;
   var c = unitCapacityOf(item);
   return (c && c.unit) ? c.unit : mainPackUnit(item);
 }
-// 「1.9包（约9.5kg）」—— 件数为主、容量为辅（用于月/年消耗、采购建议、年需求）。
-// 铁律：两个数字是乘法关系（件数 × 每件容量），绝不许相加、绝不许互相冒充。
+// 「1.9包（约9.5kg）」或「78ml」—— 速率/年需求的数量文案。
+// 【第 27 轮铁律】口径本身是容量单位（ml/g…）→ 纯数字 + 单位原文，绝无括号、绝不再乘每包容量！
+// 只有件/包/片口径且每件容量已知时，才允许「件数 × 每件容量」并列一次（乘法关系，仅展示）。
 function dualUnitText(num, item) {
-  var u = mainPackUnit(item);
-  var cap = unitCapacityOf(item);
+  var u = quantityUnitOf(item) || mainPackUnit(item);
   var n = round1(num);
-  if (!cap || !(cap.qty > 1) || !cap.unit) return trimNum(n) + escapeHtml(u);
-  if (cap.unit !== u) return trimNum(n) + escapeHtml(u) + '（约' + trimNum(round1(n * cap.qty)) + escapeHtml(cap.unit) + '）';
-  // 规格明细把「单位」填成了容量单位（如 480ml/瓶）→ 主数字改用「份」，容量进括号
-  if (cap.mismatch) return trimNum(n) + '份（约' + trimNum(round1(n * cap.qty)) + escapeHtml(cap.unit) + '）';
+  if (isContentUnitText(u)) return trimNum(n) + escapeHtml(u);
+  var cap = unitCapacityOf(item);
+  if (cap && cap.qty > 1 && cap.unit && isContentUnitText(cap.unit) && cap.unit !== u) {
+    return trimNum(n) + escapeHtml(u) + '（约' + trimNum(round1(n * cap.qty)) + escapeHtml(cap.unit) + '）';
+  }
   return trimNum(n) + escapeHtml(u);
 }
-// 「7个（约840g）」—— 使用记录的数量文案：件数为主、容量为辅（乘法关系，绝不许相加/互冒充）
-// 单位一律 escapeHtml，防止用户自填单位里带尖括号把页面结构撑坏
-function recQtyText(q, item) {
+// 「7个（约840g）」或「720ml」—— 使用记录的数量文案。
+// unit 缺省取物品口径；容量口径（ml/g）→ 纯数字+单位原文，绝不再乘；件口径 → 件数为主、容量括号为辅。
+function recQtyText(q, item, unit) {
   var n = parseFloat(q) || 0;
-  var u = mainPackUnit(item);
+  var u = unit || quantityUnitOf(item) || mainPackUnit(item);
+  if (isContentUnitText(u)) return trimNum(round1(n)) + escapeHtml(u);
   var cap = unitCapacityOf(item);
-  var txt;
-  // mismatch：规格把「单位」填成了容量单位（480ml/瓶）→ 主数字改用「份」，容量进括号
-  if (cap && cap.mismatch) txt = trimNum(round1(n)) + '份';
-  else txt = trimNum(round1(n)) + escapeHtml(u);
-  if (cap && cap.qty > 1 && cap.unit && isContentUnitText(cap.unit)) {
-    txt += '（约' + trimNum(round1(n * cap.qty)) + escapeHtml(cap.unit) + '）';
+  if (cap && cap.qty > 1 && cap.unit && isContentUnitText(cap.unit) && cap.unit !== u) {
+    return trimNum(round1(n)) + escapeHtml(u) + '（约' + trimNum(round1(n * cap.qty)) + escapeHtml(cap.unit) + '）';
   }
-  return txt;
+  return trimNum(round1(n)) + escapeHtml(u);
 }
-// 「9个（≈940g）」—— 当前剩余的件数与容量并列（采购建议 / 详情页当前库存行专用）
+// 「9个（≈936g）」或「2420ml」—— 当前剩余文案（采购建议 / 详情页当前库存行专用）。
+// 容量口径物品 → 直接报剩余容量（如「2420ml」）；件口径 → 件数为主、容量并列。
 function dualRestText(item) {
+  var u = quantityUnitOf(item) || mainPackUnit(item);
+  if (isContentUnitText(u)) return trimNum(round1(restCapOf(item))) + escapeHtml(u);
+  var a = trimNum(round1(restNowOf(item))) + escapeHtml(u);
   var cap = unitCapacityOf(item);
-  var main = mainPackUnit(item);
-  // 规格把「单位」填成了容量单位（480ml/瓶）→ 主数字改用「份」，否则会说出「4ml」这种错话
-  var a = (cap && cap.mismatch)
-    ? trimNum(round1(restNowOf(item))) + '份'
-    : trimNum(round1(restNowOf(item))) + escapeHtml(main);
-  if (cap && cap.qty > 1 && cap.unit && isContentUnitText(cap.unit)
-      && (cap.unit !== main || cap.mismatch)) {
+  if (cap && cap.qty > 1 && cap.unit && isContentUnitText(cap.unit) && cap.unit !== u) {
     a += '（≈' + trimNum(round1(restCapOf(item))) + escapeHtml(cap.unit) + '）';
   }
   return a;
 }
-// 卡片右侧「剩余」= 剩余库存（随每次消耗/盘点实时变动）：有容量概念报容量，否则报件数
+// 卡片右侧「剩余」= 剩余库存（随每次消耗/盘点实时变动）：
+// 容量口径物品报容量（1920ml/2420ml）；件口径物品有容量概念时报容量，否则报件数
 function restTextOf(item) {
+  var u = quantityUnitOf(item) || mainPackUnit(item);
+  if (isContentUnitText(u)) return trimNum(round1(restCapOf(item))) + escapeHtml(u);
   var cap = unitCapacityOf(item);
-  if (cap && cap.qty > 1 && cap.unit && isContentUnitText(cap.unit)
-      && (cap.unit !== mainPackUnit(item) || cap.mismatch)) {
+  if (cap && cap.qty > 1 && cap.unit && isContentUnitText(cap.unit) && cap.unit !== u) {
     return trimNum(round1(restCapOf(item))) + escapeHtml(cap.unit);
   }
-  return trimNum(round1(restNowOf(item))) + escapeHtml(mainPackUnit(item));
+  return trimNum(round1(restNowOf(item))) + escapeHtml(u);
 }
 // 右侧数字字号自适应：以 6 个字符（如「1920ml」）为设计基准，超长自动缩小，绝不挤掉产品名
 function autoNumFont(txt) {
@@ -3030,7 +3098,8 @@ function autoNumFont(txt) {
 function statsOf(item) {
   if (!item) return null;
   var model = consumeModelOf(item);
-  var unit = mainPackUnit(item);
+  // 【第 27 轮】口径 = 闭环记录实际单位（ml 规格物品就是 ml，绝不再取「第一个变体」的单位）
+  var unit = quantityUnitOf(item) || mainPackUnit(item);
   var out = {
     model: model, unit: unit,
     perMonth: 0, perYearRaw: 0, perYearQty: 0, months: 0,
@@ -3043,7 +3112,8 @@ function statsOf(item) {
     cap: null, capUnit: unit
   };
   if (!item) return out;
-  out.restNow = restNowOf(item);
+  // 【第 27 轮】剩余必须与速率同口径：容量口径物品报剩余容量（如 2420ml），件口径报件数
+  out.restNow = restAmountOf(item);
   out.restSmall = out.restNow;
   out.cap = unitCapacityOf(item);
   out.capUnit = capacityUnitOf(item);
@@ -3082,7 +3152,9 @@ function statsOf(item) {
   // period 周期型：日均 = Σ 闭环 qty ÷ 区间并集天数；月 = 日均 × 31；年 = 月 × 12
   var pr = validPeriodRecords(item);
   var tq = 0;
-  pr.forEach(function (r) { tq += (parseFloat(r.qty) || 0); });
+  // 【第 27 轮】每条记录先换算到物品统一口径再求和：ml 口径物品的盘点流水（qty=包差）
+  // 走 contentUsed，绝不能把「3 包」当「3ml」混进容量总数
+  pr.forEach(function (r) { tq += recordAmountOf(item, r, unit); });
   var sp2 = closedSpanDays(pr);
   out.closedCount = pr.length;
   out.totalQty = Math.round(tq * 100) / 100;
@@ -4316,8 +4388,8 @@ function renderCardFront(item, zone) {
 
   if (zone.type === 'consumable') {
     var status = getItemStatus(item);
-    // 【第 26 轮】「库存」一律走件数口径 restNowOf（规格明细型按剩余件数算），绝不混入容量
-    var totalStock = restNowOf(item);
+    // 【第 27 轮】「库存」走统一口径（容量口径物品=剩余容量），文案由 dualRestText 拼单位
+    var totalStock = restAmountOf(item);
     if (totalStock !== undefined) {
       var threshold = item.stockThreshold || 1;
       var maxBar = Math.max(totalStock, threshold * 3);
@@ -4329,7 +4401,7 @@ function renderCardFront(item, zone) {
         var avgPqF = item.variants.reduce(function(s, v) { return s + (v.packQty || 1); }, 0) / item.variants.length;
         packHintF = '（约 ' + Math.floor(totalStock / avgPqF) + ' 套）';
       }
-      html += '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:13px;color:var(--text-secondary)">库存</span><span style="font-weight:700">' + totalStock + mainPackUnit(item) + packHintF + '</span></div>';
+      html += '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:13px;color:var(--text-secondary)">库存</span><span style="font-weight:700">' + dualRestText(item) + packHintF + '</span></div>';
       html += '<div class="stock-bar ' + barClass + '"><div class="stock-fill" style="width:' + pct + '%"></div></div>';
       html += '</div>';
     }
@@ -5307,7 +5379,7 @@ function manualRefresh() {
 
 // ========== 自动更新检查 ==========
 // deploy.py 部署时会把 1791388211 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791485550';
+var APP_VERSION = '1791506254';
 
 function checkAppUpdate(manual) {
   try {
@@ -7598,19 +7670,23 @@ function buildYearStats(year) {
         estimated = true;
       }
       if (yq <= 0 && spend <= 0) return; // 这一年没有任何动静，不进档案
-      // 年报表展示口径：记录里的 qty 是「用户开/用的件·份数」（步进器选的数），
-      // 不是「套」——套只是展示层的折算说法。所以主口径一律用件/份/片，
-      // 有含量（每个多重/多少）时再补一个含量口径。
+      // 年报表展示口径：【第 27 轮】unitName 必须取「物品数量口径」的原文 ——
+      // ml 规格物品的记录 qty 本身就是 ml（如 720），绝不能再标成「个」，
+      // 也绝不再拿 720 去乘每包容量（旧版曾算出 36 万 ml 的荒谬数）。
       var model = consumeModelOf(it);
+      var qUnit27 = quantityUnitOf(it);
       var capUnit = mainPackUnit(it);
-      var unitName = it.unit || capUnit || '个';
+      var unitName = (qUnit27 || it.unit || capUnit || '个');
       var mainQty = Math.round(yq * 10) / 10;
       var capQty = 0, showCapUnit = capUnit;
       if (model === 'combo') {
         unitName = (it.variants && it.variants[0] ? variantSpecUnit(it.variants[0]) : '') || it.unit || '件';
         capQty = 0;                     // combo 的 qty 已是片/件，不再折算
+      } else if (isContentUnitText(qUnit27)) {
+        // 数量口径本身是容量单位（ml/g）→ qty 已是容量，绝不加括号、绝不再乘
+        capQty = 0; showCapUnit = '';
       } else {
-        // 周期型：qty = 开了几件/几份；用「每件含量」补一个含量口径（如 3件 → ≈27kg）
+        // 件/包/片口径：用「每件含量」补一个容量口径（如 3包 → ≈15kg）
         var wAvg = 0, wAvgUnit = '';
         (it.variants || []).forEach(function (v) {
           var w = parseFloat(v.packWeight) || 0;
