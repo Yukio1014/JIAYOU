@@ -3112,7 +3112,20 @@ function statsOf(item) {
 function buyAdviceOf(item) {
   var st = statsOf(item);
   if (!st) return null;
-  if (st.noClosedData) return { main: NO_DATA_TEXT, detail: null, noData: true };
+  // 【第 31 轮】清理旧流水后卡片还在、库存还在：没必要再用「缺数据」吓人。
+  // 库存高于告急线 → 直接说库存充足；库存已经见底 → 老实说数据不足（绝不编数字）。
+  if (st.noClosedData) {
+    var packsNow = restPacksOf(item);
+    var thrNow = (item && item.stockThreshold) || 1;
+    if (packsNow > thrNow) {
+      return {
+        main: SUFFICIENT_TEXT,
+        detail: '当前剩 ' + restPackText(item) + ' · 还没有完整闭环，用完后自动出真实速率',
+        noData: true, sufficient: true
+      };
+    }
+    return { main: NO_DATA_TEXT, detail: null, noData: true };
+  }
   var need = Math.ceil(st.perYearRaw - st.restCap);
   if (!(need > 0)) {
     return {
@@ -3652,7 +3665,7 @@ function renderItemCard(item, zone) {
     // ========== 第二段（第 13 轮）：灰色小字行（库存构成 + 可用天数，同一行、左对齐、可换行）==========
     // 核心数据（如 41片）已上移到第一行与标题并排；本行只放灰色辅助小字，行距保持不挤压
     // 【第 25 轮】主标题下方固定留一行「可用天数」：
-    //   有闭环数据 → 「可用 ≈ X 天」；没有闭环 → 「📭 缺少数据」，等有数据后自动更新。
+    //   有闭环数据 → 「可用 ≈ X 天」；没有闭环 → 「📭 数据不足」，等有数据后自动更新。
     //   （绝不再出现整行空着、或拿「使用中」硬凑天数的情况）
     var daysTxtC = cardDaysText(item, status);
     html += '<div class="card-sec" style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">';
@@ -3678,7 +3691,7 @@ function renderItemCard(item, zone) {
 
 // 【第 25 轮】卡片「可用天数」文案 —— 必须与详情页、年报同一套 statsOf 口径：
 //   有闭环记录 → 「可用 ≈ X 天」（X = 当前剩余 ÷ 月消耗 × 31 天）；
-//   无闭环记录 → 「📭 缺少数据」，绝不拿「使用中」硬凑天数，等有完整周期后自动更新。
+//   无闭环记录 → 「📭 数据不足」，绝不拿「使用中」硬凑天数，等有完整周期后自动更新。
 //   保质期是事实提醒，优先级高于消耗预估。
 function cardDaysText(item, status) {
   try {
@@ -3687,14 +3700,14 @@ function cardDaysText(item, status) {
     if (stS && stS.expired) return '已过期';
     if (stS && stS.expiring && stS.daysLeft !== null && stS.daysLeft !== undefined) return '剩 ' + stS.daysLeft + ' 天过期';
     var st = statsOf(item);
-    if (!st || st.noClosedData) return '📭 缺少数据';
+    if (!st || st.noClosedData) return '📭 数据不足';
     // 【第 28 轮】可用天数 = 剩余容量 ÷ 月消耗容量 × 31（两边都是容量，同口径相除）
     var pm = st.perMonth;
-    if (!(pm > 0)) return '📭 缺少数据';
+    if (!(pm > 0)) return '📭 数据不足';
     var d = st.restCap / pm * R24_DAYS_PER_MONTH;
-    if (!isFinite(d)) return '📭 缺少数据';
+    if (!isFinite(d)) return '📭 数据不足';
     return '可用 ≈ ' + Math.max(0, Math.round(d)) + ' 天';
-  } catch (e) { return '📭 缺少数据'; }
+  } catch (e) { return '📭 数据不足'; }
 }
 
 // ========== 状态对账（Reconcile）==========
@@ -5299,7 +5312,7 @@ function manualRefresh() {
 
 // ========== 自动更新检查 ==========
 // deploy.py 部署时会把 1791388211 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791512978';
+var APP_VERSION = '1791514271';
 
 function checkAppUpdate(manual) {
   try {
@@ -7551,6 +7564,8 @@ function buildYearStats(year) {
       // 消耗量：使用记录落在这一年的
       (it.usageRecords || []).forEach(function(r) {
         if (!r || r.type === 'surplus') return;    // 盘盈只修库存，绝不进年报消耗
+        // 跨年还在用的开封记录：消耗量尚未确定，记进任何一年都会重复计入 → 等闭环后归属
+        if (!r.endDate && !r.instant) return;
         var d = r.endDate || r.startDate || r.date;
         if (!d) return;
         if (new Date(d).getFullYear() !== year) return;
@@ -7698,7 +7713,7 @@ function openYearEndSettle(year) {
   html += '<div class="modal-title">🎊 固化 ' + y + ' 年</div>';
   html += '<div style="font-size:13px;color:var(--text-secondary);line-height:1.7;margin-bottom:14px">';
   html += '新的一年开始了，把 <strong>' + y + '</strong> 年的账封存：<br>';
-  html += '· 还挂着的「使用中」记录统一收尾到 <strong>' + y + '-12-31</strong>（共 ' + pending + ' 条），完成闭环、进入统计；<br>';
+  html += '· 还挂着的「使用中」记录 <strong>原封不动平移到下一年</strong>（共 ' + pending + ' 条），继续累计真实使用天数 —— 它明明还在用，绝不会被强行写成「用完」；<br>';
   html += '· 生成《' + y + ' 年度报告》存档，永久保存，之后删除产品也还能查到。';
   html += '</div>';
   html += '<div style="display:flex;gap:8px">';
@@ -7711,19 +7726,21 @@ function openYearEndSettle(year) {
 function yearEndDismiss(year) { yearEndDismissed = year; closeModal(); }
 function settleYearEnd(year) {
   var y = Number(year);
-  var endOfYear = new Date(y, 11, 31, 23, 59, 59).toISOString();
-  var closed = 0;
+  // 【第 31 轮】废除「12 月 31 日把使用中强制收尾」这条粗暴规则。
+  // 慢消耗品（身体乳、香水）可能横跨两三年 —— 强行写死 endDate 就等于谎称「它用完了」，
+  // 还会把它标成用完、清库存。正确做法：什么也不做，让「使用中」的记录原封不动平移到下一年，
+  // 继续累计真实天数；等用户真正点「用完」时，跨度自动覆盖全程（如 730 天），日均才是真的。
+  var carried = 0;   // 平移到下一年、继续累计的使用中记录数
   DB.zones.forEach(function (z) {
     if (z.type !== 'consumable') return;
     (z.items || []).forEach(function (it) {
       (it.usageRecords || []).forEach(function (r) {
-        if (!r || r.instant || r.endDate) return;
+        if (!r || r.instant || r.endDate) return;   // 只统计开封未结束的周期型记录
         var d = r.startDate ? new Date(r.startDate) : null;
-        if (!d || d.getFullYear() > y) return;      // 当年才开始用的不动
-        r.endDate = endOfYear;
-        closed++;
+        if (!d || d.getFullYear() > y) return;      // 下一年才开始用的不算
+        carried++;                                  // 原封不动保留：不写 endDate、不标用完
       });
-      try { reconcileItemState(it); } catch (e) {}
+      // 注意：绝不能再调 reconcileItemState —— 它会把开封状态搅乱甚至误标用完。
     });
   });
   // 生成年度报告存档
@@ -7733,10 +7750,10 @@ function settleYearEnd(year) {
   if (!DB.yearStats[String(y)]) DB.yearStats[String(y)] = { items: [] };
   DB.yearStats[String(y)].settled = true;
   DB.yearStats[String(y)].settledAt = new Date().toISOString();
-  DB.yearStats[String(y)].closedRecords = closed;
+  DB.yearStats[String(y)].carriedRecords = carried;
   saveDB();
   closeModal();
-  openYearCleanup(y, closed, snap ? snap.itemCount : 0);
+  openYearCleanup(y, carried, snap ? snap.itemCount : 0);
 }
 // 固化后的清理向导
 function openYearCleanup(year, closed, itemCount) {
@@ -7751,6 +7768,9 @@ function openYearCleanup(year, closed, itemCount) {
       });
       if (finished) done.push({ zone: z, item: it });
       (it.usageRecords || []).forEach(function (r) {
+        if (!r) return;
+        // 还在用（开封未结束）的记录会平移到下一年，不当作旧流水统计
+        if (!r.endDate && !r.instant) return;
         var d = r && (r.endDate || r.startDate || r.date);
         if (d && new Date(d).getFullYear() <= y) oldRecs++;
       });
@@ -7759,7 +7779,7 @@ function openYearCleanup(year, closed, itemCount) {
   var html = '<div class="modal-handle"></div>';
   html += '<div class="modal-title">🧹 清理旧年份数据</div>';
   html += '<div style="font-size:13px;color:var(--text-secondary);line-height:1.7;margin-bottom:14px">';
-  html += '✅ ' + y + ' 年已固化：收尾 ' + closed + ' 条使用中记录，归档 ' + itemCount + ' 件产品。<br><br>';
+  html += '✅ ' + y + ' 年已固化：' + closed + ' 条使用中记录平移到下一年继续累计，归档 ' + itemCount + ' 件产品。<br><br>';
   html += '接下来可选清理（<strong>不可撤销</strong>，建议先「📤 导出数据」备份）：<br>';
   html += '· 永久删除 <strong>' + done.length + '</strong> 件「已完结且不再补货」的产品；<br>';
   html += '· 清掉 <strong>' + oldRecs + '</strong> 条 ' + y + ' 年及以前的使用记录（当年及以后一条不动）。';
@@ -7792,10 +7812,15 @@ function cleanupOldYear(year, delFinished, clearRecs) {
     if (clearRecs) {
       (z.items || []).forEach(function (it) {
         var before = (it.usageRecords || []).length;
+        // 【第 31 轮】清理的只是「历史流水」，卡片和当前库存一个字都不动。
+        // 开封未结束的记录（还在用的跨年慢消耗品）必须原封不动留下：
+        // 清掉等于把这瓶的累计天数腰斩，速率再也补不回来。
         it.usageRecords = (it.usageRecords || []).filter(function (r) {
-          var d = r && (r.endDate || r.startDate || r.date);
+          if (!r) return false;
+          if (!r.endDate && !r.instant) return true;      // 使用中 → 平移保留
+          var d = r.endDate || r.startDate || r.date;
           if (!d) return true;
-          return new Date(d).getFullYear() > y;    // 只留该年之后的
+          return new Date(d).getFullYear() > y;           // 只留该年之后的已闭环记录
         });
         cleared += (before - (it.usageRecords || []).length);
       });
