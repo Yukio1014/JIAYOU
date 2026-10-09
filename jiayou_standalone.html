@@ -1477,9 +1477,19 @@ function variantHasSpecs(v) {
 // 剩余套数           = min_spec (剩余包数 ÷ 单套内包数)         ← 展示用，小数保留
 function specOpenPacks(s) { var n = parseFloat(s && s.openPacks); return isFinite(n) && n > 0 ? n : 0; }
 // 某规格剩余未开包数（购买总量口径）
+// 【第 35 轮】该规格「累计到货包数」——每批货各行独立记账的根。
+//   新数据：s.packsTotal（每次凯旋按「本次套数 × 单套包数」精确累加在这一行自己身上，
+//           于是「旧 prec货规格未被覆盖」成为数学上的必然，而不是靠小心翼翼地躲）。
+//   旧数据：没有这个字段 → 仍是「套餐数 × 单套包数」，计算结果一字不变（不迁移、不改写历史）。
+function specPacksTotal(v, s) {
+  if (s && s.packsTotal !== undefined && s.packsTotal !== null && s.packsTotal !== '') {
+    var pt = parseFloat(s.packsTotal);
+    if (isFinite(pt) && pt >= 0) return pt;
+  }
+  return variantPacksBought(v) * specPackCount(s);
+}
 function specPacksRemaining(v, s) {
-  var perSet = specPackCount(s);
-  var boughtTotal = variantPacksBought(v) * perSet;
+  var boughtTotal = specPacksTotal(v, s);
   return Math.round(Math.max(0, boughtTotal - specOpenPacks(s)) * 100) / 100;
 }
 // 该变体剩余套数（min 各规格的「剩余包数 ÷ 单套内包数」）
@@ -1495,10 +1505,24 @@ function variantPacksLeftCalc(v) {
   return isFinite(m) ? Math.round(m * 100) / 100 : 0;
 }
 // 该变体剩余总含量（= Σ 各规格剩余包数 × 每包含量 × 每件规格）
+// 【第 35 轮】变体的「主单位」= 第一个非空的规格单位。
+//   跨单位（如「粒」和「ml」）绝不相加 —— 那是 984粒 这种没意义的数字。
+//   单位为空的行视为主单位一类（不挑剔老数据）。
+function variantSpecMainUnit(v) {
+  var ss = variantSpecsOf(v), u = '';
+  ss.forEach(function (s) { if (!u && String(s.unit || '').trim()) u = String(s.unit).trim(); });
+  return u || String((v && v.packWeightUnit) || '').trim();
+}
+function specSameMainUnit(v, s) {
+  var mu = variantSpecMainUnit(v);
+  var su = String(s && s.unit || '').trim();
+  return (!mu || !su || su === mu);
+}
 function variantSpecStockCalc(v) {
   var ss = variantSpecsOf(v); if (!ss.length) return 0;
   var t = 0;
   ss.forEach(function (s) {
+    if (!specSameMainUnit(v, s)) return;     // 别的单位的行，只在该行自己的明细里报到
     t += specRemainContent(v, s);
   });
   return Math.round(t * 100) / 100;
@@ -1581,6 +1605,9 @@ function specLineText(s) {
 function variantSpecText(v) { // "日用 3包×5片 = 15片 + 夜用 2包×3片 = 6片 = 21片/套"
   var ss = variantSpecsOf(v); if (!ss.length) return '';
   var parts = ss.map(specLineText);
+  // 【第 35 轮】行级记账（分批到货）后，这里的数字已经是「累计到货」，不再是「一套有多少」
+  var hasRow = ss.some(function (s) { return s.packsTotal !== undefined && s.packsTotal !== null && s.packsTotal !== ''; });
+  if (hasRow) return parts.join(' + ');
   return parts.join(' + ') + ' = ' + trimNum(variantSpecPerSet(v)) + (ss[0].unit || '') + '/套';
 }
 function stockSummaryOf(item) {
@@ -5401,7 +5428,7 @@ function manualRefresh() {
 
 // ========== 自动更新检查 ==========
 // deploy.py 部署时会把 1791388211 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791557205';
+var APP_VERSION = '1791562422';
 
 function checkAppUpdate(manual) {
   try {
@@ -7091,6 +7118,30 @@ function packHintOf(v, plain, item) {
     var openedPacks = 0;
     sp.forEach(function (s) { openedPacks += specOpenPacks(s); });
     var line = '单套 = ' + parts.join(' + ') + ' = ' + trimNum(perSet) + u0;
+    // 【第 35 轮 · 行级口径】只要任一行带上了「累计到货包数」（说明这个品牌分批补过货），
+    //   就不再用「套餐数 × 单套构成」去反推总量（那会把不同批次的货混成一套），
+    //   而是逐行据实汇报：这行累计到货多少包、还剩多少。单位不同的行分行报，绝不混加。
+    if (sp.some(function (s) { return s.packsTotal !== undefined && s.packsTotal !== null && s.packsTotal !== ''; })) {
+      var byU = {}, uOrder = [];
+      sp.forEach(function (s) {
+        var uu = String(s.unit || u0 || '').trim();
+        if (!byU[uu]) { byU[uu] = { bought: 0, left: 0 }; uOrder.push(uu); }
+        byU[uu].bought += specPackQty(s) * specContentOf(s) * specPacksTotal(v, s);
+        byU[uu].left += specRemainContent(v, s);
+      });
+      var rowLines = sp.map(function (s) {
+        var nm = String(s.name || '').trim();
+        var pt = specPacksTotal(v, s), rm = specPacksRemaining(v, s);
+        return (nm ? nm + ' ' : '') + trimNum(pt) + '包' + MUL + trimNum(specPackQty(s)) + (s.unit || '') + '/包（剩 ' + trimNum(rm) + '包）';
+      });
+      var head35 = '📦 分批累计：' + rowLines.join(' ＋ ');
+      head35 += '　→ ' + uOrder.map(function (uu) {
+        return '累计 ' + trimNum(Math.round(byU[uu].bought * 100) / 100) + uu + '（剩 ' + trimNum(Math.round(byU[uu].left * 100) / 100) + uu + '）';
+      }).join(' ／ ');
+      if (pcS > 0) head35 += '（共买过 ' + trimNum(pcS) + ' 套）';
+      if (openedPacks > 0) head35 += '（已开 ' + trimNum(openedPacks) + ' 包）';
+      return head35;
+    }
     // 【第 23 轮】这一行只描述「买进来过什么」（累计购入）；当前剩余一律在「当前库存」格展示，
     // 两个口径绝不混在一行（用户反馈：100片入库总量 + 未开15片 挤一行，根本看不出可用库存）。
     var head = '📦 累计购入 = (' + line + ')' + MUL + trimNum(pcS) + '套 = ' + trimNum(totalBought) + u0;
@@ -8785,7 +8836,24 @@ function specKindIcon(k) {
   return '🫙';
 }
 function planSubList(p) {
-  return (p.subItems || []).filter(function (s) { return (+s.spec > 0) && (+s.count > 0); });
+  // 【第 35 轮】字段名统一：packCount=单套包数、packQty=每包含量。
+  //   只要填了单套包数就算有效行（即时型常常不带容量，不该被过滤掉）。
+  return (p.subItems || []).filter(function (s) { return (+s.packCount > 0); });
+}
+// 委托明细行取值（空则显示空白占位，不显示 0）
+function taskSubNum(s, f) {
+  var val = (f === 'packCount') ? s.packCount : s.packQty;
+  if (val === undefined || val === null || val === '') return '';
+  return val;
+}
+// 委托明细行算式预览（与产品卡片 specLineText 同款：正装 3包×15ml/包 = 45ml）
+function taskSubLine(s) {
+  var nm = String(s.name || '').trim();
+  var pc = parseFloat(s.packCount) || 0, pq = parseFloat(s.packQty) || 0, u = s.unit || '';
+  var head = nm ? nm + ' ' : '';
+  var mid = (pq > 0) ? (trimNum(pc) + '包×' + trimNum(pq) + u + '/包') : (trimNum(pc) + '包');
+  var tot = (pq > 0) ? Math.round(pc * pq * 100) / 100 : pc;
+  return head + mid + ' = ' + trimNum(tot) + (u || '包');
 }
 // ---------- v1.7 强制归属：委托必须有父级物品，方案一律继承父级 ----------
 // 父级 = 库存里的「物品」（如 面霜），是仓库；方案里的各品牌 = 仓库下的货架。
@@ -8817,7 +8885,7 @@ function planSubSpec(p) { // 每套（一件套餐）的总含量
   var subs = planSubList(p);
   if (!subs.length) return 0;
   var per = 0;
-  subs.forEach(function (s) { per += (+s.spec || 0) * (+s.count || 0); });
+  subs.forEach(function (s) { per += (+s.packQty || 0) * (+s.packCount || 0); });
   return Math.round(per * 100) / 100;
 }
 function planSpecText(p) { // "44粒装×3 + 70粒装×2 = 272粒"；带性质图标（🫙正装/♻️替换装/🎁赠品）
@@ -8825,10 +8893,10 @@ function planSpecText(p) { // "44粒装×3 + 70粒装×2 = 272粒"；带性质�
   if (!subs.length) return '';
   var u0 = subs[0].unit || '';
   var parts = subs.map(function (s) {
-    var nm = String(s.name || '').trim() || (trimNum(+s.spec) + (s.unit || ''));
+    var nm = String(s.name || '').trim() || (trimNum(+s.packQty) + (s.unit || ''));
     var kd = specKindOf(s);
     var ic = (kd !== 'normal') ? (specKindIcon(kd) + ' ') : '';
-    return ic + nm + '×' + trimNum(+s.count);
+    return ic + nm + '×' + trimNum(+s.packCount);
   });
   return parts.join(' + ') + ' = ' + trimNum(planSubSpec(p)) + u0;
 }
@@ -9339,32 +9407,31 @@ function findItemByIdGlobal(itemId) {
 //   ④ 价格只写「实付金额」与价格历史，绝不参与库存数量/消耗计算。
 function doWinSettle(ws) {
   var rows = ws.rows || [];
-  var createdVariants = 0, mergedVariants = 0;
-  // 按 任务|方案|目标变体 聚合：同一方案的多条明细（正装/替换装/赠品）落到同一个变体的 specs 里
-  var groups = {};
+  var createdVariants = 0, mergedVariants = 0, addedSpecs = 0, mergedSpecs = 0;
+  // 按 任务|方案|父级|目标变体 聚合：同一方案的多条明细（正装/替换装/赠品）落到同一个变体的 specs 里
+  var groups = {}, order = [];
   rows.forEach(function (r) {
-    var gk = r.taskId + '|' + r.planId + '|' + (r.targetVariantId || r._defaultTarget || '__new__');
+    var tid = r.targetVariantId || r._defaultTarget || '__new__';
+    var gk = r.taskId + '|' + r.planId + '|' + (r.parentId || '') + '|' + tid;
     if (!groups[gk]) {
       groups[gk] = {
         taskId: r.taskId, planId: r.planId, parentId: r.parentId,
-        targetVariantId: r.targetVariantId || r._defaultTarget || '__new__',
-        rows: [], amount: Math.round((+r.amount || 0) * 100) / 100,
-        comboPrice: r.comboPrice || 0, brand: r.name
+        targetVariantId: tid, rows: [],
+        amount: Math.round((+r.amount || 0) * 100) / 100,
+        comboPrice: r.comboPrice || 0, brand: r.brand || r.name
       };
+      order.push(gk);
     }
     groups[gk].rows.push(r);
   });
-  Object.keys(groups).forEach(function (gk) {
-    var g = groups[gk];
-    g.brand = g.rows[0].name;
-  });
 
-  Object.keys(groups).forEach(function (gk) {
+  order.forEach(function (gk) {
     var g = groups[gk];
     // ① 父级物品（仓库）必须存在 —— 否则跳过（绝不凭空建物品）
     var item = findItemByIdGlobal(g.parentId);
     if (!item) return;
     if (!item.variants) item.variants = [];
+    var isInst = consumeModelOf(item) === 'instant';
 
     // ② 确定目标变体：显式指定 > 品牌名匹配 > 新建
     var v = null;
@@ -9374,11 +9441,11 @@ function doWinSettle(ws) {
     if (!v) v = findVariantByName(item, g.brand);
     var isNewVariant = false;
     if (!v) {
-      // 新建货架：初始为空，明细与库存随后填入（不碰任何旧变体）
+      var u0 = (g.rows[0] && g.rows[0].unit) || '';
       v = {
         id: genId(), brand: g.brand || '新品牌',
-        packCount: 0, packPrice: 0, packQty: 1, packUnit: (g.rows[0].unit || '个'),
-        packWeight: 0, packWeightUnit: 'kg',
+        packCount: 0, packPrice: 0, packQty: 1, packUnit: u0 || '包',
+        packWeight: 0, packWeightUnit: u0 || '',
         specs: [], stock: 0, price: 0, totalPrice: 0,
         photos: [], notes: '', opened: false, usedUp: false, openQty: 0,
         feeling: null, shelfLife: null, productionDate: null,
@@ -9390,60 +9457,68 @@ function doWinSettle(ws) {
     } else {
       mergedVariants++;
     }
-
-    // ③ 本次到货明细 → 该变体的「单套构成」specs（v1.6 语义）
-    //    本次凯旋 = 又买了 1 套（含若干件）：明细按实际写，套餐数 +1
     if (!v.specs) v.specs = [];
-    var u0 = g.rows[0].unit || '';
-    g.rows.forEach(function (r) {
-      var cnt = +r.actCount || 0, sp = +r.actSpec || 0;
-      if (!(cnt > 0)) return;
-      // 同一变体内，按「名称+性质」视为同一规格（避免重复堆行）
-      var hit = null;
-      v.specs.forEach(function (s) {
-        if (hit) return;
-        if (String(s.name || '').trim() === String(r.name || '').trim() && specKindOf(s) === r.kind) hit = s;
-      });
-      if (hit) {
-        hit.packCount = Math.round(((+hit.packCount || 0) + cnt) * 100) / 100;
-        hit.packQty = sp;
-        if (!hit.unit) hit.unit = r.unit || '';
-        hit.kind = r.kind;
-        hit.qty = Math.round((+hit.packCount || 0) * sp * 100) / 100;
-      } else {
-        v.specs.push({
-          id: genId(), name: r.name, kind: r.kind,
-          packCount: cnt,                       // 单套内该规格件数
-          packQty: sp,                          // 每件容量
-          content: 1,                           // 每件规格（默认 1）
-          unit: r.unit || '',
-          qty: Math.round(cnt * sp * 100) / 100,
-          openPacks: 0
-        });
+
+    // ③ 【第 35 轮 · 固化】把这个货架现有每一行的库存量，落到行自己身上（累计到货包数）。
+    //    从此「套餐数」退化为一个纯展示用的「累计买了几套」，不再参与库存乘法 ——
+    //    这就是「旧规格绝不被新一批货污染、覆盖」的数学保证（不是靠小心翼翼地躲）。
+    //    老行没有 packsTotal 时按当时的口径（套餐数 × 单套包数）固化，数值一字不变。
+    v.specs.forEach(function (s) {
+      if (s.packsTotal === undefined || s.packsTotal === null || s.packsTotal === '') {
+        s.packsTotal = Math.round((variantPacksBought(v) * specPackCount(s)) * 100) / 100;
       }
     });
-    // 套餐数 +1（本次买到 1 套）；构成永不被折算写回
-    v.packCount = Math.round(((+v.packCount || 0) + 1) * 100) / 100;
-    if (u0) v.packUnit = u0;
+
+    // ④ 逐行处理 —— 核心铁律：能匹配就累加，匹配不上就新增，旧行一个字都不改写
+    var thisSets = 0;
+    g.rows.forEach(function (r) {
+      var packs = winRowPacks(r);          // 本次到货「包/件数」= 套数 × 单套包数
+      if (!(packs > 0)) return;
+      thisSets = Math.max(thisSets, +r.actSets || 0);
+      var hit = specMatchRow(v, r, isInst);
+      if (hit) {
+        // 场景一 / 二（部分）：同名同容量同单位 → 累加，旧的消耗记录与库存一个字不动
+        hit.packsTotal = Math.round((specPacksTotal(v, hit) + packs) * 100) / 100;
+        if (!isInst && (+hit.packCount || 0) < (+r.actPacksPerSet || 0)) hit.packCount = +r.actPacksPerSet || 0;
+        mergedSpecs++;
+      } else {
+        // 场景二（新赠品）/ 场景三（同名但容量变了）/ 场景四：一律新开一行，旧规格全部保留
+        v.specs.push({
+          id: genId(), name: r.name, kind: r.kind || 'normal',
+          packCount: +r.actPacksPerSet || 1,                 // 单套包数
+          packQty: (+r.actQtyPerPack || 0) > 0 ? (+r.actQtyPerPack || 0) : 1,   // 每包含量
+          content: 1,                                        // 每件规格恒为 1（R33 两层口径，杜绝双乘）
+          unit: r.unit || '',
+          packsTotal: packs,                                 // 这批货的行级累计到货包数
+          openPacks: 0, usedQty: 0
+        });
+        addedSpecs++;
+      }
+      if (r.unit) { v.packUnit = r.unit; if (!v.packWeightUnit) v.packWeightUnit = r.unit; }
+    });
+    if (!thisSets) return;
+
+    // ⑤ 套餐数只作累计记录（买了几套），不再参与库存计算；库存一律由各行自己的 packsTotal 求和
+    v.packCount = Math.round(((+v.packCount || 0) + thisSets) * 100) / 100;
     var firstUnit = (v.specs[0] && v.specs[0].unit) || '';
     if (firstUnit) v.packWeightUnit = firstUnit;
     var perSetPieces = variantSpecPerSetPieces(v);
     if (perSetPieces > 0) v.packQty = perSetPieces;
-    // 库存 = Σ 剩余包数 × 每包含量 × 每件规格（自动含本次新增）
-    v.stock = variantSpecStockCalc(v);
+    v.stock = isInst ? variantInstantStock(v) : variantSpecStockCalc(v);
     if (v.stock > 0) { v.usedUp = false; v.finishDate = null; }
     delete v.noRestock;   // 又买回来了 → 恢复计入补货提醒
-    // ④ 价格只记账
+
+    // ⑥ 价格只记账，绝不参与库存数量/消耗计算
     var amt = Math.round((+g.amount || 0) * 100) / 100;
     if (amt > 0) {
       v.totalPrice = Math.round(((+v.totalPrice || 0) + amt) * 100) / 100;
       if (g.comboPrice > 0) v.packPrice = g.comboPrice;
       v.price = v.stock > 0 ? Math.round((v.totalPrice / v.stock) * 100) / 100 : (v.price || 0);
     }
-    // ⑤ 价格历史（含完整明细文字）
+    // ⑦ 价格历史（含完整明细文字）
     if (!item.priceHistory) item.priceHistory = [];
     var specTxt = v.specs.map(function (s) {
-      return specKindIcon(specKindOf(s)) + (s.name || '') + '×' + trimNum(s.packCount) + (s.unit || '');
+      return specKindIcon(specKindOf(s)) + (s.name || '') + '×' + trimNum(specPacksTotal(v, s)) + '包';
     }).join(' + ');
     item.priceHistory.push({
       date: new Date().toISOString(), channel: '', quantity: 1,
@@ -9451,16 +9526,16 @@ function doWinSettle(ws) {
       notes: '任务委托·凯旋结算' + (isNewVariant ? '（新建货架 ' + v.brand + '）' : '（并入货架 ' + v.brand + '）') + '：' + specTxt,
       brand: v.brand || '', attachments: []
     });
-    // ⑥ 物品级汇总（其它变体不受影响）
+    // ⑧ 物品级汇总（其它变体不受影响）
     syncItemFromVariants(item);
     item.currentPrice = (item.variants || []).reduce(function (s, x) {
       return s + (x.totalPrice || ((x.price || 0) * (x.stock || 0)));
     }, 0);
   });
 
-  // ⑦ 实付金额覆盖（仅记账，不影响库存数量）
+  // ⑨ 实付金额覆盖（仅记账，不影响库存数量）
   if (ws.amountOverride !== undefined && ws.amountOverride !== null && ws.amountOverride !== '') {
-    Object.keys(groups).forEach(function (gk) {
+    order.forEach(function (gk) {
       var g = groups[gk];
       var it = findItemByIdGlobal(g.parentId);
       if (!it || !it.priceHistory || !it.priceHistory.length) return;
@@ -9470,7 +9545,7 @@ function doWinSettle(ws) {
     });
   }
 
-  // ⑧ 任务状态流转
+  // ⑩ 任务状态流转
   (ws.taskIds || []).forEach(function (tid) {
     var t = taskById(tid);
     if (!t) return;
@@ -9481,7 +9556,9 @@ function doWinSettle(ws) {
   var sum = '';
   if (createdVariants) sum += '新建 ' + createdVariants + ' 个货架';
   if (mergedVariants) sum += (sum ? '，' : '') + '并入 ' + mergedVariants + ' 个货架';
-  return { createdVariants: createdVariants, mergedVariants: mergedVariants, summary: sum };
+  if (addedSpecs) sum += (sum ? '，' : '') + '新增 ' + addedSpecs + ' 行规格';
+  if (mergedSpecs) sum += (sum ? '，' : '') + '累加 ' + mergedSpecs + ' 行规格';
+  return { createdVariants: createdVariants, mergedVariants: mergedVariants, addedSpecs: addedSpecs, mergedSpecs: mergedSpecs, summary: sum };
 }
 
 // ===== v1.7 凯旋结算页 =====
@@ -9489,41 +9566,79 @@ function doWinSettle(ws) {
 // 用户点「确认入库」后，右侧实际数据才会写进库存。绝不再直接自动入库。
 var _winSettle = null;   // { taskIds:[], rows:[...], mode:'single'|'batch', idx }
 
-// 每行 = 一个「方案 × 明细性质」，是结算与入库的最小单位
+// 每行 = 一个「方案 × 明细」，是结算与入库的最小单位
+// 【第 35 轮】一行只认这 4 个数：名称 / 单套包数 / 每包含量 / 单位 (+ 本次买了几套)
+//   —— 与产品卡片明细一一对应，凯旋时逐行核对，改哪个都不影响别的行。
 function settleRowsOf(t, plan) {
   var rows = [];
   var subs = planSubList(plan);
   var d = planDerived(plan);
-  var qty = d.qty > 0 ? d.qty : 1;
+  var sets = d.qty > 0 ? d.qty : 1;          // 这套东西买了几「套」
+  var brand = String(plan.name || '').trim() || '（未命名）';
+  function mk(kind, name, perSet, perPack, unit, keySuffix) {
+    return {
+      key: String(plan.id) + '#' + keySuffix,
+      planId: plan.id, brand: brand,
+      kind: kind || 'normal',
+      name: name,
+      unit: unit || '',
+      planSets: sets, planPacksPerSet: +perSet || 0, planQtyPerPack: +perPack || 0,
+      actSets: sets, actPacksPerSet: +perSet || 0, actQtyPerPack: +perPack || 0
+    };
+  }
   if (subs.length) {
     // 有明细：逐条明细 → 一行（正装/替换装/赠品各自独立核对）
     subs.forEach(function (s, k) {
-      rows.push({
-        key: String(plan.id) + '#' + k,
-        planId: plan.id, subIdx: k,
-        kind: specKindOf(s),
-        name: String(s.name || '').trim() || (trimNum(+s.spec) + (s.unit || '')),
-        planCount: (+s.count || 0) * qty,        // 预估件数（单套件数 × 套数）
-        planSpec: +s.spec || 0,                   // 预估单件容量
-        unit: s.unit || '',
-        actCount: (+s.count || 0) * qty,          // 实际件数（默认=预估，可改）
-        actSpec: +s.spec || 0,                    // 实际单件容量（可改）
-        _c: String((+s.count || 0) * qty), _s: String(+s.spec || 0)
-      });
+      var nm = String(s.name || '').trim() || (trimNum(+s.packQty) + (s.unit || ''));
+      rows.push(mk(specKindOf(s), nm, +s.packCount || 0, +s.packQty || 0, s.unit, k));
     });
   } else {
-    // 无明细：整条方案 → 一行
-    rows.push({
-      key: String(plan.id) + '#-1',
-      planId: plan.id, subIdx: -1,
-      kind: 'normal',
-      name: String(plan.name || '').trim() || '（未命名）',
-      planCount: qty, planSpec: +plan.spec || 1, unit: plan.unit || '',
-      actCount: qty, actSpec: +plan.spec || 1,
-      _c: String(qty), _s: String(+plan.spec || 1)
-    });
+    // 无明细：整条方案 → 一行（视为「1 套里装 1 个这么大的东西」）
+    rows.push(mk('normal', brand, 1, +plan.spec || 1, plan.unit, -1));
   }
   return rows;
+}
+// 该行本次到货的「包/件数」= 套数 × 单套包数
+function winRowPacks(r) {
+  return Math.round(((+r.actSets || 0) * (+r.actPacksPerSet || 0)) * 100) / 100;
+}
+// 该行本次到货的「份数」（即时型用）= 套数 × 单套包数 × 每包含量
+function winRowPieces(r) {
+  var perPack = (+r.actQtyPerPack || 0) > 0 ? (+r.actQtyPerPack || 0) : 1;
+  return Math.round(((+r.actSets || 0) * (+r.actPacksPerSet || 0) * perPack) * 100) / 100;
+}
+// 入库前的归属判断：这一行会累加到已有规格，还是新开一行？——结算页上要提前告诉用户
+function winRowPreview(r) {
+  var bName2 = String(r.brand || r.name || '').trim();
+  var item = findItemByIdGlobal(r.parentId);
+  if (!item) return { hit: null, v: null, item: null };
+  var v = null;
+  var tid = r.targetVariantId || r._defaultTarget || '';
+  if (tid && tid !== '__new__') (item.variants || []).forEach(function (x) { if (x.id === tid) v = x; });
+  if (!v) v = findVariantByName(item, bName2);
+  if (!v) return { hit: null, v: null, item: item };
+  var isInst = consumeModelOf(item) === 'instant';
+  var hit = specMatchRow(v, r, isInst);
+  return { hit: hit, v: v, item: item, isInst: isInst };
+}
+// 【第 35 轮 · 匹配铁律】能匹配就累加，匹配不上就新增，旧规格绝不覆盖。
+//   周期型匹配键 = 名称 + 性质 + 每包含量 + 单位（四者全等；容量变了 → 必然匹配不上 → 新开一行）
+//   即时型匹配键 = 名称 + 性质（即时型只认份数，容量变化不构成新行）
+function specMatchRow(v, r, isInst) {
+  if (!v || !v.specs) return null;
+  var hit = null;
+  var perPack = (+r.actQtyPerPack || 0);
+  v.specs.forEach(function (s) {
+    if (hit) return;
+    if (String(s.name || '').trim() !== String(r.name || '').trim()) return;
+    if (specKindOf(s) !== (r.kind || 'normal')) return;
+    if (!isInst) {
+      if (Math.abs(specPackQty(s) - perPack) > 0.000001) return;   // 容量不同 → 不许合并
+      if (String(s.unit || '') !== String(r.unit || '')) return;   // 单位不同 → 不许合并
+    }
+    hit = s;
+  });
+  return hit;
 }
 // 打开结算页：单个或批量（批量时逐个确认）
 function taskWin(id) {
@@ -9556,9 +9671,11 @@ function openWinSettle(tasks, mode) {
   taskHaptic();
 }
 // 结算页一行的归属目标：返回可选项列表 + 默认值
+// 【第 35 轮】品牌 = 方案名（一行明细不代表品牌），别再把明细名当成货架名
 function settleTargetsOf(row) {
   var item = findItemByIdGlobal(row.parentId);
-  var opts = [{ v: '__new__', label: '➕ 新建货架「' + row.name + '」' }];
+  var bName = String(row.brand || row.name || '未命名').trim();
+  var opts = [{ v: '__new__', label: '➕ 新建货架「' + bName + '」' }];
   if (item) {
     (item.variants || []).forEach(function (v) {
       opts.push({ v: v.id, label: (v.brand || '未命名') + '（库存 ' + trimNum(v.stock || 0) + (v.packWeightUnit || '') + '）' });
@@ -9578,48 +9695,73 @@ function renderWinSettle() {
   rows.forEach(function (r, i) {
     var item = findItemByIdGlobal(r.parentId);
     var tg = settleTargetsOf(r);
-    html += '<div style="border:1px solid var(--separator);border-radius:var(--radius-sm);padding:11px;margin-bottom:10px;background:var(--bg)">';
-    // 抬头：仓库 + 明细名
-    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
-    html += '<div style="font-weight:700;font-size:14px">' + specKindIcon(r.kind) + ' ' + escTask(r.name) + '</div>';
-    html += '<div style="font-size:11px;color:var(--text-tertiary)">🏷 ' + escTask(item ? item.name : '(父级缺失)') + '</div>';
-    html += '</div>';
-    // 计划 vs 实际 两栏
-    html += '<div style="display:flex;gap:8px;align-items:flex-end">';
-    html += '<div style="flex:1;padding:8px 10px;background:var(--card-bg);border-radius:8px;font-size:12px;color:var(--text-secondary)">';
-    html += '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:4px">预估（计划）</div>';
-    html += trimNum(r.planCount) + ' 件 × ' + trimNum(r.planSpec) + (r.unit || '') + '<br><b style="color:var(--text);font-size:13px">≈ ' + trimNum(Math.round(r.planCount * r.planSpec * 100) / 100) + (r.unit || '') + '</b>';
-    html += '</div>';
-    html += '<div style="flex:1.25;padding:8px 10px;background:rgba(52,199,89,.08);border:1px solid rgba(52,199,89,.3);border-radius:8px">';
-    html += '<div style="font-size:11px;color:var(--green);margin-bottom:4px">实际到手</div>';
-    html += '<div style="display:flex;gap:5px">';
-    html += '<input type="number" class="form-input" inputmode="decimal" style="flex:1;min-width:0;padding:7px 8px;font-size:13px;font-weight:700" value="' + escTask(r._c) + '" placeholder="件数" onchange="winSettleSet(' + i + ',\'actCount\',this.value)">';
-    html += '<span style="align-self:center;color:var(--text-tertiary);font-size:12px">件 ×</span>';
-    html += '<input type="number" class="form-input" inputmode="decimal" style="flex:1;min-width:0;padding:7px 8px;font-size:13px;font-weight:700" value="' + escTask(r._s) + '" placeholder="容量" onchange="winSettleSet(' + i + ',\'actSpec\',this.value)">';
-    html += '</div>';
-    html += '<div style="font-size:11px;color:var(--text-tertiary);margin-top:4px">' + (r.unit || '') + '　实际合计 <b style="color:var(--green)">' + trimNum(Math.round((+r.actCount || 0) * (+r.actSpec || 0) * 100) / 100) + (r.unit || '') + '</b></div>';
-    html += '</div>';
-    html += '</div>';
-    // 归属确认
-    html += '<div style="margin-top:9px">';
-    html += '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:4px">这批货进入哪个货架？</div>';
     var cur = r.targetVariantId || '';
     if (!cur) {
       // 默认：优先按方案来源变体，其次按品牌名匹配，最后新建
       if (r._defaultTarget === undefined) {
-        var match = findVariantByName(item, r.name);
+        var match = findVariantByName(item, r.brand);
         r._defaultTarget = match ? match.id : '__new__';
       }
       cur = r._defaultTarget;
     }
+    r.targetVariantId = cur;
+    var pv = winRowPreview(r);
+    html += '<div style="border:1px solid var(--separator);border-radius:var(--radius-sm);padding:11px;margin-bottom:10px;background:var(--bg)">';
+    // 抬头：仓库 + 名称（可直接改）
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
+    html += '<div style="font-size:11px;color:var(--text-tertiary)">🏷 ' + escTask(item ? item.name : '(父级缺失)') + '</div>';
+    html += '<button class="btn btn-danger btn-sm" style="padding:3px 8px;font-size:11px" onclick="winSettleRemoveRow(' + i + ')">✕ 删掉这行</button>';
+    html += '</div>';
+    html += '<div style="display:flex;gap:5px;margin-bottom:7px;align-items:center">';
+    html += '<select class="form-select" style="flex:.75;min-width:0;padding:6px 2px;font-size:11px" onchange="winSettleSet(' + i + ',\'kind\',this.value)">';
+    SPEC_KINDS.forEach(function (o) {
+      html += '<option value="' + o.k + '"' + (specKindOf(r) === o.k ? ' selected' : '') + '>' + o.icon + o.label + '</option>';
+    });
+    html += '</select>';
+    html += '<input type="text" class="form-input" style="flex:1;min-width:0;padding:6px 8px;font-size:13px;font-weight:600" placeholder="名称（如 正装）" value="' + escTask(r.name) + '" onchange="winSettleSet(' + i + ',\'name\',this.value)">';
+    html += '</div>';
+    // 预估（只读对照）
+    html += '<div style="padding:7px 10px;background:var(--card-bg);border-radius:8px;font-size:12px;color:var(--text-secondary);margin-bottom:7px">';
+    html += '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:3px">预估（计划）</div>';
+    html += trimNum(r.planSets) + ' 套 × ' + trimNum(r.planPacksPerSet) + ' 包 × ' + trimNum(r.planQtyPerPack) + (r.unit || '') + '/包';
+    html += '　<b style="color:var(--text)">≈ ' + trimNum(Math.round(r.planSets * r.planPacksPerSet * r.planQtyPerPack * 100) / 100) + (r.unit || '') + '</b>';
+    html += '</div>';
+    // 实际到手（4 个数全部可改）
+    html += '<div style="padding:8px 10px;background:rgba(52,199,89,.08);border:1px solid rgba(52,199,89,.3);border-radius:8px">';
+    html += '<div style="font-size:11px;color:var(--green);margin-bottom:5px">实际到手（可改）</div>';
+    html += '<div style="display:flex;gap:4px;margin:4px 0 2px;font-size:10px;color:var(--text-tertiary)">';
+    html += '<span style="flex:.8;min-width:0">套数</span><span style="flex:.9;min-width:0">单套包数</span><span style="flex:.9;min-width:0">每包含量</span><span style="flex:.7;min-width:0">单位</span>';
+    html += '</div>';
+    html += '<div style="display:flex;gap:4px">';
+    html += '<input type="number" class="form-input" inputmode="decimal" style="flex:.8;min-width:0;padding:6px 4px;font-size:13px;font-weight:700" value="' + escTask(String(r.actSets)) + '" placeholder="2" onchange="winSettleSet(' + i + ',\'actSets\',this.value)">';
+    html += '<input type="number" class="form-input" inputmode="decimal" style="flex:.9;min-width:0;padding:6px 4px;font-size:13px;font-weight:700" value="' + escTask(String(r.actPacksPerSet)) + '" placeholder="3" onchange="winSettleSet(' + i + ',\'actPacksPerSet\',this.value)">';
+    html += '<input type="number" class="form-input" inputmode="decimal" style="flex:.9;min-width:0;padding:6px 4px;font-size:13px;font-weight:700" value="' + escTask(String(r.actQtyPerPack)) + '" placeholder="44" onchange="winSettleSet(' + i + ',\'actQtyPerPack\',this.value)">';
+    html += '<input type="text" class="form-input" style="flex:.7;min-width:0;padding:6px 4px;font-size:12px" placeholder="ml" value="' + escTask(r.unit || '') + '" list="spec-unit-list" onchange="winSettleSet(' + i + ',\'unit\',this.value)">';
+    html += '</div>';
+    html += '<div style="font-size:11px;color:var(--text-tertiary);margin-top:5px">本次到货 <b style="color:var(--green)">' + trimNum(winRowPacks(r)) + ' 包 / ' + trimNum(winRowPieces(r)) + (r.unit || '') + '</b></div>';
+    html += '</div>';
+    // 归属 + 预判（提前告诉你：这行会累加还是新开）
+    html += '<div style="margin-top:8px">';
+    html += '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:4px">这批货进入哪个货架？</div>';
     html += '<select class="form-select" style="font-size:12px;padding:8px 10px" onchange="winSettleSet(' + i + ',\'targetVariantId\',this.value)">';
     tg.opts.forEach(function (o) {
       html += '<option value="' + o.v + '"' + (String(cur) === String(o.v) ? ' selected' : '') + '>' + escTask(o.label) + '</option>';
     });
     html += '</select>';
     html += '</div>';
+    html += '<div style="margin-top:6px;font-size:11px;padding:6px 9px;background:var(--card-bg);border-radius:7px;color:var(--text-secondary)">';
+    if (pv.item && pv.v) {
+      if (pv.hit) html += '↩ 匹配到已有规格「' + escTask(pv.hit.name || '未命名') + '（现 ' + trimNum(specPacksTotal(pv.v, pv.hit)) + '包）」→ <b style="color:var(--green)">累加，旧数据一字不动</b>';
+      else html += '➕ 货架里没有同规格 → <b style="color:var(--accent)">新开一行规格</b>（旧规格全部保留）';
+    } else if (pv.item) {
+      html += '🆕 新建货架「' + escTask(r.brand) + '」，把这批明细作为初始规格';
+    } else {
+      html += '⚠️ 找不到父级物品，本行不会入库';
+    }
+    html += '</div>';
     html += '</div>';
   });
+  html += '<button class="btn btn-outline btn-sm" style="width:100%;margin-bottom:10px" onclick="winSettleAddRow()">＋ 补一行（临时加的赠品 / 漏填的规格）</button>';
 
   // 实付金额（方案级，仅记账用，不进库存计算）
   var planIds = [];
@@ -9632,7 +9774,7 @@ function renderWinSettle() {
   }
 
   var ccTotal = 0;
-  rows.forEach(function (r) { ccTotal += (+r.actCount || 0) * (+r.actSpec || 0); });
+  rows.forEach(function (r) { ccTotal += winRowPieces(r); });
   html += '<div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0 10px">';
   html += '<span style="font-size:13px;color:var(--text-secondary)">共 <b style="color:var(--text)">' + rows.length + '</b> 条明细待入库</span>';
   html += '<span style="font-size:13px;color:var(--text-secondary)">实物合计 <b style="color:var(--text);font-size:15px">' + trimNum(Math.round(ccTotal * 100) / 100) + '</b></span>';
@@ -9644,11 +9786,39 @@ function renderWinSettle() {
 function winSettleSet(i, field, val) {
   if (!_winSettle || !_winSettle.rows[i]) return;
   var r = _winSettle.rows[i];
-  if (field === 'actCount') { r._c = val; r.actCount = parseFloat(val) || 0; }
-  else if (field === 'actSpec') { r._s = val; r.actSpec = parseFloat(val) || 0; }
-  else if (field === 'targetVariantId') { r.targetVariantId = val; }
+  if (field === 'actSets') r.actSets = Math.max(0, parseFloat(val) || 0);
+  else if (field === 'actPacksPerSet') r.actPacksPerSet = Math.max(0, parseFloat(val) || 0);
+  else if (field === 'actQtyPerPack') r.actQtyPerPack = Math.max(0, parseFloat(val) || 0);
+  else if (field === 'unit') r.unit = String(val || '');
+  else if (field === 'name') r.name = String(val || '').trim() || '未命名';
+  else if (field === 'kind') r.kind = val;
+  else if (field === 'targetVariantId') { r.targetVariantId = val; r._defaultTarget = val; }
   // 重绘结算页（保留输入框焦点，避免打字中断）
   renderWinSettleKeepFocus(i);
+}
+// 【第 35 轮】在结算页手动补一行（临时加的赠品 / 漏填的规格）
+function winSettleAddRow() {
+  if (!_winSettle || !_winSettle.rows.length) { toast('没有可参照的方案'); return; }
+  var base = _winSettle.rows[_winSettle.rows.length - 1];
+  _winSettle.rows.push({
+    key: String(base.planId) + '#add' + _winSettle.rows.length,
+    planId: base.planId, brand: base.brand, parentId: base.parentId,
+    taskId: base.taskId, amount: 0, comboPrice: 0,
+    kind: 'normal', name: '新增规格', unit: base.unit || '',
+    planSets: 0, planPacksPerSet: 0, planQtyPerPack: 0,
+    actSets: base.actSets || 1, actPacksPerSet: 1, actQtyPerPack: 0,
+    _added: true
+  });
+  renderWinSettle();
+}
+// 【第 35 轮】在结算页手动删掉一行（只有你自己点才会删，系统绝不自动删）
+function winSettleRemoveRow(i) {
+  if (!_winSettle || !_winSettle.rows[i]) return;
+  var nm = _winSettle.rows[i].name;
+  _winSettle.rows.splice(i, 1);
+  if (!_winSettle.rows.length) { toast('明细已全部删完，可直接点「取消」'); return; }
+  renderWinSettle();
+  toast('已移除「' + nm + '」这一行（不会入库）');
 }
 // 重绘但保护焦点：记录当前焦点索引后恢复
 function renderWinSettleKeepFocus(idx) {
@@ -9667,9 +9837,16 @@ function winSettleSetAmount(v) { if (_winSettle) _winSettle.amountOverride = v; 
 function confirmWinSettle() {
   if (!_winSettle) return;
   var rows = _winSettle.rows;
-  var bad = null;
-  rows.forEach(function (r) { if (!(+r.actCount > 0)) bad = r; });
-  if (bad) { toast('「' + bad.name + '」的实际件数需大于 0（没有到货请直接取消凯旋）'); return; }
+  // 【第 35 轮】逐行强校验：名称 / 单套包数 / 每包含量 / 单位，缺哪个点名哪个
+  var badRow = null;
+  for (var ri = 0; ri < rows.length; ri++) {
+    var r0 = rows[ri];
+    if (!(+r0.actSets > 0)) { toast('「' + r0.name + '」的套数需大于 0（没到货请直接删掉这行）'); return; }
+    if (!(+r0.actPacksPerSet > 0)) { toast('「' + r0.name + '」的单套包数需大于 0'); return; }
+    var pm = winRowPreview(r0);
+    if (!pm.isInst && !(+r0.actQtyPerPack > 0)) { toast('「' + r0.name + '」的每包含量还没填（周期型必须知道一包多少 ' + (r0.unit || '') + '）'); return; }
+    if (!String(r0.unit || '').trim()) { toast('「' + r0.name + '」的单位还没填（如 ml / g / 粒 / 包）'); return; }
+  }
   var r = doWinSettle(_winSettle);
   closeModal();
   _winSettle = null;
@@ -9874,29 +10051,45 @@ function taskPlanRows() {
     html += '<div id="task-calc-' + i + '" style="display:' + (p._calcOpen ? 'block' : 'none') + '">';
     html += '<div class="form-row" style="margin-bottom:8px">';
     html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="number" class="form-input" placeholder="套餐价/件" value="' + (p.comboPrice || '') + '" onchange="taskFormPlanCalc(' + i + ',\'comboPrice\',parseFloat(this.value)||0)"></div>';
-    html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="number" class="form-input" placeholder="数量(件)" value="' + (p.qty || '') + '" onchange="taskFormPlanCalc(' + i + ',\'qty\',parseFloat(this.value)||0)"></div>';
+    html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="number" class="form-input" placeholder="套餐数(买几套)" value="' + (p.qty || '') + '" onchange="taskFormPlanCalc(' + i + ',\'qty\',parseFloat(this.value)||0)"></div>';
     html += '</div>';
     html += '<div class="form-row" style="margin-bottom:8px">';
-    html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="number" class="form-input" placeholder="每件规格" value="' + (p.spec || '') + '" onchange="taskFormPlanCalc(' + i + ',\'spec\',parseFloat(this.value)||0)"></div>';
-    html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="text" class="form-input" placeholder="单位(kg/ml)" value="' + escTask(p.unit || '') + '" onchange="taskFormPlanCalc(' + i + ',\'unit\',this.value)"></div>';
+    // 【第 35 轮】与产品卡片行为完全一致：一旦用了规格明细描述「一套里装了什么」，
+    //   顶部的单规格输入行立刻置灰并说明原因（防重复填写；删光明细自动恢复可编辑）
+    if ((p.subItems || []).length) {
+      html += '<div style="flex:1;margin-bottom:0;padding:9px 11px;background:var(--bg);border:0.5px dashed var(--separator);border-radius:9px;opacity:.6">';
+      html += '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:3px">每件规格 / 单位（已由下方明细定义，无需再填）</div>';
+      html += '<div style="font-size:12px;color:var(--text-secondary)">🧩 单套构成：' + escTask(planSpecText(p) || '请在下方填写明细') + '</div>';
+      html += '</div>';
+    } else {
+      html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="number" class="form-input" placeholder="每件规格" value="' + (p.spec || '') + '" onchange="taskFormPlanCalc(' + i + ',\'spec\',parseFloat(this.value)||0)"></div>';
+      html += '<div class="form-group" style="flex:1;margin-bottom:0"><input type="text" class="form-input" placeholder="单位(kg/ml)" value="' + escTask(p.unit || '') + '" onchange="taskFormPlanCalc(' + i + ',\'unit\',this.value)"></div>';
+    }
     html += '</div>';
-    // v1.7 规格明细：一套套餐里装了什么（正装 / 替换装 / 赠品各自一行）——凯旋时逐行核对
+    // 【第 35 轮】规格明细：字段顺序与叫法必须与产品卡片 100% 一致
+    //   名称 / 单套包数 / 每包含量 / 单位（废止「含量」「件数」这类黑话）
     var subs = (p.subItems || []);
     html += '<div style="font-size:12px;color:var(--text-secondary);margin:2px 0 6px">🧩 规格明细 <span style="color:var(--text-tertiary)">（= 一套里装了什么；正装/替换装/赠品各一行，凯旋时逐行核对）</span></div>';
+    if (subs.length) {
+      html += '<div style="display:flex;gap:4px;margin:4px 0 2px;font-size:10px;color:var(--text-tertiary)">';
+      html += '<span style="flex:1.35;min-width:0">名称</span><span style="flex:.8;min-width:0">单套包数</span><span style="flex:.8;min-width:0">每包含量</span><span style="width:50px;flex-shrink:0">单位</span><span style="width:30px;flex-shrink:0"></span>';
+      html += '</div>';
+    }
     subs.forEach(function (s, k) {
       var kd = specKindOf(s);
-      html += '<div style="display:flex;gap:4px;margin-bottom:6px;align-items:center">';
-      html += '<select class="form-select" style="flex:.9;min-width:0;padding:6px 4px;font-size:11px" onchange="taskPlanSubSet(' + i + ',' + k + ',\'kind\',this.value)">';
+      html += '<div style="display:flex;gap:4px;margin-bottom:2px;align-items:center">';
+      html += '<select class="form-select" style="flex:.8;min-width:0;padding:6px 2px;font-size:11px" onchange="taskPlanSubSet(' + i + ',' + k + ',\'kind\',this.value)">';
       SPEC_KINDS.forEach(function (o) {
         html += '<option value="' + o.k + '"' + (kd === o.k ? ' selected' : '') + '>' + o.icon + o.label + '</option>';
       });
       html += '</select>';
-      html += '<input type="text" class="form-input" style="flex:1.3;min-width:0;padding:6px 8px;font-size:12px" placeholder="名称(正装)" value="' + escTask(s.name || '') + '" onchange="taskPlanSubSet(' + i + ',' + k + ',\'name\',this.value)">';
-      html += '<input type="number" class="form-input" style="flex:.8;min-width:0;padding:6px 8px;font-size:12px" placeholder="含量" value="' + (s.spec || '') + '" onchange="taskPlanSubSet(' + i + ',' + k + ',\'spec\',parseFloat(this.value)||0)">';
-      html += '<input type="text" class="form-input" style="flex:.6;min-width:0;padding:6px 8px;font-size:12px" placeholder="单位" value="' + escTask(s.unit || '') + '" onchange="taskPlanSubSet(' + i + ',' + k + ',\'unit\',this.value)">';
-      html += '<input type="number" class="form-input" style="flex:.6;min-width:0;padding:6px 8px;font-size:12px" placeholder="件数" value="' + (s.count || '') + '" onchange="taskPlanSubSet(' + i + ',' + k + ',\'count\',parseFloat(this.value)||0)">';
-      html += '<button class="btn btn-danger btn-sm" style="flex-shrink:0;padding:6px 8px" onclick="taskPlanSubRemove(' + i + ',' + k + ')">✕</button>';
+      html += '<input type="text" class="form-input" style="flex:1.35;min-width:0;padding:6px 6px;font-size:12px" placeholder="正装" value="' + escTask(s.name || '') + '" onchange="taskPlanSubSet(' + i + ',' + k + ',\'name\',this.value)">';
+      html += '<input type="number" class="form-input" style="flex:.8;min-width:0;padding:6px 4px;font-size:12px" placeholder="3" value="' + taskSubNum(s, 'packCount') + '" onchange="taskPlanSubSet(' + i + ',' + k + ',\'packCount\',parseFloat(this.value)||0)">';
+      html += '<input type="number" class="form-input" style="flex:.8;min-width:0;padding:6px 4px;font-size:12px" placeholder="15" value="' + taskSubNum(s, 'packQty') + '" onchange="taskPlanSubSet(' + i + ',' + k + ',\'packQty\',parseFloat(this.value)||0)">';
+      html += '<input type="text" class="form-input" style="width:50px;flex-shrink:0;padding:6px 4px;font-size:12px" placeholder="ml" list="spec-unit-list" value="' + escTask(s.unit || '') + '" onchange="taskPlanSubSet(' + i + ',' + k + ',\'unit\',this.value)">';
+      html += '<button class="btn btn-danger btn-sm" style="flex-shrink:0;padding:6px 7px" onclick="taskPlanSubRemove(' + i + ',' + k + ')">✕</button>';
       html += '</div>';
+      html += '<div style="font-size:11px;color:var(--text-tertiary);margin:0 0 4px 2px">' + escTask(taskSubLine(s)) + '</div>';
     });
     html += '<button class="btn btn-outline btn-sm" style="width:100%;margin-bottom:6px" onclick="taskPlanSubAdd(' + i + ')">＋ 添加规格明细</button>';
     if (planSubSpec(p) > 0) html += '<div style="font-size:12px;color:var(--accent);font-weight:600;margin-bottom:6px">' + escTask(planSpecText(p)) + '</div>';
@@ -9916,7 +10109,8 @@ function taskPlanSubSet(i, k, field, val) {
 function taskPlanSubAdd(i) {
   var p = taskState.formPlans[i]; if (!p) return;
   if (!p.subItems) p.subItems = [];
-  p.subItems.push({ id: planNextId() + '-' + (p.subItems.length + 1), name: '', spec: 0, count: 1, unit: p.unit || '' });
+  // 【第 35 轮】字段名与产品卡片一致：单套包数 / 每包含量（不再有 count/spec 这套黑话）
+  p.subItems.push({ id: planNextId() + '-' + (p.subItems.length + 1), name: '', kind: 'normal', packCount: 1, packQty: 0, unit: p.unit || '' });
   var box = document.getElementById('task-plan-list'); if (box) box.innerHTML = taskPlanRows();
   taskUpdateRange();
 }
@@ -10216,8 +10410,9 @@ function taskFormSave(id) {
       spec: Math.round((+p.spec || 0) * 100) / 100,
       unit: (p.unit || '').trim(),
       photos: (p.photos || []).slice(),
-      subItems: (p.subItems || []).filter(function (s) { return (+s.spec > 0) && (+s.count > 0); }).map(function (s) {
-        return { id: s.id, name: (s.name || '').trim(), spec: +s.spec || 0, count: +s.count || 0, unit: (s.unit || '').trim(), kind: specKindOf(s) };
+      // 【第 35 轮】字段名与产品卡片一致：packCount=单套包数、packQty=每包含量（写快照时不能把行过滤丢）
+      subItems: (p.subItems || []).filter(function (s) { return (+s.packCount > 0); }).map(function (s) {
+        return { id: s.id, name: (s.name || '').trim(), packCount: +s.packCount || 0, packQty: +s.packQty || 0, unit: (s.unit || '').trim(), kind: specKindOf(s) };
       })
     };
   });
