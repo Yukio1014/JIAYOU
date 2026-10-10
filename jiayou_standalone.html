@@ -608,6 +608,10 @@ body {
 .vc-badge.using { background: rgba(255,149,0,0.14); color: var(--orange); }
 .vc-badge.done { background: rgba(52,199,89,0.14); color: var(--green); }
 .vc-badge.norestock { background: rgba(142,142,147,0.16); color: var(--text-secondary); }
+.vc-badge.pending { background: rgba(175,82,222,0.16); color: #af52de; }
+/* 【第 36 轮】凯旋待确认：物品总览卡外层紫色阴影（无文字，一眼看出「这家的数据要我去核对」） */
+.item-card.card-pending { box-shadow: 0 0 0 2.5px rgba(175,82,222,.55), 0 10px 22px -10px rgba(175,82,222,.5); }
+.vc-pending-btn { background: rgba(175,82,222,.14) !important; color: #af52de !important; border-color: rgba(175,82,222,.4) !important; font-weight: 700; }
 .variant-card.vc-norestock { opacity: 0.66; border-style: dashed; }
 .vc-price-line { display: flex; align-items: baseline; gap: 8px; margin-bottom: 9px; flex-wrap: wrap; }
 /* 第 12 轮：价格是全页唯一保留的大数字（17px/600），其余一律小字常规 */
@@ -3724,8 +3728,10 @@ function renderItemCard(item, zone) {
     if (stL.cls === 'st-danger') tierCls = ' card-alert';
     else if (stL.cls === 'st-warn') tierCls = ' card-warn';
   }
+  // 【第 36 轮】凯旋待确认：这个物品下只要有任何一个品牌变体还没核对，总览卡就套紫色阴影
+  var pendingCls = (item.variants || []).some(function (x) { return x.pendingConfirm; }) ? ' card-pending' : '';
   // 把分级类补进已开出的卡片标签
-  html = html.replace('class="item-card item-card-compact"', 'class="item-card item-card-compact' + tierCls + '"');
+  html = html.replace('class="item-card item-card-compact"', 'class="item-card item-card-compact' + tierCls + pendingCls + '"');
 
   // ========== 第一段（第 13 轮重排）：产品名 + 核心库存数并排一行（粗体大字），图标竖向堆叠 ==========
   // 模型 ⚡/⌛ 与状态 💭/🌀/⚠️/❗️ 从横排改为竖排（上下堆叠），只占一个图标的宽度，
@@ -4684,6 +4690,11 @@ function renderCardBack(item, zone) {
         else if (isUsing) html += '<span class="vc-badge using">' + (actCountV > 1 ? actCountV + ' 件使用中' : '使用中') + '</span>';
         else if (isDone) html += '<span class="vc-badge done">已用完</span>';
         else if (variantSpecsOf(v).length || (v.stock || 0) > 0) html += '<span class="vc-badge" style="background:rgba(142,142,147,0.12);color:var(--text-secondary)">待开封</span>';
+        // 【第 36 轮】凯旋待确认：平时不显示（布局零改动）；凯旋入库后亮起紫色，核对完点「确认完毕」核销
+        if (v.pendingConfirm) {
+          html += '<span class="vc-badge pending">⏳ 待确认</span>';
+          html += '<button class="btn btn-outline vc-head-btn vc-pending-btn" title="核对完库存数据后点这里" onclick="variantConfirmOk(\'' + item.id + '\',\'' + v.id + '\')">✅ 确认完毕</button>';
+        }
         html += '<span style="flex:1"></span>';
         // 第 11 轮：感受 + 弃用（不再买），与品牌名并排，右侧对齐
         html += '<button class="btn btn-outline vc-head-btn" title="记录这个品牌的使用感受" onclick="openVariantFeelingForm(\'' + item.id + '\',\'' + v.id + '\')">💕 感受</button>';
@@ -5428,7 +5439,7 @@ function manualRefresh() {
 
 // ========== 自动更新检查 ==========
 // deploy.py 部署时会把 1791388211 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791562422';
+var APP_VERSION = '1791643440';
 
 function checkAppUpdate(manual) {
   try {
@@ -9306,6 +9317,11 @@ var _strikeSel = null;
 function taskStrike(id) {
   var t = taskById(id); if (!t) return;
   if (!t.plans || t.plans.length === 0) { toast('先添加备选方案'); return; }
+  // 【第 36 轮】出击前强校验：不知道「一包是多少」，凯旋回填就是残废数据 —— 绝不放行
+  for (var i = 0; i < t.plans.length; i++) {
+    var err = taskPlanCapacityError(t.plans[i]);
+    if (err) { toast('⚠️ ' + err + '（出击前必须填好容量和单位）'); return; }
+  }
   if (t.plans.length === 1) {
     t.plans[0].buy = true; t.status = '进行中';
     saveDB(); renderTasks(); toast('⚔️ 已出击 · ' + (t.plans[0].name || '方案')); taskHaptic(); return;
@@ -9366,6 +9382,41 @@ function renderStrikeModal() {
   if (!cc.n) html += '<div style="font-size:12px;color:var(--red);text-align:center;margin-top:8px">至少为一个委托勾选要买的方案</div>';
   document.getElementById('modal-content').innerHTML = html;
 }
+// 【第 36 轮】容量强校验：方案要出击，每一行都必须知道「一包是多少」。
+//   有明细 → 逐行查 每包含量 + 单位；无明细 → 查方案的容量 + 单位。缺哪个点名哪个。
+function taskPlanCapacityError(p) {
+  var subs = (p.subItems || []).filter(function (s) { return (+s.packCount > 0); });
+  if (subs.length) {
+    for (var i = 0; i < subs.length; i++) {
+      var s = subs[i];
+      var nm = String(s.name || '').trim() || ('明细第' + (i + 1) + '行');
+      if (!(+s.packQty > 0)) return '方案「' + (p.name || '未命名') + '」的明细「' + nm + '」没填每包含量';
+      if (!String(s.unit || '').trim()) return '方案「' + (p.name || '未命名') + '」的明细「' + nm + '」没填单位';
+    }
+    return null;
+  }
+  if (!(+p.spec > 0)) return '方案「' + (p.name || '未命名') + '」没填容量（每件规格）';
+  if (!String(p.unit || '').trim()) return '方案「' + (p.name || '未命名') + '」没填单位';
+  return null;
+}
+// 【第 36 轮】变体「确认完毕」：核销待确认状态，并联动检查同物品下所有变体
+function variantConfirmOk(itemId, variantId) {
+  var item = findItemByIdGlobal(itemId); if (!item) return;
+  var v = null;
+  (item.variants || []).forEach(function (x) { if (x.id === variantId) v = x; });
+  if (!v) return;
+  v.pendingConfirm = false;
+  saveDB();
+  try { renderHome(); } catch (e) {}
+  // 【第 36 轮】当前若停在领地列表页，紫框必须立刻同步消失/保留
+  try { if (typeof currentPage !== 'undefined' && currentPage === 'zone') renderZone(); } catch (e) {}
+  if (currentDetailItem && currentDetailItem.id === itemId) {
+    renderCardBack(currentDetailItem, currentDetailZone);
+  }
+  var left = (item.variants || []).filter(function (x) { return x.pendingConfirm; }).length;
+  if (left > 0) toast('✅ 已核对「' + (v.brand || '未命名') + '」。该物品下还有 ' + left + ' 个变体待确认，总览紫框暂时保留');
+  else toast('✅ 已核对「' + (v.brand || '未命名') + '」。该物品全部核对完毕，总览紫框已解除');
+}
 function confirmStrike() {
   if (!_strikeSel) return;
   var tasks = _strikeSel.tasks.map(taskById).filter(Boolean);
@@ -9378,6 +9429,11 @@ function confirmStrike() {
       if (on) buys.push(p);
     });
     if (!buys.length) { skipped++; return; }
+    // 【第 36 轮】出击前强校验（与 taskStrike 同一口径）：容量/单位缺失的方案拦下来
+    for (var bi = 0; bi < buys.length; bi++) {
+      var errB = taskPlanCapacityError(buys[bi]);
+      if (errB) { toast('⚠️ ' + errB + '（出击前必须填好容量和单位）'); return; }
+    }
     t.status = '进行中';
     struck++;
   });
@@ -9507,6 +9563,8 @@ function doWinSettle(ws) {
     v.stock = isInst ? variantInstantStock(v) : variantSpecStockCalc(v);
     if (v.stock > 0) { v.usedUp = false; v.finishDate = null; }
     delete v.noRestock;   // 又买回来了 → 恢复计入补货提醒
+    // 【第 36 轮】凯旋入库 → 这个货架进入「待确认」：总览紫框 + 详情紫色按钮，直到用户亲手核对完毕
+    v.pendingConfirm = true;
 
     // ⑥ 价格只记账，绝不参与库存数量/消耗计算
     var amt = Math.round((+g.amount || 0) * 100) / 100;
@@ -9843,8 +9901,7 @@ function confirmWinSettle() {
     var r0 = rows[ri];
     if (!(+r0.actSets > 0)) { toast('「' + r0.name + '」的套数需大于 0（没到货请直接删掉这行）'); return; }
     if (!(+r0.actPacksPerSet > 0)) { toast('「' + r0.name + '」的单套包数需大于 0'); return; }
-    var pm = winRowPreview(r0);
-    if (!pm.isInst && !(+r0.actQtyPerPack > 0)) { toast('「' + r0.name + '」的每包含量还没填（周期型必须知道一包多少 ' + (r0.unit || '') + '）'); return; }
+    if (!(+r0.actQtyPerPack > 0)) { toast('「' + r0.name + '」的每包含量还没填（必须知道一包是多少 ' + (r0.unit || '') + '）'); return; }
     if (!String(r0.unit || '').trim()) { toast('「' + r0.name + '」的单位还没填（如 ml / g / 粒 / 包）'); return; }
   }
   var r = doWinSettle(_winSettle);
