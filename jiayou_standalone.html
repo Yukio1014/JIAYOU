@@ -445,6 +445,8 @@ body {
 }
 .card-st.st-idle  { color: var(--text-tertiary); }
 .card-st.st-using { color: var(--text-tertiary); }
+/* 【第 39 轮】忽略中：预警图标降级为灰色 🔕，与普通卡片一样安静 */
+.card-st.st-mute  { color: var(--text-tertiary); }
 /* ⚠️ 余量较少：仅文字变橙，不加底色（预警但不用最重的视觉） */
 .card-st.st-warn  { color: var(--orange); font-weight: 600; }
 /* ❗️ 告急：仅文字变红加粗，卡片级红色左边框由 .card-alert 承担 */
@@ -3752,9 +3754,11 @@ function renderItemCard(item, zone) {
   // card-calm / card-warn / card-alert 决定左边框与极淡底色，让需行动的卡「跳出来」
   // 注意：必须在 stL 赋值之后计算（var 提升会让提前引用恒为 undefined）
   var tierCls = ' card-calm';
-  if (stL) {
-    // 【第 38 轮】「忽略」= 用户主动关掉这个物品的告急红框，库存多低都不亮
-    if (stL.cls === 'st-danger' && !item.alertMuted) tierCls = ' card-alert';
+  if (stL && !item.alertMuted) {
+    // 【第 39 轮】「忽略」= 用户主动关掉这个物品的一切库存预警视觉：
+    // 不亮红框（card-alert）、也不亮黄框（card-warn），卡片回归最干净的基础样式
+    // （R38 曾只压红框漏了黄框，用户实测截图复现后修复）
+    if (stL.cls === 'st-danger') tierCls = ' card-alert';
     else if (stL.cls === 'st-warn') tierCls = ' card-warn';
   }
   // 【第 36 轮】凯旋待确认：这个物品下只要有任何一个品牌变体还没核对，总览卡就套紫色阴影
@@ -3787,10 +3791,16 @@ function renderItemCard(item, zone) {
   if (stL) {
     var mdlC = (cModelC === 'instant') ? '⚡' : '⌛';
     var mdlTxt = (cModelC === 'instant') ? '即时消耗型' : '周期消耗型';
+    // 【第 39 轮】忽略中：⚠️/❗️ 预警图标也撤掉，换成灰色 🔕——
+    // 它不再是库存预警视觉，只是一个「已忽略」的安静状态标记
+    var stClsC = stL.cls, stIconC = stL.icon, stLabelC = stL.label;
+    if (item.alertMuted && (stL.cls === 'st-warn' || stL.cls === 'st-danger')) {
+      stClsC = 'st-mute'; stIconC = '🔕'; stLabelC = '已忽略提醒';
+    }
     // 【第 13 轮】两个小图标竖向排列（上下堆叠）
     html += '<span style="flex-shrink:0;display:inline-flex;flex-direction:column;align-items:center;gap:2px;line-height:1">'
       + '<span class="card-model" title="' + mdlTxt + '">' + mdlC + '</span>'
-      + '<span class="card-st ' + stL.cls + '" title="' + stL.label + '">' + stL.icon + '</span>'
+      + '<span class="card-st ' + stClsC + '" title="' + stLabelC + '">' + stIconC + '</span>'
       + '</span>';
   }
   html += '</div>';
@@ -4602,7 +4612,7 @@ function toggleItemAlertMute(itemId) {
   try { if (currentDetailItem && currentDetailItem.id === itemId) renderCardBack(currentDetailItem, currentDetailZone); } catch (e) {}
   try { renderZone(); } catch (e) {}
   try { renderHome(); } catch (e) {}
-  toast(item.alertMuted ? '🔕 已忽略：库存再低，总览卡片也不亮红框' : '🔔 已恢复提示：库存告急时总览卡片亮红框');
+  toast(item.alertMuted ? '🔕 已忽略：库存再低，总览卡片也不亮红/黄框' : '🔔 已恢复提示：库存告急时总览卡片亮红/黄框');
 }
 
 function renderCardBack(item, zone) {
@@ -5511,7 +5521,7 @@ function manualRefresh() {
 
 // ========== 自动更新检查 ==========
 // deploy.py 部署时会把 1791388211 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791951047';
+var APP_VERSION = '1791955156';
 
 function checkAppUpdate(manual) {
   try {
