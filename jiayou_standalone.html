@@ -18,6 +18,7 @@
   --bg: #F2F2F7;
   --card-bg: #FFFFFF;
   --text: #1C1C1E;
+  --text-primary: #1C1C1E;   /* 主文字色别名：历史代码引用了但从未定义，导致回退纯黑 */
   --text-secondary: #8E8E93;
   --text-tertiary: #C7C7CC;
   --separator: #E5E5EA;
@@ -172,6 +173,38 @@ body {
   padding: 12px 4px; font-size: 20px; gap: 8px; border-radius: 11px;
 }
 .act-row.act-row-2 > button i { font-size: 14px; font-weight: 600; }
+/* 【第 38 轮】纯透明玻璃按钮 —— 绝对视觉红线：无底色、无边框、无阴影、无点击高亮，
+   只有图标（SVG 描边色）和文字带颜色，绝不允许出现任何实心颜色块 */
+.act-row.act-row-4 { gap: 4px; margin-bottom: 14px; }
+.act-glass {
+  display: flex; flex-direction: row; align-items: center; justify-content: center;
+  gap: 5px; padding: 11px 2px; font-size: 19px; line-height: 1;
+  font-family: var(--font);
+  background: transparent !important; border: none !important; box-shadow: none !important;
+  border-radius: 10px; cursor: pointer; flex: 1 1 0; min-width: 0;
+  -webkit-tap-highlight-color: transparent; transition: opacity .12s;
+}
+.act-glass:active { opacity: .5; }
+.act-glass i { font-style: normal; font-size: 13px; font-weight: 600; }
+.act-glass svg { flex-shrink: 0; display: block; }
+/* 【第 38 轮】详情页顶部分类行：模型标签 + 分类路径同一行（[周期型] · 面子工程 · 水乳精华）*/
+.back-catline {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  font-size: 12px; color: var(--text-secondary);
+  margin: -2px 0 10px; line-height: 1.6;
+}
+.back-catline .cat-sep { color: var(--text-tertiary); flex-shrink: 0; }
+.back-catline > button:first-child { margin-left: 0 !important; }
+/* 产品名可点击（跳编辑页）：只给手型和按下反馈，不加下划线，保持干净 */
+.back-name-link { cursor: pointer; }
+.back-name-link:active { opacity: .55; }
+/* 【第 38 轮】品牌变体折叠栏 caret */
+.vfold-caret {
+  margin-left: auto; flex-shrink: 0; background: none; border: none;
+  padding: 2px 7px; cursor: pointer; font-size: 11px; line-height: 1;
+  color: var(--text-tertiary); border-radius: 6px; font-family: var(--font);
+}
+.vfold-caret:active { background: var(--bg-secondary); }
 /* 第 12 轮：记录行右侧的极简图标按钮 —— 方形小尺寸，纯图标无文字 */
 .rec-icon-btn {
   flex-shrink: 0; width: 26px; height: 26px; padding: 0;
@@ -3720,7 +3753,8 @@ function renderItemCard(item, zone) {
   // 注意：必须在 stL 赋值之后计算（var 提升会让提前引用恒为 undefined）
   var tierCls = ' card-calm';
   if (stL) {
-    if (stL.cls === 'st-danger') tierCls = ' card-alert';
+    // 【第 38 轮】「忽略」= 用户主动关掉这个物品的告急红框，库存多低都不亮
+    if (stL.cls === 'st-danger' && !item.alertMuted) tierCls = ' card-alert';
     else if (stL.cls === 'st-warn') tierCls = ' card-warn';
   }
   // 【第 36 轮】凯旋待确认：这个物品下只要有任何一个品牌变体还没核对，总览卡就套紫色阴影
@@ -4397,6 +4431,9 @@ function openCardDetail(zoneId, itemId) {
   if (!zone || !item) return;
   currentDetailItem = item;
   currentDetailZone = zone;
+  // 【第 38 轮】品牌变体每次进入详情都默认折叠（防页面臃肿与滑动疲劳）；会话内手动开合保持
+  if (!window._variantFold) window._variantFold = {};
+  window._variantFold[itemId] = false;
 
   // 【第 13 轮 · 修 Bug】盘点后再点产品偶尔打不开详情 —— 根因是某条脏数据让
   // renderCardFront/renderCardBack 抛异常，详情永远渲染不出来，表现为「点了没反应」。
@@ -4411,7 +4448,7 @@ function openCardDetail(zoneId, itemId) {
       '<div class="detail-front"><div class="detail-body">'
       + '<div class="detail-name">' + escapeHtml(item.name || '') + '</div>'
       + '<div class="detail-cat">' + zone.icon + ' ' + zone.name + '</div>'
-      + '<div style="margin-top:14px;padding:12px;border-radius:10px;background:var(--bg);font-size:13px;color:var(--text-secondary);text-align:center">该物品存在异常数据，已降级显示。<br>可点「🪄 编辑」重新保存一次即可修复。</div>'
+      + '<div style="margin-top:14px;padding:12px;border-radius:10px;background:var(--bg);font-size:13px;color:var(--text-secondary);text-align:center">该物品存在异常数据，已降级显示。<br>点上方产品名进入编辑页，重新保存一次即可修复。</div>'
       + '</div></div>';
   }
   try {
@@ -4423,7 +4460,7 @@ function openCardDetail(zoneId, itemId) {
       + '<div class="back-header"><div class="back-title">' + escapeHtml(item.name || '') + '</div>'
       + '<div style="display:flex;gap:6px;align-items:center"><button class="back-close" onclick="closeCardDetail()">✕</button></div></div>'
       + '<div class="back-section"><div class="back-section-title">⚠️ 详情渲染遇到异常数据</div>'
-      + '<div style="font-size:13px;color:var(--text-secondary);line-height:1.6">已自动降级显示，避免整页卡死。<br>建议点「🪄 编辑」→「💾 保存」重存一次，即可把数据修正到正常口径。</div></div>'
+      + '<div style="font-size:13px;color:var(--text-secondary);line-height:1.6">已自动降级显示，避免整页卡死。<br>建议点产品名进入编辑页 →「💾 保存」重存一次，即可把数据修正到正常口径。</div></div>'
       + '</div>';
   }
 
@@ -4533,12 +4570,48 @@ function lastEditableRecordIdx(item) {
 // 物品级「不复购」：全部在用品牌一键标记/取消 noRestock（第 9 轮顶部按钮）
 // （第 11 轮已删除卡片级 toggleItemNoRestock：弃用语义下沉到品牌变体 toggleVariantNoRestock）
 
+// 【第 38 轮】透明玻璃按钮的 SVG 图标：描边带色，本身绝不带任何底色/边框
+function actGlassIcon(kind, color) {
+  var a = 'width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="' + color
+    + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+  if (kind === 'sun') return '<svg ' + a + '><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
+  if (kind === 'scale') return '<svg ' + a + '><path d="M12 3v17M8 20h8M5 7h14"/><path d="M5 7l-2 4.6a2.9 2.9 0 0 0 4 0L5 7z"/><path d="M19 7l-2 4.6a2.9 2.9 0 0 0 4 0L19 7z"/></svg>';
+  if (kind === 'bell') return '<svg ' + a + '><path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"/><path d="M13.7 20a2 2 0 0 1-3.4 0"/></svg>';
+  if (kind === 'belloff') return '<svg ' + a + '><path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"/><path d="M13.7 20a2 2 0 0 1-3.4 0"/><path d="M4 4l16 16"/></svg>';
+  if (kind === 'spark') return '<svg ' + a + '><path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.9L12 3z"/></svg>';
+  return '';
+}
+
+// 【第 38 轮】品牌变体折叠：默认收起，点 ▼ 展开；开合状态按物品记忆
+function toggleVariantFold(itemId) {
+  if (!window._variantFold) window._variantFold = {};
+  window._variantFold[itemId] = !window._variantFold[itemId];
+  var open = window._variantFold[itemId];
+  if (currentDetailItem && currentDetailItem.id === itemId && currentDetailZone) {
+    renderCardBack(currentDetailItem, currentDetailZone);
+  }
+  toast(open ? '▼ 已展开品牌变体' : '▲ 已收起品牌变体');
+}
+
+// 【第 38 轮】提示/忽略 单选切换：忽略 = 总览卡片永不亮红框（库存多低都不亮）
+function toggleItemAlertMute(itemId) {
+  var item = findItemByIdGlobal(itemId);
+  if (!item) return;
+  item.alertMuted = !item.alertMuted;
+  saveDB();
+  try { if (currentDetailItem && currentDetailItem.id === itemId) renderCardBack(currentDetailItem, currentDetailZone); } catch (e) {}
+  try { renderZone(); } catch (e) {}
+  try { renderHome(); } catch (e) {}
+  toast(item.alertMuted ? '🔕 已忽略：库存再低，总览卡片也不亮红框' : '🔔 已恢复提示：库存告急时总览卡片亮红框');
+}
+
 function renderCardBack(item, zone) {
   var html = '<div class="detail-back">';
   // === 顶部：父名称 + 详细消耗模型 + ✕ ===
   // 第 11 轮：右上角「⋯」三点菜单已删除（与分类右侧三按钮功能重复）
   html += '<div class="back-header">';
-  html += '<div class="back-title">' + escapeHtml(item.name) + consumeModelBadgeHtml(item) + '</div>';
+  // 【第 38 轮】产品名可点击 → 直达编辑页（与模型标签一样，是「改它」的入口）
+  html += '<div class="back-title"><span class="back-name-link" title="点击编辑此物品" onclick="editItem(\'' + item.id + '\')">' + escapeHtml(item.name) + '</span></div>';
   html += '<div style="display:flex;gap:6px;align-items:center">';
   html += '<button class="back-close" onclick="closeCardDetail()">✕</button>';
   html += '</div>';
@@ -4547,42 +4620,40 @@ function renderCardBack(item, zone) {
   if (zone.type === 'consumable') {
     var cModel = consumeModelOf(item);
     var isInstantB = (cModel === 'instant'); // 即时消耗型：顶部一行四按钮
-    // === 副标题：分类 · 存放位置（左） + [🪄 编辑][💾 归档][⚰️ 永删]（右） ===
-    // 第 11 轮：去掉右上角「⋯」三点菜单（功能重复），改为分类右侧三个明确按钮
-    html += '<div style="display:flex;align-items:center;gap:8px;margin:-2px 0 8px">';
-    html += '<div style="flex:1;min-width:0;font-size:12px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
-      + (getCategoryPath(zone.id, item.categoryId) || '未分类')
-      + (item.location ? ' · 📍 ' + escapeHtml(item.location) : '')
+    // === 【第 38 轮】分类并入模型标签同一行：[周期型] · 面子工程 · 水乳精华 ===
+    // 编辑/归档/永删全部收进编辑页（防误触、详情页极简），这里只留信息
+    html += '<div class="back-catline">' + consumeModelBadgeHtml(item)
+      + '<span class="cat-sep">·</span><span>' + escapeHtml(getCategoryPath(zone.id, item.categoryId) || '未分类') + '</span>'
+      + (item.location ? '<span class="cat-sep">·</span><span>📍 ' + escapeHtml(item.location) + '</span>' : '')
       + '</div>';
-    html += '<div style="display:flex;gap:4px;flex-shrink:0">';
-    html += '<button class="btn btn-outline btn-sm" style="font-size:11px;padding:3px 8px" onclick="editItem(\'' + item.id + '\')">🪄 编辑</button>';
-    html += '<button class="btn btn-outline btn-sm" style="font-size:11px;padding:3px 8px' + (item.archived ? ';color:var(--green);border-color:rgba(52,199,89,0.4)' : '') + '" onclick="' + (item.archived ? 'unarchiveItem' : 'archiveItem') + '(\'' + item.id + '\')">' + (item.archived ? '↩️ 取消归档' : '💾 归档') + '</button>';
-    html += '<button class="btn btn-outline btn-sm" style="font-size:11px;padding:3px 8px;color:var(--red);border-color:rgba(255,59,48,0.35)" onclick="deleteItem(\'' + item.id + '\')">⚰️ 永删</button>';
-    html += '</div>';
-    html += '</div>';
 
-    // === 操作区（分类下一行）===
-    // 第 11 轮：统一浅灰边框（btn-outline），去掉蓝色主按钮 —— 颜色留给预警与委托
-    // 第 12 轮：图标为主 + 极小文字
-    //  【第 37 轮】旧「补货」已彻底删除，「委托」上移到总览卡片 → 详情页只剩两个按钮，
-    //    用 act-row-2 各占一半宽度、图标文字整体放大，撑满整行不留尴尬空白
+    // === 操作区（第 38 轮：四枚纯透明玻璃按钮）===
+    // ⚠️ 绝对视觉红线：无底色、无边框、无阴影 —— 只有 SVG 图标描边色和文字带颜色
+    var gOpen = '#FFB74D', gAudit = '#9E9E9E';                  // 开封=浅橙 / 盘点=浅灰
+    var gOn = '#81C784', gOff = '#4DD0E1', gDim = '#C4C4C9';    // 提示=浅绿 / 忽略=浅青 / 未选中=浅灰
+    var gTxt = 'var(--text)';
+    var mutedR38 = !!item.alertMuted;                            // true=忽略（总览永不红框）
     if (isInstantB) {
-      // 【第 25 轮】删掉「回退 / 批量」；【第 37 轮】删「委托」（已上移总览卡片）
       //   【第 24 轮】即时型归零即自动闭环 → 库存为 0 时【消耗】一律置灰，杜绝点了才提示
       var instLeftB = instantTotalStock(item);
-      var opBtn = 'btn btn-outline btn-sm act-mini';
-      html += '<div class="act-row act-row-2">';
-      html += '<button class="' + opBtn + '"'
+      html += '<div class="act-row act-row-4">';
+      html += '<button class="act-glass"'
         + (instLeftB > 0 ? '' : ' disabled style="opacity:.45"')
-        + ' onclick="' + (instLeftB > 0 ? 'punchInstantPick(\'' + item.id + '\')' : 'toast(\\\'已经用完了，去总览卡片点「委托」补一批吧\\\')') + '">✨<i>消耗</i></button>';
-      html += '<button class="' + opBtn + '" onclick="openStockAuditForm(\'' + item.id + '\')">⚖️<i>盘点</i></button>';
-      html += '</div>';
+        + ' onclick="' + (instLeftB > 0 ? 'punchInstantPick(\'' + item.id + '\')' : 'toast(\\\'已经用完了，去总览卡片点「委托」补一批吧\\\')') + '">' + actGlassIcon('spark', gOpen) + '<i style="color:' + gTxt + '">消耗</i></button>';
+      html += '<button class="act-glass" onclick="openStockAuditForm(\'' + item.id + '\')">' + actGlassIcon('scale', gAudit) + '<i style="color:' + gTxt + '">盘点</i></button>';
     } else {
-      html += '<div class="act-row act-row-2">';
-      html += '<button class="btn btn-outline btn-sm act-mini" onclick="openItem(\'' + item.id + '\')">🔅<i>开封</i></button>';
-      html += '<button class="btn btn-outline btn-sm act-mini" onclick="openStockAuditForm(\'' + item.id + '\')">⚖️<i>盘点</i></button>';
-      html += '</div>';
+      html += '<div class="act-row act-row-4">';
+      html += '<button class="act-glass" onclick="openItem(\'' + item.id + '\')">' + actGlassIcon('sun', gOpen) + '<i style="color:' + gTxt + '">开封</i></button>';
+      html += '<button class="act-glass" onclick="openStockAuditForm(\'' + item.id + '\')">' + actGlassIcon('scale', gAudit) + '<i style="color:' + gTxt + '">盘点</i></button>';
     }
+    // 提示 / 忽略：单选切换（两个按钮都调同一个 toggle；选中=彩色，未选中=浅灰）
+    html += '<button class="act-glass" title="库存告急时总览卡片亮红框" onclick="toggleItemAlertMute(\'' + item.id + '\')">'
+      + actGlassIcon('bell', mutedR38 ? gDim : gOn)
+      + '<i style="color:' + (mutedR38 ? gDim : gOn) + '">提示</i></button>';
+    html += '<button class="act-glass" title="忽略后库存再低也不亮红框" onclick="toggleItemAlertMute(\'' + item.id + '\')">'
+      + actGlassIcon('belloff', mutedR38 ? gOff : gDim)
+      + '<i style="color:' + (mutedR38 ? gOff : gDim) + '">忽略</i></button>';
+    html += '</div>';
 
     // === 信息区（第 11 轮：逻辑链 总库存 → 告急阈值 → 月/年消耗量 → 采购建议）===
     // 严格按「我有多少 → 低于多少该补 → 用多快 → 所以我该买什么」排列
@@ -4665,8 +4736,16 @@ function renderCardBack(item, zone) {
       var showDone = !!(window._showDoneVariants && window._showDoneVariants[item.id]);
       var listVs = showDone ? item.variants : liveVs;
       html += '<div class="back-section">';
-      html += '<div class="back-section-title">品牌变体 (' + liveVs.length + '个在用' + (doneVs.length ? ' · 已藏' + doneVs.length + '个' : '') + ')</div>';
-      listVs.forEach(function(v, vi) {
+      // 【第 38 轮】品牌变体默认折叠：▼/▲ 一键开合；折叠后下方「使用记录/消耗概览」自动上移，杜绝滑动疲劳
+      var vFoldOpen = !!(window._variantFold && window._variantFold[item.id]);
+      html += '<div class="back-section-title" style="display:flex;align-items:center;gap:6px;margin-bottom:0">'
+        + '<span>品牌变体 (' + liveVs.length + '个在用' + (doneVs.length ? ' · 已藏' + doneVs.length + '个' : '') + ')</span>'
+        + '<button class="vfold-caret" title="' + (vFoldOpen ? '收起品牌变体' : '展开品牌变体') + '" onclick="toggleVariantFold(\'' + item.id + '\')">' + (vFoldOpen ? '▲' : '▼') + '</button>'
+        + '</div>';
+      if (!vFoldOpen) {
+        html += '<div style="padding:11px 12px;margin-top:7px;border-radius:10px;background:var(--bg-secondary);font-size:12px;color:var(--text-secondary);text-align:center;cursor:pointer" onclick="toggleVariantFold(\'' + item.id + '\')">👥 共 ' + item.variants.length + ' 个品牌 · 点开查看明细与操作</div>';
+      }
+      (vFoldOpen ? listVs : []).forEach(function(v, vi) {
         var isUsing = v.opened && !v.usedUp;
         var isDone = isVariantDone(v, item);
         var cardCls = 'variant-card' + (isUsing ? ' vc-using' : (isDone ? ' vc-done' : '')) + (v.noRestock ? ' vc-norestock' : '');
@@ -4892,8 +4971,8 @@ function renderCardBack(item, zone) {
         if (footBtns) { html += '<div class="vc-foot">' + footBtns + '</div>'; }
         html += '</div>';
       });
-      // 折叠行：已用完 / 不再买的品牌
-      if (doneVs.length > 0) {
+      // 折叠行：已用完 / 不再买的品牌（仅展开态显示）
+      if (vFoldOpen && doneVs.length > 0) {
         html += '<div style="margin-top:10px;padding:10px 12px;border-radius:10px;background:rgba(142,142,147,0.10);font-size:12px;color:var(--text-secondary);text-align:center;cursor:pointer" onclick="toggleDoneVariants(\'' + item.id + '\')">';
         html += showDone ? '🔼 收起已用完 / 不再买的 ' + doneVs.length + ' 个品牌' : '👁 已藏 ' + doneVs.length + ' 个用完 / 不再买的品牌 · 点开查看';
         html += '</div>';
@@ -5432,7 +5511,7 @@ function manualRefresh() {
 
 // ========== 自动更新检查 ==========
 // deploy.py 部署时会把 1791388211 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791892064';
+var APP_VERSION = '1791951047';
 
 function checkAppUpdate(manual) {
   try {
@@ -6391,11 +6470,13 @@ function openItemForm(itemId) {
   var html = '<div class="modal-handle"></div>';
   html += '<div class="modal-title">' + (item ? '编辑物品' : '添加物品') + '</div>';
 
-  // 顶部快捷操作：保存 / 删除（字段多时免滑到底部）
+  // 【第 38 轮】编辑页承担全部管理职责：💾 保存(蓝) / 🎞️ 归档(灰) / ⚰️ 永删(红)
+  // 详情页已不再保留编辑/永删入口，防误触全部收拢到这里
   html += '<div style="display:flex;gap:8px;margin-bottom:14px">';
-  html += '<button class="btn btn-primary" style="flex:1" onclick="saveItem()">💾 保存</button>';
+  html += '<button class="btn btn-primary" style="flex:2" onclick="saveItem()">💾 保存</button>';
   if (item) {
-    html += '<button class="btn btn-danger" style="flex-shrink:0" onclick="deleteItem(\'' + item.id + '\')">🗑 删除</button>';
+    html += '<button class="btn" style="flex:1;background:rgba(142,142,147,0.14);color:var(--text-secondary);font-weight:600" onclick="' + (item.archived ? 'unarchiveItem' : 'archiveItem') + '(\'' + item.id + '\')">' + (item.archived ? '📤 取消归档' : '🎞️ 归档') + '</button>';
+    html += '<button class="btn" style="flex:1;background:transparent;color:var(--red);border:1.5px solid rgba(255,59,48,0.45);font-weight:600" onclick="deleteItem(\'' + item.id + '\')">⚰️ 永删</button>';
   }
   html += '</div>';
 
@@ -6509,7 +6590,7 @@ function openItemForm(itemId) {
 
   html += '<button class="btn btn-primary btn-full" onclick="saveItem()">' + (item?'保存修改':'添加') + '</button>';
   if (item) {
-    html += '<button class="btn btn-danger btn-full" style="margin-top:8px" onclick="deleteItem(\'' + item.id + '\')">删除</button>';
+    html += '<button class="btn btn-full" style="margin-top:8px;background:transparent;color:var(--red);border:1.5px solid rgba(255,59,48,0.45);font-weight:600" onclick="deleteItem(\'' + item.id + '\')">⚰️ 永删</button>';
   }
 
   document.getElementById('modal-content').innerHTML = html;
