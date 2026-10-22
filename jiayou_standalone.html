@@ -2134,8 +2134,22 @@ function variantPackText(v, item) {
       t += '（无未开包）';
     }
     // 在用包（已开封、还没记「用完」）单独提示，绝不与未开数混算
-    var actN = item ? variantActiveOpenRecs(item, v).length : 0;
-    if (actN > 0) t += ' · 另有 ' + trimNum(actN) + ' 包在用';
+    // 【第 41 轮】按真实包数汇总：一条流水可能是一批（packs>1，一次开 N 包），绝不能按条数算
+    var actPacks = 0;
+    if (item) {
+      variantActiveOpenRecs(item, v).forEach(function (r) {
+        var pqA2 = 1;
+        if (r.specName) {
+          var sA2 = spAll.find(function (x) { return String(x.name || '').trim() === String(r.specName).trim(); });
+          if (sA2) pqA2 = specPackQty(sA2);
+        } else {
+          pqA2 = parseFloat(v.packQty) || 1;
+        }
+        actPacks += recordPacksOf(r, pqA2);
+      });
+    }
+    actPacks = Math.round(actPacks * 100) / 100;
+    if (actPacks > 0) t += ' · 另有 ' + trimNum(actPacks) + ' 包在用';
     return t;
   }
   var stock = v.stock || 0;
@@ -2690,17 +2704,21 @@ function inUseStockOf(item) {
     var w = parseFloat(v.packWeight) || 0;
     recs.forEach(function (r) {
       if (sp.length) {
-        // 多规格：每条未结束开封记录 = 1 包在用；r.qty = 开启时自动带入的「每包含量/每包片数」
-        out.qty += 1;
+        // 多规格：每条未结束开封记录 = recordPacksOf 包在用（R41：一条流水可能是一批 N 包）；
+        // r.qty 新口径 = 每包含量 × 包数，单包含量以 packPieces 为准（老数据退回 qty）
         var s1 = null;
         for (var i = 0; i < sp.length; i++) {
           if (String(sp[i].name || '') === String(r.specName || '')) { s1 = sp[i]; break; }
         }
-        var perPack = parseFloat(r.qty);
+        var pq1 = s1 ? specPackQty(s1) : (parseFloat(r.packPieces) || 1);
+        var nPacks = recordPacksOf(r, pq1);
+        out.qty += nPacks;
+        var perPack = parseFloat(r.packPieces);
+        if (!(perPack > 0)) perPack = parseFloat(r.qty);
         if (!(perPack > 0) && s1) perPack = specPackQty(s1);
         if (!(perPack > 0)) perPack = 1;
         if (s1 && isContentUnitText(s1.unit)) {
-          out.content += perPack * (specContentOf(s1) || 1);
+          out.content += perPack * nPacks * (specContentOf(s1) || 1);
         } else {
           out.hasContent = false;   // 片/粒类或对不上规格 → 含量口径不完整
         }
@@ -3157,6 +3175,21 @@ function recordPacks(item, r) {
   if (per > 0 && q > per) return Math.max(1, Math.round(q / per));      // qty 比单包容量大 → qty 存的是容量
   if (per > 0 && Math.abs(q - per) < 0.01) return 1;                    // qty 正好等于单包容量 → 开了 1 件
   return q;                                                             // 其余：qty 本身就是件数
+}
+// ===== 【第 41 轮】一条「开启新包」流水代表的包数 =====
+// 背景：开启新包 historically 一条记录只开 1 包；R41 起支持一次开 N 包、只生成 1 条流水，
+//   于是记录必须自带「包数」。旧数据没有这个字段 → 一律按 1 包兼容（老口径：一开一记录），
+//   绝不猜、绝不改写历史。pq = 该规格每包含量（用于从旧 qty=每包含量×包数 的记录反推）。
+function recordPacksOf(r, pq) {
+  if (!r) return 0;
+  if (r.packs !== undefined && r.packs !== null && r.packs !== '') {
+    var p = parseFloat(r.packs);
+    if (isFinite(p) && p > 0) return Math.round(p * 100) / 100;
+  }
+  var q = parseFloat(r.qty) || 0;
+  var per = parseFloat(pq) || 0;
+  if (per > 0 && q > per + 0.01) return Math.max(1, Math.round((q / per) * 100) / 100); // 旧多包记录：qty = 每包含量 × 包数
+  return 1;
 }
 // 唯一的乘法：总容量 = 件数 × 单包容量
 function recordCap(item, r) {
@@ -4343,6 +4376,36 @@ function openUsageEdit(itemId, idx) {
     document.getElementById('modal-overlay').classList.add('show');
     return;
   }
+  // === 【第 41 轮】规格型「开启新包」流水：编辑的是「包数」，不再是每包含量 ===
+  // 背景（用户截图复现）：旧弹窗把 r.qty（每包含量，如 50g）当「消耗数量（包）」预填，
+  //   用户改成 10 以为改了包数，保存后 r.qty=10 但 openPacks 没动 → 库存不扣，假账。
+  // 现在：规格型记录一律按「本次开启包数」编辑，保存即按差额同步库存。
+  var vSpecR = (r.variantId && !r.instant) ? (item.variants || []).find(function (x) { return x.id === r.variantId; }) : null;
+  var sSpecR = (vSpecR && r.specName) ? (variantSpecsOf(vSpecR) || []).find(function (x) { return String(x.name || '').trim() === String(r.specName).trim(); }) : null;
+  if (sSpecR) {
+    var pqR = specPackQty(sSpecR), uR = sSpecR.unit || '';
+    var packsNow = recordPacksOf(r, pqR);
+    var remainNow = specPacksRemaining(vSpecR, sSpecR);
+    html += '<div style="font-size:12px;color:var(--orange);margin-bottom:10px">📦 ' + escapeHtml(r.specName) + ' 开封流水 · 修改包数会立即同步库存（改多 → 再扣；改少 → 退回）</div>';
+    html += '<div class="form-group"><label class="form-label">本次开启包数（包）</label>';
+    html += '<div style="display:flex;align-items:center;gap:10px">';
+    html += '<button class="btn btn-outline" style="flex:1;font-size:22px;padding:10px 0;font-weight:700" onclick="urPackStep(-1)">−</button>';
+    html += '<input type="number" class="form-input" id="ur-packs" min="1" step="1" value="' + packsNow + '" max="' + (Math.floor(remainNow) + packsNow) + '" style="flex:2;font-size:24px;text-align:center;font-weight:700" oninput="urPackClamp()">';
+    html += '<button class="btn btn-outline" style="flex:1;font-size:22px;padding:10px 0;font-weight:700" onclick="urPackStep(1)">＋</button>';
+    html += '</div></div>';
+    html += '<div style="font-size:12px;color:var(--text-tertiary);margin-top:-4px;margin-bottom:10px">每包 ' + trimNum(pqR) + escapeHtml(uR) + ' · 当前剩 ' + trimNum(remainNow) + ' 包未开（最多改成 ' + (Math.floor(remainNow) + packsNow) + ' 包）</div>';
+    html += '<div class="form-group"><label class="form-label">开始日期</label><input type="date" class="form-input" id="ur-start" value="' + fmt(r.startDate) + '"></div>';
+    html += '<div class="form-group"><label class="form-label">结束日期（留空 = 使用中）</label><input type="date" class="form-input" id="ur-end" value="' + fmt(r.endDate) + '"></div>';
+    html += '<div style="font-size:11px;color:var(--text-tertiary);margin-top:-4px">⚠️ 结束日期不能等于开始时间：0 天记录会被判定无效，不参与消耗速率计算</div>';
+    html += '<div style="display:flex;gap:10px;margin-top:14px">';
+    html += '<button class="btn btn-danger" style="flex:1" onclick="deleteUsageRecord(\'' + itemId + '\',' + idx + ')">🗑️ 删除</button>';
+    html += '<button class="btn btn-primary" style="flex:2" onclick="saveUsageEdit(\'' + itemId + '\',' + idx + ')">保存</button>';
+    html += '</div>';
+    html += '<button class="btn btn-ghost btn-full" style="margin-top:8px;color:var(--red)" onclick="clearAllUsageRecords(\'' + itemId + '\')">🗑️ 清空全部使用记录</button>';
+    document.getElementById('modal-content').innerHTML = html;
+    document.getElementById('modal-overlay').classList.add('show');
+    return;
+  }
   html += '<div class="form-group"><label class="form-label">消耗数量（' + rateUnitName(item) + '）</label><input type="number" class="form-input" id="ur-qty" step="0.01" min="0" value="' + (r.qty || 1) + '"></div>';
   html += '<div class="form-group"><label class="form-label">开始日期</label><input type="date" class="form-input" id="ur-start" value="' + fmt(r.startDate) + '"></div>';
   html += '<div class="form-group"><label class="form-label">结束日期（留空 = 使用中）</label><input type="date" class="form-input" id="ur-end" value="' + fmt(r.endDate) + '"></div>';
@@ -4356,6 +4419,25 @@ function openUsageEdit(itemId, idx) {
   html += '<button class="btn btn-ghost btn-full" style="margin-top:8px;color:var(--red)" onclick="clearAllUsageRecords(\'' + itemId + '\')">🗑️ 清空全部使用记录</button>';
   document.getElementById('modal-content').innerHTML = html;
   document.getElementById('modal-overlay').classList.add('show');
+}
+// 编辑弹窗「包数」加减号：夹在 [1, 剩余未开包数 + 本记录已开包数]
+function urPackStep(d) {
+  var el = document.getElementById('ur-packs');
+  if (!el) return;
+  var mx = parseInt(el.getAttribute('max') || '9999', 10) || 9999;
+  var n = Math.floor(parseFloat(el.value) || 1) + d;
+  if (n < 1) n = 1;
+  if (n > mx) n = mx;
+  el.value = n;
+}
+function urPackClamp() {
+  var el = document.getElementById('ur-packs');
+  if (!el) return;
+  var mx = parseInt(el.getAttribute('max') || '9999', 10) || 9999;
+  var n = Math.floor(parseFloat(el.value) || 1);
+  if (n < 1) n = 1;
+  if (n > mx) { n = mx; toast('最多只能改成 ' + mx + ' 包（未开库存 + 本记录已开）'); }
+  el.value = n;
 }
 // 即时打卡记录编辑：改数量时把差额同步回库存（改多 → 库存再减；改少 → 库存退回）
 function saveInstantRecordEdit(itemId, idx) {
@@ -4393,9 +4475,57 @@ function saveUsageEdit(itemId, idx) {
   if (!item || !item.usageRecords || !item.usageRecords[idx]) { closeModal(); return; }
   var r = item.usageRecords[idx];
   var isAuditR = !!r.isAudit || r.type === 'surplus';
-  var q = parseFloat(document.getElementById('ur-qty').value);
+  // === 【第 41 轮 · 核心】规格型「开启新包」流水：改包数 → 立刻联动库存 ===
+  // 用户原话：「把开启数量从 1 改成 10，保存后底部流水变了，但顶部总库存根本没有减去那 9 包的差额！」
+  // 公式：剩余 = 累计到货 − 所有使用记录消耗总和。这里按差额同步：
+  //   改多 N 包 → 该规格已开包数 +N（库存再扣）；改少 N 包 → −N（库存退回）。
+  //   盘点流水（isAudit/surplus）绝不走此分支——它们的 openPacks 调整由下面专门处理，
+  //   否则「按记录重算」会抹掉用户实地盘点的物理校正值。
+  var vSpecR = (r.variantId && !r.instant && !isAuditR) ? (item.variants || []).find(function (x) { return x.id === r.variantId; }) : null;
+  var sSpecR = (vSpecR && r.specName) ? (variantSpecsOf(vSpecR) || []).find(function (x) { return String(x.name || '').trim() === String(r.specName).trim(); }) : null;
+  if (sSpecR) {
+    var pqS = specPackQty(sSpecR), uS = sSpecR.unit || '';
+    var oldPacks = recordPacksOf(r, pqS);
+    var pEl = document.getElementById('ur-packs');
+    var newPacks = Math.floor(parseFloat(pEl ? pEl.value : oldPacks) || oldPacks);
+    if (newPacks < 1) newPacks = 1;
+    var remainS = specPacksRemaining(vSpecR, sSpecR);
+    var maxP = Math.floor(remainS) + oldPacks;   // 上限 = 当前未开 + 本记录已开（物理库存封顶）
+    if (newPacks > maxP) { toast('⚠️ 库存不足：最多只能改成 ' + maxP + ' 包'); return; }
+    var sd = document.getElementById('ur-start').value;
+    var ed = document.getElementById('ur-end').value;
+    if (sd) r.startDate = sd;
+    if (ed) { r.endDate = ed; } else { delete r.endDate; }
+    // 0 天记录拦截：填了结束日期且等于开始日期 → 直接拒绝保存
+    if (r.startDate && r.endDate && isZeroDayRecord(r)) {
+      toast('⚠️ 结束日期不能等于开始日期（0 天记录会污染消耗速率），请修正');
+      return;
+    }
+    // === 库存联动（差额法）：与 saveInstantRecordEdit 同构，绝不抹盘点校正 ===
+    var dPacks = Math.round((newPacks - oldPacks) * 100) / 100;
+    if (dPacks !== 0) {
+      sSpecR.openPacks = Math.max(0, Math.round((specOpenPacks(sSpecR) + dPacks) * 100) / 100);
+      sSpecR.qty = Math.round(specPackCount(sSpecR) * pqS * 100) / 100;
+      vSpecR.stock = variantSpecContent(vSpecR);
+      if (vSpecR.stock > 0 && vSpecR.usedUp) { vSpecR.usedUp = false; vSpecR.finishDate = null; }
+    }
+    // 流水字段同步：packs（包数）/ qty（每包含量×包数）/ contentUsed / specText
+    r.packs = newPacks;
+    r.qty = Math.round(newPacks * pqS * 100) / 100;
+    r.packPieces = pqS;
+    r.contentUsed = Math.round(newPacks * pqS * specContentOf(sSpecR) * 100) / 100;
+    r.specText = (sSpecR.name || r.specName) + '×' + trimNum(newPacks) + '包' + (pqS !== 1 ? '（' + trimNum(pqS) + uS + '）' : '');
+    reconcileItemState(item);
+    saveDB();
+    closeModal();
+    refreshItemViews(item);
+    toast('✅ 已改为开启 ' + trimNum(newPacks) + ' 包' + (dPacks > 0 ? '，库存再扣 ' + trimNum(dPacks * pqS) + uS : (dPacks < 0 ? '，库存退回 ' + trimNum(-dPacks * pqS) + uS : '')));
+    return;
+  }
+  var qEl = document.getElementById('ur-qty');
+  var q = qEl ? parseFloat(qEl.value) : NaN;
   var oldQ = parseFloat(r.qty) || 0;
-  r.qty = (isNaN(q) || q <= 0) ? 1 : Math.round(q * 100) / 100;
+  if (qEl) r.qty = (isNaN(q) || q <= 0) ? 1 : Math.round(q * 100) / 100;
   var s = document.getElementById('ur-start').value;
   var e = document.getElementById('ur-end').value;
   if (s) r.startDate = s;
@@ -4405,6 +4535,23 @@ function saveUsageEdit(itemId, idx) {
   if (r.startDate && r.endDate && isZeroDayRecord(r)) {
     toast('⚠️ 结束日期不能等于开始日期（0 天记录会污染消耗速率），请修正');
     return;
+  }
+  // === 普通（非规格、非打卡、非盘点）记录：数量差额同步回库存 ===
+  // 与 saveInstantRecordEdit 同构：改多 → 库存再扣；改少 → 库存退回。
+  // 有规格明细的变体不走这里（消耗记在 openPacks，由上面的规格分支负责）。
+  if (!isAuditR && !r.instant) {
+    var vN = (r.variantId) ? (item.variants || []).find(function (x) { return x.id === r.variantId; }) : null;
+    if (vN && !variantSpecsOf(vN).length) {
+      var dqN = Math.round((r.qty - oldQ) * 100) / 100;
+      if (dqN !== 0) {
+        var stockN = parseFloat(vN.stock) || 0;
+        var newStockN = Math.round((stockN - dqN) * 100) / 100;
+        if (newStockN < 0) { toast('⚠️ 库存不足：最多只能改成 ' + trimNum(stockN + oldQ) + (vN.packUnit || mainPackUnit(item) || '件')); return; }
+        vN.stock = newStockN;
+        if (vN.stock > 0 && vN.usedUp) { vN.usedUp = false; vN.finishDate = null; }
+        else if (vN.stock <= 0 && !vN.usedUp) { vN.usedUp = true; vN.finishDate = new Date().toISOString(); }
+      }
+    }
   }
   // === 盘点流水：数量差额同步回库存（盘亏改多 → 库存再减；改少 → 库存退回）===
   if (isAuditR) {
@@ -4484,8 +4631,10 @@ function rollbackRecordConsumption(item, r) {
     // 盘点流水：按生成时记录的包数精确回滚；盘盈删除则反向加回已开包数
     if (r.type === 'surplus') back = -(parseFloat(r.auditPacks) || 0);
     else back = parseFloat(r.auditPacks) || 1;
-  } else if (pq > 0 && (parseFloat(r.qty) || 0) > pq) {
-    back = Math.max(1, Math.ceil((parseFloat(r.qty) || pq) / pq - 1e-9));
+  } else {
+    // 【第 41 轮】开封流水：一条可能代表一批（packs>1，一次开 N 包），按真实包数回滚；
+    //   旧记录没有 packs 字段 → recordPacksOf 内部按 qty 反推，单包记录一律回退 1 包
+    back = recordPacksOf(r, pq);
   }
   s.openPacks = Math.max(0, Math.round((specOpenPacks(s) - back) * 100) / 100);
   s.qty = Math.round(specPackCount(s) * pq * 100) / 100;
@@ -4909,12 +5058,27 @@ function renderCardBack(item, zone) {
         // 并行展示：使用中时把「并行条数」也标出来（如 2 瓶同时开 → 2 件使用中）
         var actRecsV = variantActiveOpenRecs(item, v);
         var actCountV = actRecsV.length;
+        // 【第 41 轮】在用汇总按真实包数/件数：一条流水可能是一批（packs>1），绝不按条数算
+        var actInUseV = (function () {
+          var q = 0, isSpec = false;
+          var spV = variantSpecsOf(v);
+          actRecsV.forEach(function (r) {
+            if (spV.length && r.specName) {
+              var s1 = spV.find(function (x) { return String(x.name || '').trim() === String(r.specName).trim(); });
+              q += recordPacksOf(r, s1 ? specPackQty(s1) : (parseFloat(r.packPieces) || 1));
+              isSpec = true;
+            } else {
+              q += (parseFloat(r.qty) > 0 ? parseFloat(r.qty) : 1);
+            }
+          });
+          return { qty: Math.round(q * 100) / 100, unit: isSpec ? '包' : '件' };
+        })();
         // 第 11 轮：品牌名与「💕感受 / 🚮弃用」并排 —— 感受只属于具体品牌，主卡不再有入口
         html += '<div class="vc-head" style="gap:6px">';
         html += '<div class="vc-brand" style="flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(v.brand || '未命名') + '</div>';
         // 状态徽章紧跟名字
         if (v.noRestock) html += '<span class="vc-badge norestock">🚫 不再买</span>';
-        else if (isUsing) html += '<span class="vc-badge using">' + (actCountV > 1 ? actCountV + ' 件使用中' : '使用中') + '</span>';
+        else if (isUsing) html += '<span class="vc-badge using">' + (actInUseV.qty > 1 ? actInUseV.qty + ' ' + actInUseV.unit + '使用中' : '使用中') + '</span>';
         else if (isDone) html += '<span class="vc-badge done">已用完</span>';
         else if (variantSpecsOf(v).length || (v.stock || 0) > 0) html += '<span class="vc-badge" style="background:rgba(142,142,147,0.12);color:var(--text-secondary)">待开封</span>';
         // 【第 36 轮】凯旋待确认：平时不显示（布局零改动）；凯旋入库后亮起紫色，核对完点「确认完毕」核销
@@ -5019,7 +5183,10 @@ function renderCardBack(item, zone) {
             var dDays = rc.startDate ? daysBetween(new Date(rc.startDate), new Date()) : 0;
             var qTxt = '';
             if (rc.packPieces) {
-              qTxt = (rc.specName ? escapeHtml(rc.specName) + ' · ' : '') + '1包（' + trimNum(rc.packPieces) + (v.packUnit || mainPackUnit(item)) + '）';
+              // R41：一条记录可能代表一批（packs>1），显示真实包数
+              var pqR = specPackQty((variantSpecsOf(v) || []).filter(function (x) { return String(x.name || '') === String(rc.specName || ''); })[0] || {});
+              var packsR = recordPacksOf(rc, pqR);
+              qTxt = (rc.specName ? escapeHtml(rc.specName) + ' · ' : '') + trimNum(packsR) + '包（' + trimNum(rc.packPieces * packsR) + (v.packUnit || mainPackUnit(item)) + '）';
             } else {
               qTxt = trimNum(rc.qty || 1) + (v.packUnit || mainPackUnit(item));
             }
@@ -5057,7 +5224,11 @@ function renderCardBack(item, zone) {
             var nmL = s.name || ('规格' + (si + 1));
             var leftPieces = Math.round(packsRemain * pqL * 100) / 100;
             var perSetL = specPackCount(s);
-            var actL = actRecsV.filter(function (r) { return String(r.specName || '') === String(nmL); }).length;
+            var actL = 0;
+            actRecsV.forEach(function (r) {
+              if (String(r.specName || '') === String(nmL)) actL += recordPacksOf(r, pqL);
+            });
+            actL = Math.round(actL * 100) / 100;
             if (isInstantV13) {
               // 即时型：按「已消耗件数」显示真实剩余，点一下直接扣 1 件（级联选择的详情页捷径）
               // 【第 20 轮】日常扣减单位 = 计数单位（片/粒/包），绝不显示 g/ml —— 容量仅作采购基数
@@ -5140,19 +5311,33 @@ function renderCardBack(item, zone) {
     var hasRecsO = item.usageRecords && item.usageRecords.length > 0;
     if (hasRecsO || consumeModelOf(item) === 'instant') {
       // cModelR 已在上方「信息区」声明（第 10 轮上移），此处不再重复声明
-      var actNowR = (item.variants || []).reduce(function (s, vv) { return s + variantActiveOpenRecs(item, vv).length; }, 0);
+      // 【第 41 轮】在用汇总按真实包数/件数：一条流水可能是一批（packs>1），绝不能按条数算
+      var actNowR = 0, actUnitR = '件';
+      (item.variants || []).forEach(function (vv) {
+        var spV = variantSpecsOf(vv);
+        variantActiveOpenRecs(item, vv).forEach(function (r) {
+          if (spV.length && r.specName) {
+            var s1 = spV.find(function (x) { return String(x.name || '') === String(r.specName || ''); });
+            actNowR += recordPacksOf(r, s1 ? specPackQty(s1) : 1);
+            actUnitR = '包';
+          } else {
+            actNowR += (parseFloat(r.qty) > 0 ? parseFloat(r.qty) : 1);
+          }
+        });
+      });
+      actNowR = Math.round(actNowR * 100) / 100;
       var recCntO = hasRecsO ? item.usageRecords.length : 0;
       var rate = calcUsageRate(item);
       html += '<div class="back-section">';
       html += '<div class="back-section-title" style="display:flex;align-items:center;gap:6px;margin-bottom:6px">'
         + '<span style="flex:1">📒 使用记录 (' + recCntO + ' 条)</span>'
-        + (actNowR > 0 ? '<span style="flex-shrink:0;font-size:11px;color:var(--orange);font-weight:500">' + actNowR + ' 件使用中</span>' : '')
+        + (actNowR > 0 ? '<span style="flex-shrink:0;font-size:11px;color:var(--orange);font-weight:500">' + actNowR + ' ' + actUnitR + '使用中</span>' : '')
         + '<button class="btn btn-outline rec-icon-btn" style="width:auto;padding:0 8px;font-size:11px" onclick="openFinishPick(\'' + item.id + '\')">✅ 用完</button>'
         + '<button class="btn btn-outline rec-icon-btn" style="width:auto;padding:0 8px;font-size:11px" onclick="openRecordPick(\'' + item.id + '\')">🪄 编辑</button>'
         + '</div>';
       html += '<details class="ledger-fold ov-fold">';
       html += '<summary><span style="font-size:14px">📊</span><span style="flex:1">消耗概览 (' + recCntO + ' 条记录)</span>';
-      if (actNowR > 0) html += '<span style="font-size:11px;color:var(--orange);font-weight:500">' + actNowR + ' 件使用中</span>';
+      if (actNowR > 0) html += '<span style="font-size:11px;color:var(--orange);font-weight:500">' + actNowR + ' ' + actUnitR + '使用中</span>';
       html += '<span class="ov-caret">▼</span></summary>';
       html += '<div style="margin-top:10px">';
       // --- 摘要行 ---
@@ -5666,7 +5851,7 @@ function manualRefresh() {
 
 // ========== 自动更新检查 ==========
 // deploy.py 部署时会把 1791388211 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1792674267';
+var APP_VERSION = '1792680001';
 
 function checkAppUpdate(manual) {
   try {
@@ -5988,7 +6173,10 @@ function adjustSpecOpen(k, delta) {
 
 // ========== 组合/规格型：动作按「包」，统计按「件」 ==========
 // 说明：specIdx 是 v.specs 的原始下标（UI 与记录都用它），但只有「有效规格」才可操作
-// 【单包开启铁律】点一次只开 1 包：库存 -1 包，使用记录 +1 条，严格一一对应。
+// 【单包开启铁律】点一次默认只开 1 包：库存 -1 包，使用记录 +1 条，严格一一对应。
+// 【第 41 轮 · 批量开启】用户原话：「我有时候一次性拆 10 包混喂，难道要我点 10 次？」
+//   → 点击【开启新包】先弹轻量数量框（数字输入 + 加减号，默认 1，上限 = 该规格剩余未开包数），
+//     填 N 就一次扣 N 包库存、只生成 1 条「×N包」流水（绝不生成 N 条重复流水）。
 // 并行铁律：同规格允许多条未结束记录并存（开第 2 包不会结束第 1 包）；
 //           不看品牌/卡片的 opened 状态，只看**这个规格**还有没有未开的包。
 function openOnePack(itemId, variantId, specIdx) {
@@ -6003,19 +6191,85 @@ function openOnePack(itemId, variantId, specIdx) {
   if (remaining <= 0) { toast('这个规格已经没有新包了，等新的一批到货，或去总览卡片点「委托」补一批'); return; }
   var pq = specPackQty(s), u = s.unit || '';
   var nm = s.name || ('规格' + (specIdx + 1));
+  var maxN = Math.max(1, Math.floor(remaining));
+  window._openOnePackCtx = { itemId: itemId, variantId: variantId, specIdx: specIdx, pq: pq, u: u, nm: nm, max: maxN };
+  var html = '<div class="modal-handle"></div><div class="modal-title">📦 开启新包</div>';
+  html += '<div style="text-align:center;margin-bottom:14px">';
+  html += '<div style="font-size:16px;font-weight:700">' + escapeHtml(nm) + '</div>';
+  html += '<div style="font-size:13px;color:var(--text-secondary);margin-top:4px">' + escapeHtml(v.brand || '') + ' · 剩 ' + trimNum(remaining) + ' 包未开' + (pq !== 1 ? '（每包 ' + trimNum(pq) + escapeHtml(u) + '）' : '') + '</div>';
+  html += '</div>';
+  html += '<div class="form-group"><label class="form-label">本次开启数量（包）</label>';
+  html += '<div style="display:flex;align-items:center;gap:10px">';
+  html += '<button class="btn btn-outline" style="flex:1;font-size:22px;padding:10px 0;font-weight:700" onclick="openPackStep(-1)">−</button>';
+  html += '<input type="number" class="form-input" id="op-qty" min="1" step="1" value="1" max="' + maxN + '" style="flex:2;font-size:24px;text-align:center;font-weight:700" oninput="openPackClamp()">';
+  html += '<button class="btn btn-outline" style="flex:1;font-size:22px;padding:10px 0;font-weight:700" onclick="openPackStep(1)">＋</button>';
+  html += '</div></div>';
+  html += '<div style="font-size:12px;color:var(--text-tertiary);margin-bottom:12px">💡 一次拆多包混喂很正常：填 ' + maxN + ' 就是一次扣 ' + maxN + ' 包库存、生成 1 条「×' + maxN + '包」流水。最多 ' + maxN + ' 包（当前未开库存）。</div>';
+  html += '<div class="form-group"><label class="form-label">开始使用日期</label>';
+  html += '<input type="date" class="form-input" id="op-date" value="' + new Date().toISOString().split('T')[0] + '"></div>';
+  html += '<button class="btn btn-primary btn-full" onclick="confirmOpenOnePack()">确认开启</button>';
+  html += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">取消</button>';
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('show');
+}
+// 数量框加减号：夹在 [1, 该规格剩余未开包数]
+function openPackStep(d) {
+  var el = document.getElementById('op-qty');
+  if (!el) return;
+  var mx = parseInt(el.getAttribute('max') || '9999', 10) || 9999;
+  var n = Math.floor(parseFloat(el.value) || 1) + d;
+  if (n < 1) n = 1;
+  if (n > mx) n = mx;
+  el.value = n;
+}
+// 手动输入时实时封顶：绝不超出物理库存，也绝不出现 0 / 负数 / 小数包
+function openPackClamp() {
+  var el = document.getElementById('op-qty');
+  if (!el) return;
+  var mx = parseInt(el.getAttribute('max') || '9999', 10) || 9999;
+  var n = Math.floor(parseFloat(el.value) || 1);
+  if (n < 1) n = 1;
+  if (n > mx) { n = mx; toast('最多只能开 ' + mx + ' 包（当前未开库存）'); }
+  el.value = n;
+}
+function confirmOpenOnePack() {
+  var ctx = window._openOnePackCtx;
+  if (!ctx) { closeModal(); return; }
+  var el = document.getElementById('op-qty');
+  var n = Math.floor(parseFloat(el ? el.value : 1) || 1);
+  if (n < 1) n = 1;
+  if (n > ctx.max) n = ctx.max;
+  var c = { itemId: ctx.itemId, variantId: ctx.variantId, specIdx: ctx.specIdx };
+  window._openOnePackCtx = null;
+  doOpenOnePack(c.itemId, c.variantId, c.specIdx, n);
+}
+// 实际执行开启：n 包一次扣，只生成 1 条流水（R41）
+function doOpenOnePack(itemId, variantId, specIdx, n) {
+  var item = getItem(currentZoneId, itemId);
+  if (!item) return;
+  var v = item.variants.find(function (x) { return x.id === variantId; });
+  if (!v) return;
+  var s = (v.specs || [])[specIdx];
+  if (!s) return;
+  var packs = Math.max(1, Math.floor(n || 1));
+  // 硬上限：绝不超出该规格剩余未开包数（防并发/防篡改）
+  var remaining = specPacksRemaining(v, s);
+  if (remaining <= 0) { toast('这个规格已经没有新包了，等新的一批到货，或去总览卡片点「委托」补一批'); return; }
+  if (packs > remaining) packs = Math.floor(remaining);
+  var pq = specPackQty(s), u = s.unit || '';
+  var nm = s.name || ('规格' + (specIdx + 1));
 
-  // === 关键修复：只开 1 包 ===
-  // 库存扣减 = 该规格「已开包数」+1（跨套累计）。绝不多扣、绝不批量。
-  s.openPacks = Math.round((specOpenPacks(s) + 1) * 100) / 100;
+  // === 库存扣减 = 该规格「已开包数」+N（跨套累计）===
+  s.openPacks = Math.round((specOpenPacks(s) + packs) * 100) / 100;
   // 兼容字段 qty：该规格「单套内包数 × 每包含量」（构成口径，保持稳定不变）
   s.qty = Math.round(specPackCount(s) * pq * 100) / 100;
-  // 记下「这一包正在用」的开始时间（同规格可多包并行，各自独立计时）
+  // 记下「这批正在用」的开始时间（同规格可多批并行，各自独立计时）
   var pkey = '__packOpenAt_' + specIdx;
   if (!s[pkey]) s[pkey] = new Date().toISOString();
   s.__openPack = true;
 
-  // 开封日期：优先用弹窗里用户选的日期，缺省为当前时间
-  var dEl = document.getElementById('open-date');
+  // 开始使用日期：优先用本弹窗选的日期，其次兼容旧弹窗的 open-date，缺省为当前时间
+  var dEl = document.getElementById('op-date') || document.getElementById('open-date');
   var dVal = (dEl && dEl.value) ? dEl.value : '';
   var nowISO;
   if (dVal) {
@@ -6025,15 +6279,19 @@ function openOnePack(itemId, variantId, specIdx) {
     nowISO = new Date().toISOString();
   }
 
-  // === 库存与日志严格一对一：开 1 包 = 生成 1 条记录 ===
+  // === 库存与日志严格一对一：开 N 包 = 生成 1 条「×N包」记录（R41，绝不生成 N 条）===
   if (!item.usageRecords) item.usageRecords = [];
-  // 注意：这里**不结束**同规格的上一条记录 —— 开新包只代表「开始用新的一包」，
+  // 注意：这里**不结束**同规格的上一条记录 —— 开新包只代表「开始用新的一批」，
   // 上一条记录可以继续使用中（并行）。每条记录在各自「用完」时独立收尾。
+  var totalContent = Math.round(packs * pq * specContentOf(s) * 100) / 100;
   item.usageRecords.push({
     startDate: nowISO, endDate: null,
-    qty: pq, variantId: variantId, brand: v.brand,
+    qty: Math.round(packs * pq * 100) / 100,      // 每包含量 × 包数（老口径 qty>pq 即多包）
+    packs: packs,                                  // R41：本次开启包数（编辑/统计/回滚都认它）
+    variantId: variantId, brand: v.brand,
     specName: nm, packIdx: specIdx, packPieces: pq,
-    specText: nm + '×1包' + (pq !== 1 ? '（' + trimNum(pq) + u + '）' : '')
+    contentUsed: totalContent,
+    specText: nm + '×' + trimNum(packs) + '包' + (pq !== 1 ? '（' + trimNum(pq) + u + '）' : '')
   });
 
   if (variantSpecsOf(v).length) v.stock = variantSpecContent(v);
@@ -6047,8 +6305,11 @@ function openOnePack(itemId, variantId, specIdx) {
   closeModal();
   openCardDetail(currentZoneId, itemId);
   var nowRemain = specPacksRemaining(v, s);
-  var actN = variantActiveOpenRecs(item, v).filter(function (r) { return String(r.specName || '') === String(nm); }).length;
-  toast('已开启 ' + nm + ' ×1包' + (pq !== 1 ? '（' + trimNum(pq) + u + '）' : '') + ' · 该规格剩 ' + trimNum(nowRemain) + ' 包未开' + (actN > 1 ? ' · ' + actN + ' 包并行使用中' : ''));
+  var actPacks = 0;
+  variantActiveOpenRecs(item, v).forEach(function (r) {
+    if (String(r.specName || '') === String(nm)) actPacks += recordPacksOf(r, pq);
+  });
+  toast('已开启 ' + nm + ' ×' + trimNum(packs) + '包' + (pq !== 1 ? '（' + trimNum(pq) + u + '）' : '') + ' · 该规格剩 ' + trimNum(nowRemain) + ' 包未开' + (actPacks > 1 ? ' · ' + trimNum(actPacks) + ' 包并行使用中' : ''));
 }
 
 // 【并行收尾】按单条开封记录独立结束（不再一次性结束该规格的全部记录）。
