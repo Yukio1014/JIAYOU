@@ -1496,9 +1496,16 @@ function variantPacksBought(v) {
   return isFinite(n) ? n : 0;
 }
 // 单套构成合计（含量）：Σ 每种规格 = 包数 × 每包含量 × 每件规格
+// 【第 40 轮】混合单位（正装 kg + 小样 g）先换算到变体主单位再相加：
+//   21kg + 1450g = 22.45kg，绝不是 3371。跨维度规格换算不出系数 → 不并入合计。
 function variantSpecPerSet(v) {
   var ss = variantSpecsOf(v); if (!ss.length) return 0;
-  var t = 0; ss.forEach(function (s) { t += specTotalOf(s); });
+  var mu = variantSpecMainUnit(v);
+  var t = 0;
+  ss.forEach(function (s) {
+    var val = contentUnitConvert(specTotalOf(s), s.unit, mu);
+    if (val !== null) t += val;
+  });
   return Math.round(t * 100) / 100;
 }
 // 单套构成合计（件数/包数）
@@ -1538,26 +1545,27 @@ function specPacksRemaining(v, s) {
   var boughtTotal = specPacksTotal(v, s);
   return Math.round(Math.max(0, boughtTotal - specOpenPacks(s)) * 100) / 100;
 }
-// 该变体剩余总含量（= Σ 各规格剩余包数 × 每包含量 × 每件规格）
-// 【第 35 轮】变体的「主单位」= 第一个非空的规格单位。
-//   跨单位（如「粒」和「ml」）绝不相加 —— 那是 984粒 这种没意义的数字。
+// 变体的「主单位」= 第一个非空的规格单位（没有则退回单包含量单位）。
 //   单位为空的行视为主单位一类（不挑剔老数据）。
+// 【第 40 轮】同维度不同单位（kg 与 g）不再互斥 —— 先换算到主单位再相加；
+//   只有跨维度（如「粒」和「ml」）才绝不相加，那是 984粒 这种没意义的数字。
 function variantSpecMainUnit(v) {
   var ss = variantSpecsOf(v), u = '';
   ss.forEach(function (s) { if (!u && String(s.unit || '').trim()) u = String(s.unit).trim(); });
   return u || String((v && v.packWeightUnit) || '').trim();
 }
-function specSameMainUnit(v, s) {
-  var mu = variantSpecMainUnit(v);
-  var su = String(s && s.unit || '').trim();
-  return (!mu || !su || su === mu);
-}
+// 【第 40 轮】剩余总含量：每一行先换算到变体主单位再相加（正装 21kg + 小样 1450g = 22.45kg）。
+//   旧代码用 specSameMainUnit 把非主单位行直接排除 → 「总库存 21kg」漏算小样/餐包/猫条，
+//   与 restCapOf 的裸加 3371kg 自相矛盾。现在统一口径：同维度换算后相加，跨维度不并入
+//   （跨维度行仍在自己「规格明细」里逐行报到，绝不丢数据）。
 function variantSpecStockCalc(v) {
   var ss = variantSpecsOf(v); if (!ss.length) return 0;
+  var mu = variantSpecMainUnit(v);
   var t = 0;
   ss.forEach(function (s) {
-    if (!specSameMainUnit(v, s)) return;     // 别的单位的行，只在该行自己的明细里报到
-    t += specRemainContent(v, s);
+    var val = contentUnitConvert(specRemainContent(v, s), s.unit, mu);
+    if (val === null) return;               // 跨维度：换算不出系数，绝不相加
+    t += val;
   });
   return Math.round(t * 100) / 100;
 }
@@ -1642,7 +1650,9 @@ function variantSpecText(v) { // "日用 3包×5片 = 15片 + 夜用 2包×3片 
   // 【第 35 轮】行级记账（分批到货）后，这里的数字已经是「累计到货」，不再是「一套有多少」
   var hasRow = ss.some(function (s) { return s.packsTotal !== undefined && s.packsTotal !== null && s.packsTotal !== ''; });
   if (hasRow) return parts.join(' + ');
-  return parts.join(' + ') + ' = ' + trimNum(variantSpecPerSet(v)) + (ss[0].unit || '') + '/套';
+  // 【第 40 轮】合计单位取「主单位」（第一个非空单位）：混合单位下合计值已换算到主单位，
+  //   单位标签必须跟着取主单位，不能拿 ss[0].unit（第一行可能没填单位）
+  return parts.join(' + ') + ' = ' + trimNum(variantSpecPerSet(v)) + (variantSpecMainUnit(v) || '') + '/套';
 }
 function stockSummaryOf(item) {
   // 【第 19 轮 · 即时消耗】即时型的消耗标的物永远是规格单位（片/粒/包/个/件），
@@ -1654,17 +1664,34 @@ function stockSummaryOf(item) {
   var vs = (item.variants && item.variants.length) ? item.variants : [];
   var packs = 0, hasPacks = false, hasCombo = false, comboSetsBought = 0;
   var wTotals = {}, wOrder = [];
+  // 【第 40 轮】物品容量单位：同维度（kg/g）的变体换算后合并成一个桶，
+  //   猫粮「烘焙 + 无谷」两个变体都报 kg，总库存就是 24.35kg 一个数，不再 21kg + 3.35kg 分裂
+  var itemCapU = capUnitOf(item);
   vs.forEach(function(v) {
     if (variantSpecsOf(v).length) {
       // 组合消耗型④：库存是「子规格剩余片数」，主口径按片展示；
       // 另记下「购入套数」做辅助说明（v.packCount = 总套餐数，不随消耗变化）
       hasCombo = true;
       comboSetsBought += (parseFloat(v.packCount) || 0);
-      var cu = variantSpecUnit(v);
+      var ownU = variantSpecMainUnit(v);
+      var contentV = variantSpecContent(v);
+      var convV = itemCapU ? contentUnitConvert(contentV, ownU, itemCapU) : null;
+      var cu = (convV !== null && itemCapU) ? itemCapU : (variantSpecUnit(v) || ownU);
       if (cu) {
         if (!wTotals[cu]) { wTotals[cu] = 0; wOrder.push(cu); }
-        wTotals[cu] += variantSpecContent(v);
+        wTotals[cu] += (convV !== null && itemCapU) ? convV : contentV;
       }
+      // 【第 40 轮】跨维度规格（与主单位换算不出系数的行，如 kg 正装 + ml 面膜）
+      //   单独按自己的单位成桶报出来 —— 不进主桶（绝不相加），但也绝不从总库存里消失
+      variantSpecsOf(v).forEach(function (s) {
+        var su = String(s.unit || '').trim();
+        if (!su) return;                                        // 没填单位：已按原值并入主桶
+        if (contentUnitConvert(1, su, ownU) !== null) return;   // 同维度：已并入主桶
+        var leftS = specRemainContent(v, s);
+        if (!(leftS > 0)) return;
+        if (!wTotals[su]) { wTotals[su] = 0; wOrder.push(su); }
+        wTotals[su] += leftS;
+      });
       return;
     }
     // 单规格：整套数按「剩余 ÷ 每套含」算（购买套数会随消耗失真），如 3支/10支每套 → 0 整套
@@ -1674,6 +1701,11 @@ function stockSummaryOf(item) {
     var sc = variantStockContent(v);
     if (sc !== null && sc > 0) {
       var u = weightUnitOf(v);
+      // 【第 40 轮】与规格分支同口径：变体自己声明了单位才换算合并（kg/g 同维度），
+      //   没声明单位的老数据按原样进自己那只桶（与旧行为一字不差）
+      var wuRaw = String((v.packWeightUnit || v.weightUnit) || '').trim();
+      var convS = (itemCapU && wuRaw) ? contentUnitConvert(sc, wuRaw, itemCapU) : null;
+      if (convS !== null) { u = itemCapU; sc = convS; }
       if (!wTotals[u]) { wTotals[u] = 0; wOrder.push(u); }
       wTotals[u] += sc;
     }
@@ -1991,24 +2023,33 @@ function variantTotalWeight(v) {
 }
 // 含量单位：默认 kg（兼容旧数据未存该字段的情况）
 function weightUnitOf(v) { return v.packWeightUnit || 'kg'; }
-// 变体当前剩余含量：混合规格走明细汇总；普通变体 = 剩余件数(stock) × 每小单位含量(packWeight)
-// 注意区分 variantTotalWeight（购买总量，用于折算单价）；这里算的是「现在还剩多少」
-// 没配含量（packWeight 缺失）→ null（无法折算）
-function variantStockContent(v) {
-  if (variantSpecsOf(v).length) return variantSpecContent(v);
+// 变体当前剩余含量 + 单位（【第 40 轮】单位是换算的前提，绝不丢）
+function variantStockContentU(v) {
+  if (variantSpecsOf(v).length) return { qty: variantSpecContent(v), unit: variantSpecMainUnit(v) };
   var w = parseFloat(v.packWeight) || 0;
   if (w <= 0) return null;
-  return Math.round(((parseFloat(v.stock) || 0) * w) * 100) / 100;
+  var qty = Math.round(((parseFloat(v.stock) || 0) * w) * 100) / 100;
+  var wu = String((v.packWeightUnit || v.weightUnit) || '').trim();
+  return { qty: qty, unit: wu || weightUnitOf(v) };
+}
+function variantStockContent(v) {
+  var u = variantStockContentU(v);
+  return u ? u.qty : null;
 }
 // 物品当前总剩余含量：每个变体都能折算含量才返回总数；任一变体没配含量 → null
+// 【第 40 轮】跨变体也按「物品容量单位」换算后再相加（烘焙 24.35kg + 无谷 0kg = 24.35kg），
+//   换不出系数（跨维度）→ 返回 null，绝不拿混合单位拼一个假总数
 function itemStockContent(item, onlyVariants) {
   var vs = (onlyVariants && onlyVariants.length) ? onlyVariants : (item.variants || []);
   if (!vs.length) return null;
+  var target = capUnitOf(item);
   var t = 0;
   for (var i = 0; i < vs.length; i++) {
-    var c = variantStockContent(vs[i]);
-    if (c === null) return null;
-    t += c;
+    var cu = variantStockContentU(vs[i]);
+    if (!cu) return null;
+    var val = target ? contentUnitConvert(cu.qty, cu.unit, target) : cu.qty;
+    if (val === null) return null;               // 跨维度：无法给一个诚实的总数
+    t += val;
   }
   return Math.round(t * 100) / 100;
 }
@@ -2017,12 +2058,18 @@ function itemStockContent(item, onlyVariants) {
 //   例：3 套 ×（日用 2包×5片 + 护垫 1包×5片）= 3 × 15 = 45 片
 // 单价   = 套餐总价 ÷ 总容量
 // 显示   = 「每 片 约 1.02 元」—— 单位就是用户自己填的那个词，系统不做任何 ml↔L / g↔kg 折算
+// 【第 40 轮】唯一例外：同一变体内 kg 与 g 混填时，容量必须先换算到主单位再比价
+//   （否则 3371 这种裸加数会让「每kg 约 0.01 元」变得毫无意义）；跨维度行不并入容量。
 function variantOneSetCapacity(v) {   // 单套（一件套餐）的总容量
   var sp = variantSpecsOf(v);
   if (sp.length) {
+    var mu = variantSpecMainUnit(v);
     var t = 0;
-    sp.forEach(function (s) { t += specPackCount(s) * specPackQty(s) * specContentOf(s); });
-    return { qty: Math.round(t * 100) / 100, unit: String(sp[0].unit || '').trim() };
+    sp.forEach(function (s) {
+      var val = contentUnitConvert(specPackCount(s) * specPackQty(s) * specContentOf(s), s.unit, mu);
+      if (val !== null) t += val;
+    });
+    return { qty: Math.round(t * 100) / 100, unit: mu };
   }
   var w = parseFloat(v.packWeight) || 0;
   var pq = parseFloat(v.packQty) || 1;
@@ -2938,6 +2985,33 @@ function isContentUnitText(u) {
   var s = String(u || '').trim().toLowerCase();
   return s === 'ml' || s === 'l' || s === 'g' || s === 'kg' || s === '毫升' || s === '升' || s === '克' || s === '千克' || s === '公斤';
 }
+// ===== 【第 40 轮】单位归一化：同维度才允许相加，跨维度绝不相加 =====
+// 背景（用户截图复现）：猫粮一个变体下 4 条规格混用单位——正装 21kg、小样 1450g、
+//   餐包 1300g、猫条 600g。旧代码把四个数字裸加 = 3371，再配上 kg 显示成「3371kg」；
+//   而同一页面另一处只汇总 kg 行 = 21kg。两个数字自相矛盾，全部汇总口都必须根治。
+// 规则：
+//   ① kg↔g、L↔ml 同维度，按 1000 换算（21kg + 1450g = 22.45kg）；
+//   ② 跨维度（kg↔ml、kg↔片）返回 null —— 换算不出系数，绝不相加（宁可少算也不造假数）；
+//   ③ 单位留空视为「无意见」，按 1:1 放行（兼容老数据，与旧 specSameMainUnit 口径一致）。
+function contentUnitFactor(from, to) {
+  var f = String(from || '').trim().toLowerCase();
+  var t = String(to || '').trim().toLowerCase();
+  if (!f || !t || f === t) return 1;
+  var KG = ['kg', '千克', '公斤'], G = ['g', '克'];
+  var L = ['l', '升'], ML = ['ml', '毫升'];
+  if (KG.indexOf(f) >= 0 && G.indexOf(t) >= 0) return 1000;     // kg → g（1kg = 1000g）
+  if (G.indexOf(f) >= 0 && KG.indexOf(t) >= 0) return 0.001;    // g → kg（1g = 0.001kg）
+  if (L.indexOf(f) >= 0 && ML.indexOf(t) >= 0) return 1000;     // L → ml（1L = 1000ml）
+  if (ML.indexOf(f) >= 0 && L.indexOf(t) >= 0) return 0.001;    // ml → L（1ml = 0.001L）
+  return null;                                                   // 跨维度：没有换算系数
+}
+// 把 num 从 from 单位换算到 to 单位；换不出系数 → null（调用方必须处理，绝不裸加）
+function contentUnitConvert(num, from, to) {
+  var f = contentUnitFactor(from, to);
+  if (f === null) return null;
+  var n = parseFloat(num);
+  return (isFinite(n) ? n : 0) * f;
+}
 // 「按套记录」：每套含 >1 才谈得上「套」，仅用于展示措辞，不参与任何计算
 function isSetPackMode(item) {
   if (!item || !item.variants || !item.variants.length) return false;
@@ -3000,6 +3074,16 @@ function capUnitOf(item) {
   u = String(item.unit || '').trim();            // ③ 物品单位
   return u || mainPackUnit(item);
 }
+// 【第 40 轮】库存数字该配哪个单位：规格明细型物品的 v.stock 存的是「含量」（主单位口径，
+//   猫粮 = 24.35kg），必须配容量单位；无明细物品的 v.stock 就是件数，配件数单位。
+//   混用会出现「库存仅剩 24.35 袋」这种张冠李戴（袋子没剩 24.35 个，是剩了 24.35 公斤）。
+function stockNumUnitOf(item) {
+  var vs = (item && item.variants) || [];
+  for (var i = 0; i < vs.length; i++) {
+    if (variantSpecsOf(vs[i]).length) return capUnitOf(item);
+  }
+  return mainPackUnit(item);
+}
 
 // ---------- 单包容量：1 件（1 包 / 1 瓶 / 1 个）里装了多少 ----------
 // 就是「套餐数 × 规格数 × 单包容量」里的最后一个因子，商品档案的固定属性
@@ -3022,22 +3106,32 @@ function capPerPackOf(item, r) {
   return parseFloat(v.packWeight) || 0;
 }
 // 平均单包容量：只在展示时把「件数」翻译成「容量」，绝不参与速率与采购建议
+// 【第 40 轮】跨规格/跨变体按「物品容量单位」换算后再求均值（kg 与 g 不再裸加）；
+//   换算不出系数的行连件数带容量一起不计入，绝不让 ml 混进 kg 的均值
 function avgCapPerPackOf(item) {
   if (!item) return 0;
   if (consumeModelOf(item) === 'instant') return 1;
+  var target = capUnitOf(item);
   var capT = 0, pcsT = 0;
   ((item.variants) || []).forEach(function (v) {
     var sp = variantSpecsOf(v);
     if (sp.length) {
       sp.forEach(function (s) {
         var n = variantPacksBought(v) * specPackCount(s);
+        var c = target ? contentUnitConvert(n * specCapPerPack(s), s.unit, target) : n * specCapPerPack(s);
+        if (c === null) return;
         pcsT += n;
-        capT += n * specCapPerPack(s);
+        capT += c;
       });
     } else {
       var n2 = variantPacksBought(v) * (parseFloat(v.packQty) || 1);
       var w = parseFloat(v.packWeight) || 0;
-      if (w > 0) { pcsT += n2; capT += n2 * w; }
+      if (w > 0) {
+        var wu = String((v.packWeightUnit || v.weightUnit) || '').trim();
+        var c2 = target ? contentUnitConvert(n2 * w, wu || weightUnitOf(v), target) : n2 * w;
+        if (c2 === null) return;
+        pcsT += n2; capT += c2;
+      }
     }
   });
   return (pcsT > 0 && capT > 0) ? Math.round(capT / pcsT * 100) / 100 : 0;
@@ -3074,6 +3168,28 @@ function recordCap(item, r) {
   if (per > 0 && q >= per - 0.01) return q;                             // qty 本身就是容量，直接用
   return recordPacks(item, r) * (per > 0 ? per : 1);                    // 件数 × 单包容量
 }
+// 【第 40 轮】一条记录的容量单位：记录是按「哪个规格」记的，容量就属哪个单位
+//   （猫粮小样的开封记录记的是 g，正装记的是 kg）。跨记录汇总（速率/年报）必须先换算。
+function recordCapUnit(item, r) {
+  if (!item) return '';
+  var vs = (item.variants) || [];
+  var v = (r && r.variantId) ? vs.find(function (x) { return x.id === r.variantId; }) : null;
+  if (!v) v = vs[0];
+  if (v) {
+    var sp = variantSpecsOf(v);
+    if (sp.length) {
+      if (r && r.specName) {
+        var s = sp.find(function (x) { return String(x.name || '').trim() === String(r.specName).trim(); });
+        if (s && String(s.unit || '').trim()) return String(s.unit).trim();
+      }
+      var u0 = variantSpecMainUnit(v);
+      if (u0) return u0;
+    }
+    var wu = String((v.packWeightUnit || v.weightUnit) || '').trim();
+    if (wu) return wu;
+  }
+  return capUnitOf(item);
+}
 
 // ---------- 还剩多少：件数与容量分开算，永不相加 ----------
 // 剩余件数（个 / 包 / 片）—— 只用于库存展示与告警阈值，绝不进速率与建议
@@ -3096,16 +3212,28 @@ function variantRestPieces(v) {
   return parseFloat(v.stock) || 0;
 }
 // 剩余容量（ml / g / 片）= Σ 各规格「剩余包数 × 每包含量 × 每件规格」
+// 【第 40 轮】目标单位 = 物品容量单位（capUnitOf）；每一行先换算再相加。
+//   猫粮：正装 21kg + 小样 1450g + 餐包 1300g + 猫条 600g = 24.35kg
+//   （旧代码裸加成 3371 再配上 kg，显示成「3371kg」——用户截图实测的矛盾数字）
+//   跨维度（kg 与 ml）换算不出系数 → 该行不计入：宁可少算，也绝不造混合单位的假总数；
+//   没声明单位的老数据按原值放行（与旧行为一字不差）。
 function restCapOf(item) {
   if (!item) return 0;
   if (consumeModelOf(item) === 'instant') return instantTotalStock(item);
+  var target = capUnitOf(item);
   var t = 0;
   (item.variants || []).forEach(function (v) {
     var sp = variantSpecsOf(v);
     if (sp.length) {
-      sp.forEach(function (s) { t += specRemainContent(v, s); });
+      sp.forEach(function (s) {
+        var val = target ? contentUnitConvert(specRemainContent(v, s), s.unit, target) : specRemainContent(v, s);
+        if (val !== null) t += val;
+      });
     } else {
-      t += (parseFloat(v.stock) || 0) * (parseFloat(v.packWeight) || 1);
+      var raw = (parseFloat(v.stock) || 0) * (parseFloat(v.packWeight) || 1);
+      var wu = String((v.packWeightUnit || v.weightUnit) || '').trim();
+      var val2 = (target && wu) ? contentUnitConvert(raw, wu, target) : raw;
+      if (val2 !== null) t += val2;
     }
   });
   return Math.round(t * 100) / 100;
@@ -3132,14 +3260,20 @@ function boughtTotalOf(item) {
     return Math.round(((parseFloat(item.stock) || 0) + instantUsedQty(item)) * 100) / 100;
   }
   var t = 0;
+  var target = capUnitOf(item);
   (item.variants || []).forEach(function (v) {
     var sp = variantSpecsOf(v);
     if (sp.length) {
       sp.forEach(function (s) {
-        t += variantPacksBought(v) * specPackCount(s) * specPackQty(s) * specContentOf(s);
+        var raw = variantPacksBought(v) * specPackCount(s) * specPackQty(s) * specContentOf(s);
+        var val = target ? contentUnitConvert(raw, s.unit, target) : raw;
+        if (val !== null) t += val;
       });
     } else {
-      t += variantPacksBought(v) * (parseFloat(v.packQty) || 1) * (parseFloat(v.packWeight) || 1);
+      var raw2 = variantPacksBought(v) * (parseFloat(v.packQty) || 1) * (parseFloat(v.packWeight) || 1);
+      var wu = String((v.packWeightUnit || v.weightUnit) || '').trim();
+      var val2 = (target && wu) ? contentUnitConvert(raw2, wu, target) : raw2;
+      if (val2 !== null) t += val2;
     }
   });
   return Math.round(t * 100) / 100;
@@ -3171,6 +3305,10 @@ function recTextOf(item, r) {
   var p = recordPacks(item, r);
   var c = recordCap(item, r);
   var pu = packUnitOf(item), cu = capUnitOf(item);
+  // 【第 40 轮】记录容量按「该记录自己的单位」记账（小样记的是 g），展示时换算到物品单位，
+  //   否则「约50kg」会把 50g 的小样夸大 1000 倍
+  var cc = contentUnitConvert(c, recordCapUnit(item, r), cu);
+  if (cc !== null) c = cc;
   if (!cu || cu === pu || !(c > 0)) return trimNum(round1(p)) + escapeHtml(pu);
   return trimNum(round1(p)) + escapeHtml(pu) + '（约' + trimNum(round1(c)) + escapeHtml(cu) + '）';
 }
@@ -3235,9 +3373,16 @@ function statsOf(item) {
 
   // period 周期型：总容量 = Σ（件数 × 单包容量）；日均 = 总容量 ÷ 区间并集天数；
   // 月 = 日均 × 31；年 = 月 × 12。件数在这一步之后彻底退场。
+  // 【第 40 轮】Σ 之前先按「该记录自己的单位」换算到物品容量单位：
+  //   正装记录 1.5kg + 小样记录 50g = 1.55kg，绝不是 1551.5。
   var pr = validPeriodRecords(item);
   var tq = 0;
-  pr.forEach(function (r) { tq += recordCap(item, r); });
+  var tqU = unit;
+  pr.forEach(function (r) {
+    var c = recordCap(item, r);
+    var val = contentUnitConvert(c, recordCapUnit(item, r), tqU);
+    tq += (val === null ? c : val);   // 换算不出系数（跨维度脏数据）→ 退回原值，绝不丢这条消耗
+  });
   var sp2 = closedSpanDays(pr);
   out.closedCount = pr.length;
   out.noClosedData = !(pr.length > 0) || !(tq > 0) || !(sp2 > 0);
@@ -5521,7 +5666,7 @@ function manualRefresh() {
 
 // ========== 自动更新检查 ==========
 // deploy.py 部署时会把 1791388211 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1791955156';
+var APP_VERSION = '1792674267';
 
 function checkAppUpdate(manual) {
   try {
@@ -6965,7 +7110,7 @@ function packHintOf(v, plain, item) {
   var pcRaw = (v.packCount === '' || v.packCount === undefined || v.packCount === null) ? '' : String(v.packCount);
   var pqRaw = (v.packQty === '' || v.packQty === undefined || v.packQty === null) ? '' : String(v.packQty);
   var wRaw = (v.packWeight === '' || v.packWeight === undefined || v.packWeight === null) ? '' : String(v.packWeight);
-  if (pcRaw === '' && pqRaw === '' && wRaw === '') return '📦 库存：填写总套餐数 / 套餐内包数 / 单包规格后自动计算（留空按 1）';
+  if (pcRaw === '' && pqRaw === '' && wRaw === '') return '📦 累计购入：填写总套餐数 / 套餐内包数 / 单包规格后自动计算（留空按 1）';
   var pc = parseFloat(pcRaw) || 0;                 // 空 = 1 → pc 取 1；填 0 就是 0
   if (pcRaw === '') pc = 1;
   var pq = parseFloat(pqRaw); if (!isFinite(pq)) pq = 1;
@@ -6979,7 +7124,10 @@ function packHintOf(v, plain, item) {
   seg.push((pqRaw === '' ? DIM('1') : trimNum(pq)) + pu + '/套');
   if (cu || wRaw !== '') seg.push((wRaw === '' ? DIM('1') : trimNum(w)) + cu + '/' + pu);
   var txt = seg.join(MUL) + ' = ' + trimNum(content) + cu;
-  return '📦 库存 = ' + txt + '（' + trimNum(pieces) + ' ' + pu + '）';
+  // 【第 40 轮】这一行算的是「买进来过多少」（历史入库），不是「现在还剩多少」——
+  //   与规格明细分支的「📦 累计购入」口径拉齐（用户截图：此处写「库存 = 1套×N包×1kg/包」，
+  //   而「当前库存」明明是 0 包，两个口径互相打架）
+  return '📦 累计购入 = ' + txt + '（' + trimNum(pieces) + ' ' + pu + '）';
 }
 // 含量单位：kg / g / ml / L（影响比价口径与库存/明细的单位展示）
 function onConsumableWeightUnitInput(idx, val) {
@@ -7521,6 +7669,8 @@ function buildYearStats(year) {
     (z.items || []).forEach(function(it) {
       var yq = 0, times = 0, daySum = 0, dayCnt = 0, spend = 0;
       var brandMap = {};
+      // 【第 40 轮】年报数量单位 = 物品容量单位；记录按自己的单位记账，汇总前先换算
+      var yU = capUnitOf(it) || it.unit || '件';
       // 消耗量：使用记录落在这一年的
       (it.usageRecords || []).forEach(function(r) {
         if (!r || r.type === 'surplus') return;    // 盘盈只修库存，绝不进年报消耗
@@ -7529,7 +7679,10 @@ function buildYearStats(year) {
         var d = r.endDate || r.startDate || r.date;
         if (!d) return;
         if (new Date(d).getFullYear() !== year) return;
-        yq += (recordCap(it, r) || 1);
+        // 换算不出系数（跨维度脏数据）→ 退回原值，绝不丢这条消耗记录
+        var rc = recordCap(it, r);
+        var rcV = contentUnitConvert(rc, recordCapUnit(it, r), yU);
+        yq += ((rcV === null ? rc : rcV) || 1);
         times += 1;
         if (r.startDate && r.endDate) {
           var dd = daysBetween(new Date(r.startDate), new Date(r.endDate));
@@ -7571,7 +7724,7 @@ function buildYearStats(year) {
       // 年报表展示口径：【第 28 轮】数量一律用容量（ml/g/片）—— 容量才是花钱买到的量。
       // 记录里的数量已经在 recordCap 里做过「件数 × 单包容量」这唯一一次乘法，
       // 这里直接拿来用，绝不再乘第二次（旧版曾算出 36 万 ml 的荒谬数）。
-      var unitName = capUnitOf(it) || it.unit || '件';
+      var unitName = yU;
       var mainQty = Math.round(yq * 10) / 10;
       var capQty = 0, showCapUnit = '';
       var brands = Object.keys(brandMap).map(function(k) { return brandMap[k]; });
@@ -8156,7 +8309,8 @@ function openStockAuditForm(itemId) {
   html += '<div class="modal-title">📦 库存盘点</div>';
   html += '<div style="text-align:center;margin-bottom:16px">';
   html += '<div style="font-size:16px;font-weight:700">' + escapeHtml(item.name) + '</div>';
-  html += '<div style="font-size:13px;color:var(--text-secondary);margin-top:4px">当前记录：' + currentStock + unit + '</div>';
+  // 【第 40 轮】规格明细型物品的「当前记录」是含量口径（kg），必须配容量单位，不能配件数单位
+  html += '<div style="font-size:13px;color:var(--text-secondary);margin-top:4px">当前记录：' + currentStock + stockNumUnitOf(item) + '</div>';
   html += '</div>';
 
   var variants = item.variants && item.variants.length > 0 ? item.variants : [];
@@ -10985,7 +11139,7 @@ function showAlertDetail(type) {
           var totS = getTotalStock(it);
           lowPack = '（约 ' + Math.floor(totS / Math.max(1, it.variants[0].packQty)) + ' 套）';
         }
-        html += '<div style="font-size:13px;color:var(--orange);font-weight:600;margin-top:2px">📦 库存仅剩 ' + getTotalStock(it) + mainPackUnit(it) + lowPack + '（告急阈值' + (it.stockThreshold||1) + '）</div>';
+        html += '<div style="font-size:13px;color:var(--orange);font-weight:600;margin-top:2px">📦 库存仅剩 ' + getTotalStock(it) + stockNumUnitOf(it) + lowPack + '（告急阈值' + (it.stockThreshold||1) + '）</div>';
       } else if (type === 'lowStockSoft') {
         var est = status.estDaysLeft;
         html += '<div style="font-size:13px;color:var(--blue);font-weight:600;margin-top:2px">⏳ 预计 ' + (est!==null?est:'?') + ' 天内用完</div>';
@@ -10998,7 +11152,7 @@ function showAlertDetail(type) {
         html += '<div style="font-size:13px;color:var(--green);font-weight:600;margin-top:2px">🔓 使用中：' + (activeBrands.join('、') || '—') + '</div>';
       } else if (type === 'stockpile') {
         var totalS = getTotalStock(it);
-        html += '<div style="font-size:13px;color:var(--text-secondary);font-weight:600;margin-top:2px">📦 库存 ' + (totalS||0) + mainPackUnit(it) + ' · 未开封</div>';
+        html += '<div style="font-size:13px;color:var(--text-secondary);font-weight:600;margin-top:2px">📦 库存 ' + (totalS||0) + stockNumUnitOf(it) + ' · 未开封</div>';
       }
       html += '</div>';
       html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0;align-self:center;font-size:12px;padding:6px 10px" onclick="event.stopPropagation();taskFromItem(\'' + zone.id + '\',\'' + it.id + '\')">📋 委托</button>';
