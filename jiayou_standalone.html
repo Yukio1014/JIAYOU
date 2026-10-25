@@ -1715,6 +1715,21 @@ function stockSummaryOf(item) {
   // 组合消耗型：总库存直接报剩余容量（各容量单位分组并列，如「1520ml」），
   // 「原 N 套」仅作购买记录补充说明。
   if (hasCombo) {
+    // 【第 42 轮】总库存 = 各变体累加，绝不并列拼接。用户原话：
+    //   「总库存 = 变体A库存 + 变体B库存，必须显示 522；绝不能像报菜名一样并列
+    //    （272粒 · 250颗 极其荒谬）；单位不同就统一取主单位」。
+    //   正常数据经 contentUnitFactor 归一后只剩一只桶；此处兜底老数据
+    //   （物品容量单位缺失导致没换算）—— 多只计数桶（粒/颗/片/只…）合并为主单位，
+    //   容量跨维度桶（kg 与 ml）仍各自成桶 —— R40 红线不退回。
+    var countBuckets42 = wOrder.filter(function (u) { return isCountUnitText(u); });
+    if (countBuckets42.length > 1) {
+      var mainU42 = itemCapU || countBuckets42[0];
+      var merged42 = 0;
+      countBuckets42.forEach(function (u) { merged42 += wTotals[u]; });
+      wOrder = wOrder.filter(function (u) { return !isCountUnitText(u); });
+      wTotals[mainU42] = merged42;
+      wOrder.unshift(mainU42);
+    }
     var head = wOrder.map(function (u) { return round1(wTotals[u]) + u; }).join(' · ');
     if (comboSetsBought > 0) head += ' · 原 ' + trimNum(comboSetsBought) + ' 套';
     return head;
@@ -3011,10 +3026,21 @@ function isContentUnitText(u) {
 //   ① kg↔g、L↔ml 同维度，按 1000 换算（21kg + 1450g = 22.45kg）；
 //   ② 跨维度（kg↔ml、kg↔片）返回 null —— 换算不出系数，绝不相加（宁可少算也不造假数）；
 //   ③ 单位留空视为「无意见」，按 1:1 放行（兼容老数据，与旧 specSameMainUnit 口径一致）。
+// 【第 42 轮】计数类单位同维度表：粒/颗/片/只/个/件/包/支/瓶/袋/枚/根/条/盒……
+//   同一物品的不同变体/规格完全可能一个填「粒」一个填「颗」（洗衣凝珠：奥妙 272粒
+//   + 奥妙除菌除螨 250颗）—— 语义完全同类（都是一「粒/颗」东西），必须同维度相加，
+//   总库存显示 522 而不是「272粒 · 250颗」报菜名。
+//   与容量单位（kg/g/ml/L）之间仍返回 null —— 跨维度绝不相加（R40 红线不退回）。
+var R42_COUNT_UNITS = ['个','件','只','条','根','片','张','块','粒','颗','枚','支','包','袋','盒','瓶','罐','杯','碗','双','套','对','打','卷','听','箱','页','本','台','部','辆','盆','桶','串','柄','瓣','朵','顶','幅','面','首','段','篇','章','节','组','排','版','贴','剂','板','把','副','管','丸','pcs','pc','pieces','piece','ea','each','unit','units','count','nos','no','ct'];
+function isCountUnitText(u) {
+  var s = String(u || '').trim().toLowerCase();
+  return !!s && R42_COUNT_UNITS.indexOf(s) >= 0;
+}
 function contentUnitFactor(from, to) {
   var f = String(from || '').trim().toLowerCase();
   var t = String(to || '').trim().toLowerCase();
   if (!f || !t || f === t) return 1;
+  if (isCountUnitText(f) && isCountUnitText(t)) return 1;   // 计数类同维度：粒 = 颗 = 片 = 只 = 个
   var KG = ['kg', '千克', '公斤'], G = ['g', '克'];
   var L = ['l', '升'], ML = ['ml', '毫升'];
   if (KG.indexOf(f) >= 0 && G.indexOf(t) >= 0) return 1000;     // kg → g（1kg = 1000g）
@@ -5851,7 +5877,7 @@ function manualRefresh() {
 
 // ========== 自动更新检查 ==========
 // deploy.py 部署时会把 1791388211 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1792680001';
+var APP_VERSION = '1792928469';
 
 function checkAppUpdate(manual) {
   try {
@@ -11377,7 +11403,9 @@ function showAlertDetail(type) {
       else if (type === 'stockUp') bgColor = 'rgba(175,82,222,0.06)';
       else if (type === 'stockpile') bgColor = 'rgba(142,142,147,0.06)';
 
-      html += '<div style="display:flex;gap:10px;padding:12px;border-radius:10px;background:' + bgColor + ';margin-bottom:8px;cursor:pointer" onclick="closeModal();setTimeout(function(){enterZone(\'' + zone.id + '\')},200)">';
+      // 【第 42 轮】点列表项直接进「该产品的卡片详情」（用户是来核对库存/委托的，
+      //   旧代码跳领域主页还得再分类里翻一遍，体验断裂）。委托按钮仍 stopPropagation 不冒泡。
+      html += '<div style="display:flex;gap:10px;padding:12px;border-radius:10px;background:' + bgColor + ';margin-bottom:8px;cursor:pointer" onclick="closeModal();setTimeout(function(){openCardDetail(\'' + zone.id + '\',\'' + it.id + '\')},200)">';
       // 照片
       html += '<div style="width:50px;height:50px;border-radius:8px;overflow:hidden;flex-shrink:0;background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:24px">';
       if (it.photos && it.photos.length > 0) {
