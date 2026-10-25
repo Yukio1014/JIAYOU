@@ -3260,12 +3260,24 @@ function restPacksOf(item) {
   return Math.round(t * 100) / 100;
 }
 // 某品牌变体的剩余件数（与 restPacksOf 同源，绝不混入容量）
+// 【第 43 轮】规格分支绝不减 usedQty：usedQty 是即时型专属消耗真源（R34 一维加减），
+//   周期型（组合消耗型）的消耗只走 openPacks。旧代码在这里调 specRemainPieces 会连带
+//   扣掉 specs 里的 usedQty 残留 → 总览卡片 277 粒，而详情页/可用天数走 restCapOf
+//   （不减 usedQty）= 522 —— 同一物品「里面一个数、外面一个数」的幽灵数据。
+//   本函数只被 restPacksOf 调用，而即时型在 restPacksOf 里已提前分流到 instantTotalStock，
+//   能走到这里的规格变体一律是周期型 → 与 restCapOf 同口径（剩余包数 × 每包含量）。
 function variantRestPieces(v) {
   if (!v) return 0;
   var sp = variantSpecsOf(v);
   if (sp.length) {
     var t = 0;
-    sp.forEach(function (s) { t += specRemainPieces(v, s); });
+    sp.forEach(function (s) {
+      // 与 specRemainPieces 同口径（含量单位 1 件=1 包；计数单位 1 件=每包含量），
+      // 唯一差别：绝不减 usedQty（即时型专属，见上方第 43 轮注释）
+      t += isContentUnitText(s && s.unit)
+        ? specPacksRemaining(v, s)
+        : specPacksRemaining(v, s) * specPackQty(s);
+    });
     return Math.round(t * 100) / 100;
   }
   return parseFloat(v.stock) || 0;
@@ -3355,8 +3367,13 @@ function restPackText(item) {
 }
 // 卡片右侧大字 = 剩余容量（只关心还剩多少容量，不关心还剩几件）
 function restTextOf(item) {
-  var pu = packUnitOf(item), cu = capUnitOf(item);
-  if (!cu || cu === pu) return trimNum(round1(restPacksOf(item))) + escapeHtml(pu);
+  // 【第 43 轮】总览卡片库存数必须与详情页/可用天数同源（容量口径 restCapOf）：
+  //   旧代码在 cu===pu 时退回件数口径 restPacksOf —— 用户实测分叉：洗衣凝珠变体2 是
+  //   「5 盒 × 50 颗/盒」，件数口径算 5（272粒+5盒=277粒），容量口径算 250（522），
+  //   同一张卡片「库存 277 粒」配「可用 668 天（522 口径）」，里面一个数外面一个数。
+  //   件=容量时两者恒等（packWeight=1）；件≠容量时容量口径才是真库存 → 统一走 restCapOf。
+  var cu = capUnitOf(item);
+  if (!cu) return trimNum(round1(restPacksOf(item))) + escapeHtml(packUnitOf(item));
   return capText(restCapOf(item), item);
 }
 // 「开启 1个（约104g）」—— 件数在前、容量在后
@@ -3845,11 +3862,20 @@ function renderZone() {
     }
   }
 
-  // 物品网格
+  // 物品网格（【第 43 轮】抽成独立容器：搜索输入只重渲染列表，绝不重建输入框本身）
+  html += '<div id="zone-list">' + zoneListHtml(zone) + '</div>';
+
+  document.getElementById('zone-content').innerHTML = html;
+}
+
+// 【第 43 轮】 zone 页列表区（分类按钮 + 归档箱 + 物品网格）独立渲染：
+//   搜索框 oninput 只调本函数 → 输入框 DOM 永不被重建 → 焦点/光标原地保留，
+//   修掉「连按退格删第一个字后光标回跳、必须重点输入框」的体验 Bug。
+function zoneListHtml(zone) {
+  var html = '';
   if (currentCategoryId !== 'all') {
     html += '<div style="margin:10px 0 14px"><button class="btn btn-outline btn-sm" style="width:100%" onclick="taskOpenFormFromCategory(\'' + currentZoneId + '\',\'' + currentCategoryId + '\')">📋 委托补货（引用本分类产品）</button></div>';
   }
-  // 归档箱入口（用完不再买的物品都在这里，数据保留可恢复）
   var arcCnt = archivedCountAll();
   if (arcCnt > 0 && !currentSearchQuery) {
     html += '<div style="margin:0 0 14px"><button class="btn btn-outline btn-sm" style="width:100%;font-size:12px" onclick="showArchivedBox()">📦 归档箱（' + arcCnt + ' 件 · 用完不再买）</button></div>';
@@ -3867,13 +3893,19 @@ function renderZone() {
     });
     html += '</div>';
   }
-
-  document.getElementById('zone-content').innerHTML = html;
+  return html;
+}
+function refreshZoneList() {
+  var zone = getZone(currentZoneId);
+  var box = document.getElementById('zone-list');
+  if (!zone || !box) { renderZone(); return; }
+  box.innerHTML = zoneListHtml(zone);
 }
 
 function onSearch(q) {
   currentSearchQuery = q;
-  renderZone();
+  // 【第 43 轮】只重渲染列表区：输入框（含焦点与光标位置）原样保留，绝不整体重建
+  refreshZoneList();
 }
 
 function selectCategory(catId) {
@@ -5828,6 +5860,10 @@ function closeCardDetail() {
   document.getElementById('card-detail-overlay').classList.remove('show');
   currentDetailItem = null;
   currentDetailZone = null;
+  // 【第 43 轮】关闭详情必须强制重渲染当前页（总览/领地）：详情页打开期间任何
+  // 对账、盘点、修改都可能改变库存，旧代码直接返回 → 列表还是进入前的旧 DOM，
+  // 出现「里面 522、外面 277」的幽灵数据。用户原话：绝对不允许里面一个数外面一个数。
+  try { refreshCurrentPage(); } catch (e) {}
 }
 
 // ========== 即时刷新（数据绑定修复）==========
@@ -5877,7 +5913,7 @@ function manualRefresh() {
 
 // ========== 自动更新检查 ==========
 // deploy.py 部署时会把 1791388211 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1792928469';
+var APP_VERSION = '1793174886';
 
 function checkAppUpdate(manual) {
   try {
@@ -11405,45 +11441,46 @@ function showAlertDetail(type) {
 
       // 【第 42 轮】点列表项直接进「该产品的卡片详情」（用户是来核对库存/委托的，
       //   旧代码跳领域主页还得再分类里翻一遍，体验断裂）。委托按钮仍 stopPropagation 不冒泡。
-      html += '<div style="display:flex;gap:10px;padding:12px;border-radius:10px;background:' + bgColor + ';margin-bottom:8px;cursor:pointer" onclick="closeModal();setTimeout(function(){openCardDetail(\'' + zone.id + '\',\'' + it.id + '\')},200)">';
-      // 照片
-      html += '<div style="width:50px;height:50px;border-radius:8px;overflow:hidden;flex-shrink:0;background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:24px">';
-      if (it.photos && it.photos.length > 0) {
-        html += '<img src="' + it.photos[0] + '" style="width:100%;height:100%;object-fit:cover">';
-      } else {
-        html += '📦';
-      }
-      html += '</div>';
-      // 信息
+      // 【第 43 轮】UI 重构（用户原话：删掉左图、文字左移、整体拉宽、保留原有文案）：
+      //   ① 左侧灰色占位图（含照片）整个删掉，不再显示任何占位图；
+      //   ② 文字直接贴卡片左缘（卡片 padding 即合理边距），横向空间全部还给文字；
+      //   ③ 层级：第一行产品名放大加粗 → 第二行副标题小号浅灰 → 第三行核心数据正常黑体、行距拉开；
+      //   ④ 右侧委托按钮靠右、垂直居中。数据逻辑与文案一字不动。
+      html += '<div style="display:flex;gap:10px;align-items:center;padding:13px 14px;border-radius:12px;background:' + bgColor + ';margin-bottom:8px;cursor:pointer" onclick="closeModal();setTimeout(function(){openCardDetail(\'' + zone.id + '\',\'' + it.id + '\')},200)">';
+      // 信息区（无左侧图）
       html += '<div style="flex:1;min-width:0">';
-      html += '<div style="font-weight:700;font-size:15px">' + escapeHtml(it.name) + (it.oneShot ? ' <span style="font-size:11px;color:#fff;background:rgba(255,149,0,0.92);padding:1px 6px;border-radius:6px;font-weight:600;vertical-align:middle">⚡即用完</span>' : '') + '</div>';
-      html += '<div style="font-size:12px;color:var(--text-secondary)">' + zone.icon + ' ' + escapeHtml(zone.name) + '</div>';
+      // 第一行：产品名（放大加粗）+ 即用完状态标签
+      html += '<div style="font-weight:700;font-size:16px;line-height:1.3;color:var(--text)">' + escapeHtml(it.name) + (it.oneShot ? ' <span style="font-size:11px;color:#fff;background:rgba(255,149,0,0.92);padding:1px 6px;border-radius:6px;font-weight:600;vertical-align:middle">⚡即用完</span>' : '') + '</div>';
+      // 第二行：副标题（小号浅灰）
+      html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:3px">' + zone.icon + ' ' + escapeHtml(zone.name) + '</div>';
+      // 第三行：核心数据（正常黑体、行距拉开、阅读舒适）
       if (type === 'expired') {
-        html += '<div style="font-size:13px;color:var(--red);font-weight:600;margin-top:2px">⚠️ 已过期' + (status.daysLeft!==null?'（超期'+Math.abs(status.daysLeft)+'天）':'') + '</div>';
+        html += '<div style="margin-top:6px;font-size:13px;color:var(--text);font-weight:500;line-height:1.5">⚠️ 已过期' + (status.daysLeft!==null?'（超期'+Math.abs(status.daysLeft)+'天）':'') + '</div>';
       } else if (type === 'expiring') {
-        html += '<div style="font-size:13px;color:var(--orange);font-weight:600;margin-top:2px">⏰ 还剩 ' + status.daysLeft + ' 天过期</div>';
+        html += '<div style="margin-top:6px;font-size:13px;color:var(--text);font-weight:500;line-height:1.5">⏰ 还剩 ' + status.daysLeft + ' 天过期</div>';
       } else if (type === 'lowStock') {
         var lowPack = '';
         if (isSetPackMode(it) && it.variants && it.variants.length && (it.variants[0].packQty || 1) > 1) {
           var totS = getTotalStock(it);
           lowPack = '（约 ' + Math.floor(totS / Math.max(1, it.variants[0].packQty)) + ' 套）';
         }
-        html += '<div style="font-size:13px;color:var(--orange);font-weight:600;margin-top:2px">📦 库存仅剩 ' + getTotalStock(it) + stockNumUnitOf(it) + lowPack + '（告急阈值' + (it.stockThreshold||1) + '）</div>';
+        html += '<div style="margin-top:6px;font-size:13px;color:var(--text);font-weight:500;line-height:1.5">📦 库存仅剩 ' + getTotalStock(it) + stockNumUnitOf(it) + lowPack + '（告急阈值' + (it.stockThreshold||1) + '）</div>';
       } else if (type === 'lowStockSoft') {
         var est = status.estDaysLeft;
-        html += '<div style="font-size:13px;color:var(--blue);font-weight:600;margin-top:2px">⏳ 预计 ' + (est!==null?est:'?') + ' 天内用完</div>';
+        html += '<div style="margin-top:6px;font-size:13px;color:var(--text);font-weight:500;line-height:1.5">⏳ 预计 ' + (est!==null?est:'?') + ' 天内用完</div>';
       } else if (type === 'stockUp') {
         var ml = status.monthsLeft;
         var estS = status.estDaysLeft;
-        html += '<div style="font-size:13px;color:var(--purple);font-weight:600;margin-top:2px">🛒 约够用 ' + (ml!==null?ml:'?') + ' 个月' + (estS!==null&&estS!==undefined?'（'+estS+' 天）':'') + '，撑不到下次采购</div>';
+        html += '<div style="margin-top:6px;font-size:13px;color:var(--text);font-weight:500;line-height:1.5">🛒 约够用 ' + (ml!==null?ml:'?') + ' 个月' + (estS!==null&&estS!==undefined?'（'+estS+' 天）':'') + '，撑不到下次采购</div>';
       } else if (type === 'inUse') {
         var activeBrands = (it.variants||[]).filter(function(v){ return v.opened && !v.usedUp; }).map(function(v){ return v.brand||'未命名'; });
-        html += '<div style="font-size:13px;color:var(--green);font-weight:600;margin-top:2px">🔓 使用中：' + (activeBrands.join('、') || '—') + '</div>';
+        html += '<div style="margin-top:6px;font-size:13px;color:var(--text);font-weight:500;line-height:1.5">🔓 使用中：' + (activeBrands.join('、') || '—') + '</div>';
       } else if (type === 'stockpile') {
         var totalS = getTotalStock(it);
-        html += '<div style="font-size:13px;color:var(--text-secondary);font-weight:600;margin-top:2px">📦 库存 ' + (totalS||0) + stockNumUnitOf(it) + ' · 未开封</div>';
+        html += '<div style="margin-top:6px;font-size:13px;color:var(--text);font-weight:500;line-height:1.5">📦 库存 ' + (totalS||0) + stockNumUnitOf(it) + ' · 未开封</div>';
       }
       html += '</div>';
+      // 右侧委托按钮：靠右对齐 + 与文字区垂直居中
       html += '<button class="btn btn-outline btn-sm" style="flex-shrink:0;align-self:center;font-size:12px;padding:6px 10px" onclick="event.stopPropagation();taskFromItem(\'' + zone.id + '\',\'' + it.id + '\')">📋 委托</button>';
       html += '</div>';
     });
