@@ -461,18 +461,10 @@ body {
 .card-model.model-instant { color: var(--text-tertiary); }
 .card-model.model-cycle { color: var(--text-tertiary); }
 
-/* 第 11 轮：预警卡强化 —— 加粗橙/红边框 + 同色阴影；外框尺寸严格不变（仍在原位） */
-/* 关键：用 border 而非 outline/scale，且 box-sizing 为 border-box，绝不撑开卡片大小 */
+/* 第 11 轮：预警卡强化 → 第 45 轮退役（整卡红/黄边框被「第二行小药丸」取代，
+   卡片恒定 card-calm；保留透明边框以保证卡片外框尺寸严格不变、网格不跳动） */
 .item-card { box-sizing: border-box; }
 .item-card.card-calm { border: 2px solid transparent; }
-.item-card.card-warn {
-  border: 2px solid var(--orange);
-  box-shadow: 0 3px 12px rgba(255,149,0,0.24), var(--shadow);
-}
-.item-card.card-alert {
-  border: 2px solid var(--red);
-  box-shadow: 0 3px 12px rgba(255,59,48,0.26), var(--shadow);
-}
 
 /* 第 12 轮：卡片内留白节奏 —— 整体收紧，卡片真正变扁 */
 .card-sec { margin-top: 6px; }         /* 段与段 */
@@ -548,6 +540,11 @@ body {
   backdrop-filter: blur(4px);
 }
 .badge-expire { background: rgba(255,59,48,0.9); }
+/* 【第 45 轮】卡片状态小药丸：10px 小标签，只在需要时出现，绝不整卡染色 */
+.alert-pill { flex-shrink: 0; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 999px; line-height: 1.6; white-space: nowrap; }
+.pill-danger { color: #FF3B30; background: rgba(255,59,48,0.10); }
+.pill-warn { color: #FF9500; background: rgba(255,149,0,0.12); }
+.pill-stockup { color: #AF52DE; background: rgba(175,82,222,0.12); }
 .badge-warn { background: rgba(255,149,0,0.9); }
 .badge-archived { background: rgba(142,142,147,0.92); }
 
@@ -2594,7 +2591,7 @@ function renderHome() {
     html += '<div class="badge-label">即将过期</div></div>';
   }
   if (lowStock.length > 0) {
-    html += '<div class="alert-badge alert-yellow" onclick="filterLowStock()">';
+    html += '<div class="alert-badge alert-red" onclick="filterLowStock()">';
     html += '<div class="badge-num">' + lowStock.length + '</div>';
     html += '<div class="badge-label">库存告急</div></div>';
   }
@@ -2791,6 +2788,43 @@ function estimateRealDaysLeft(item) {
   return Math.round((stockQ + iu.qty) * avgDaysPerUnit);
 }
 
+// 【第 45 轮】告急线：以「月消耗容量」为主口径（默认 1 个月），以「平均每件容量」作无速率兜底。
+//   用户从未设置过件数阈值（旧 stockThreshold 是写死的 1，只用于算不出速率时的兜底），
+//   因此彻底废弃「告急阈值 N 个」这套件数展示——件数只在括号里辅助（约 0.4 个）。
+function alertMonthsOf(item) {
+  var m = parseFloat(item && item.alertMonths);
+  return (isFinite(m) && m > 0) ? m : 1;   // 默认 1 个月 = 现行行为，零迁移
+}
+// 平均每件容量 = 剩余容量 ÷ 剩余件数（如 820g ÷ 8 个 = 102.5g/个）
+function avgPackCapOf(item) {
+  var pc = restPacksOf(item), cap = restCapOf(item);
+  if (pc > 0 && cap > 0) return cap / pc;
+  return 0;
+}
+// 详情页/弹窗统一文案：有速率按月耗，无速率按平均每件容量
+function alertLineText(item) {
+  var m = alertMonthsOf(item);
+  var st = null;
+  try { st = statsOf(item); } catch (e) { st = null; }
+  var cu = capUnitOf(item);
+  var pu = packUnitOf(item);
+  var hasRate = !!(st && !st.noClosedData && st.perMonth > 0);
+  if (hasRate) {
+    var capThr = st.perMonth * m;
+    var line = '不足 ' + trimNum(m) + ' 个月用量（≈' + trimNum(round1(capThr)) + cu;
+    var pc = restPacksOf(item), cp = restCapOf(item);
+    if (pc > 0 && cp > 0 && cu && cu !== pu) {
+      var avg = cp / pc;
+      if (avg > 0) line += ' · 约 ' + trimNum(Math.round((capThr / avg) * 10) / 10) + ' ' + pu;
+    }
+    return line + '）';
+  }
+  var avg2 = avgPackCapOf(item);
+  var line2 = '不足 1 ' + pu;
+  if (avg2 > 0 && cu) line2 += '的量（≈' + trimNum(round1(avg2)) + cu + '）';
+  return line2;
+}
+
 function getItemStatus(item) {
   var status = {
     expired: false, expiring: false,
@@ -2798,8 +2832,9 @@ function getItemStatus(item) {
     shelfPercent: 100, daysLeft: null, estDaysLeft: null, monthsLeft: null
   };
 
-  // 【第 28 轮】库存/告警走「件数」（阈值 item.stockThreshold 本身也是件数），
-  // 绝不再用 getActiveStock 直加 v.stock（规格变体的 v.stock 存的是容量数，直加会把 ml 当件）
+  // 【第 28 轮】库存/告警走「件数」口径，绝不再用 getActiveStock 直加 v.stock
+  // （规格变体的 v.stock 存的是容量数，直加会把 ml 当件）
+  // 【第 45 轮】件数阈值已退役：告急改按月耗容量判定；此处 totalStock 只作 0/1 兜底
   var totalStock = restPacksOf(item);
 
   // 保质期：取所有variants中最早过期的（不再买的品牌不参与提醒计算）
@@ -2846,7 +2881,8 @@ function getItemStatus(item) {
   // 优先用 statsOf 的统一口径（与详情页「月消耗量 / 约够用 N 个月」完全一致，
   // 其剩余量已含「使用中」的包），statsOf 算不出时退回 estimateRealDaysLeft。
   // 预警规则（用户定版）：预估剩余 >5 个月无边框；1~5 个月黄框；<1 个月红框。
-  var threshold = item.stockThreshold || 1;
+  var alertM45 = alertMonthsOf(item);
+  var alertDays45 = alertM45 * 30;
   var st18 = null;
   try { st18 = statsOf(item); } catch (e) { st18 = null; }
   var realDays18 = null;
@@ -2857,17 +2893,20 @@ function getItemStatus(item) {
   }
   if (realDays18 !== null) {
     status.estDaysLeft = realDays18;
-    if (realDays18 <= 30) {
-      // <1 个月：真的快断粮了 → 红
+    if (realDays18 <= alertDays45) {
+      // 不足告急线（默认 1 个月）：真的快断粮了 → 红
       status.lowStock = true;
     } else if (realDays18 <= 150) {
-      // 1~5 个月：余量偏少，该考虑补货 → 黄
+      // 告急线 ~ 5 个月：余量偏少，该考虑补货 → 黄（5 个月固定，对应一年一采的节奏）
       status.lowStockSoft = true;
     }
-    // >150 天（>5 个月）：库存充足 → 无边框、无告急提示
+    // >150 天（>5 个月）：库存充足 → 无告急提示
   } else if (totalStock > 0) {
-    // 算不出速率（无历史数据）：库存 ≤ 阈值 → 温和提示（浅蓝），绝不红色误报
-    if (totalStock <= threshold) status.lowStockSoft = true;
+    // 【第 45 轮】无速率兜底改用容量口径 B：剩余容量不足「平均每件容量 × 1」→ 温和提示，
+    // 绝不红色误报（新物品还没攒够消耗记录时，这是唯一能算的口径）
+    var avgCap45 = avgPackCapOf(item);
+    var restCap45 = restCapOf(item);
+    if (totalStock <= 1 || (avgCap45 > 0 && restCap45 < avgCap45)) status.lowStockSoft = true;
   } else {
     // 库存 0 且算不出速率：还有使用中的 → 温和提示；彻底没有 → 真断粮（红）
     if (status.hasInUse) status.lowStockSoft = true;
@@ -2908,8 +2947,8 @@ function stockBarClass(item, status) {
     if (status.lowStock) return 'low';
     return status.hasInUse ? 'mid' : 'low';
   }
-  var threshold = item.stockThreshold || 1;
-  var pct = (totalStock / Math.max(totalStock, threshold * 3)) * 100;
+  // 【第 45 轮】条形比例按「3 件满格」估算，彻底摆脱已退役的件数阈值
+  var pct = (totalStock / Math.max(totalStock, 3)) * 100;
   var barClass = 'low';
   if (pct > 60) barClass = 'high';
   else if (pct > 30) barClass = 'mid';
@@ -3591,8 +3630,10 @@ function buyAdviceOf(item) {
   // 库存高于告急线 → 直接说库存充足；库存已经见底 → 老实说数据不足（绝不编数字）。
   if (st.noClosedData) {
     var packsNow = restPacksOf(item);
-    var thrNow = (item && item.stockThreshold) || 1;
-    if (packsNow > thrNow) {
+    // 【第 45 轮】无闭环数据时不再看写死的件数阈值：还剩至少一件的量 → 库存充足
+    var avgCap45b = avgPackCapOf(item);
+    var hasOnePack45 = (packsNow >= 1) || (avgCap45b > 0 && restCapOf(item) >= avgCap45b);
+    if (hasOnePack45) {
       return {
         main: SUFFICIENT_TEXT,
         detail: '当前剩 ' + restPackText(item) + ' · 还没有完整闭环，用完后自动出真实速率',
@@ -4028,39 +4069,26 @@ function selectCategory(catId) {
 //   ❗️ 告急：数据充足 且 < 3 个月（含库存归零）
 // App 初期所有开封过的东西一律先显示 🌀，随使用自然过渡到 ⚠️/❗️，绝不引起焦虑。
 function cardUsageStatusLabel(item) {
+  // 【第 45 轮】卡片状态标签与 getItemStatus 完全同源（一次计算，绝不再各算一遍天数）：
+  //   告急（红）/ 余量较少（黄）由 getItemStatus 的容量口径判定；
+  //   「呆滞品」语义保留（从未开封且有库存 → 不是快用完，是还没开始用）。
   var vs = (item.variants && item.variants.length) ? item.variants : [];
-  var totalStock = vs.length ? vs.reduce(function (s, v) { return s + (parseFloat(v.stock) || 0); }, 0) : (parseFloat(item.stock) || 0);
+  var anyOpened = vs.some(function (v) { return v.opened && !v.usedUp; });
   var hasOpenRec = (item.usageRecords || []).some(function (r) {
     return !r.instant && r.type !== 'surplus' && (r.startDate || r.endDate);
   });
-  var anyOpened = vs.some(function (v) { return v.opened && !v.usedUp; });
-  // 【第 17 轮】库存归零不再一律告急：
-  //   没有任何使用中的 → 真正断粮，告急（红）
-  //   【第 18 轮】阈值统一为用户定版规则：<1 个月(30天) ❗️红；1~5 个月(30~150天) ⚠️黄；>5 个月 🌀
-  if (totalStock <= 0) {
-    var anyUse0 = vs.some(function (v) { return v.opened && !v.usedUp; });
-    if (!anyUse0) return { icon: '❗️', label: '告急', cls: 'st-danger' };
-    var st0 = null;
-    try { st0 = getItemStatus(item); } catch (e) { st0 = null; }
-    var ed0 = st0 ? st0.estDaysLeft : null;
-    if (typeof ed0 === 'number' && ed0 <= 30) return { icon: '❗️', label: '告急', cls: 'st-danger' };
-    if (typeof ed0 === 'number' && ed0 <= 150) return { icon: '⚠️', label: '余量较少', cls: 'st-warn' };
-    return { icon: '🌀', label: '使用中', cls: 'st-using' };
-  }
-  // 从未开封 + 有库存 → 呆滞品
-  if (!hasOpenRec && !anyOpened) return { icon: '💭', label: '呆滞品', cls: 'st-idle' };
-  // 开封过 → 看消耗数据是否充足
   var st = null;
   try { st = getItemStatus(item); } catch (e) { st = null; }
-  var m = st ? st.monthsLeft : null;
-  // 数据不足（算不出剩余可用月数）→ 一律 🌀，绝不乱报预警
-  if (m === null || m === undefined || !(st && st.monthsLeft > -1 && (st.estDaysLeft !== null && st.estDaysLeft !== undefined))) {
-    return { icon: '🌀', label: '使用中', cls: 'st-using' };
-  }
-  // 【第 18 轮】阈值 = 用户定版预警规则：>5 个月 🌀无边框；1~5 个月 ⚠️黄框；<1 个月 ❗️红框
-  if (m > 5) return { icon: '🌀', label: '使用中', cls: 'st-using' };
-  if (m >= 1) return { icon: '⚠️', label: '余量较少', cls: 'st-warn' };
-  return { icon: '❗️', label: '告急', cls: 'st-danger' };
+  var packs = restPacksOf(item);
+
+  // 彻底没库存且没有在用的 → 真断粮
+  if (packs <= 0 && !anyOpened) return { icon: '❗️', label: '告急', cls: 'st-danger' };
+  // 从未开封 + 有库存 → 呆滞品（还没开始用，不报告急）
+  if (!hasOpenRec && !anyOpened) return { icon: '💭', label: '呆滞品', cls: 'st-idle' };
+  // 与状态引擎同源：不足告急线（默认 1 个月）→ 红；不足 5 个月 → 黄；否则使用中
+  if (st && st.lowStock) return { icon: '❗️', label: '告急', cls: 'st-danger' };
+  if (st && st.lowStockSoft) return { icon: '⚠️', label: '余量较少', cls: 'st-warn' };
+  return { icon: '🌀', label: '使用中', cls: 'st-using' };
 }
 // 【第 10 轮】原 cardStockShort 已被 renderItemCard 内的 hero 拆分逻辑取代
 // （主数字直接取 stockSummaryOf 的第一段，副段作为小灰字并列），故删除以避免死代码。
@@ -4094,16 +4122,11 @@ function renderItemCard(item, zone) {
   var isInstantC = (cModelC === 'instant');
 
   // 第 10 轮：卡片视觉分级 —— 只有 ⚠️/❗️ 才动用橙/红，其余一律素雅灰白
-  // card-calm / card-warn / card-alert 决定左边框与极淡底色，让需行动的卡「跳出来」
+  // 第 45 轮：卡片恒定素雅底色（card-calm），状态由第二行小药丸表达（不再整卡染色）
   // 注意：必须在 stL 赋值之后计算（var 提升会让提前引用恒为 undefined）
   var tierCls = ' card-calm';
-  if (stL && !item.alertMuted) {
-    // 【第 39 轮】「忽略」= 用户主动关掉这个物品的一切库存预警视觉：
-    // 不亮红框（card-alert）、也不亮黄框（card-warn），卡片回归最干净的基础样式
-    // （R38 曾只压红框漏了黄框，用户实测截图复现后修复）
-    if (stL.cls === 'st-danger') tierCls = ' card-alert';
-    else if (stL.cls === 'st-warn') tierCls = ' card-warn';
-  }
+  // 【第 45 轮】整卡彩色边框太重（用户实测反馈"一直显示在那边会烦"）→ 全部收敛为 card-calm，
+  //   状态只由标题行右侧的 10px 小药丸表达；「忽略」时连药丸也不出现（R39 口径不变）。
   // 【第 36 轮】凯旋待确认：这个物品下只要有任何一个品牌变体还没核对，总览卡就套紫色阴影
   var pendingCls = (item.variants || []).some(function (x) { return x.pendingConfirm; }) ? ' card-pending' : '';
   // 把分级类补进已开出的卡片标签
@@ -4134,16 +4157,10 @@ function renderItemCard(item, zone) {
   if (stL) {
     var mdlC = (cModelC === 'instant') ? '⚡' : '⌛';
     var mdlTxt = (cModelC === 'instant') ? '即时消耗型' : '周期消耗型';
-    // 【第 39 轮】忽略中：⚠️/❗️ 预警图标也撤掉，换成灰色 🔕——
-    // 它不再是库存预警视觉，只是一个「已忽略」的安静状态标记
-    var stClsC = stL.cls, stIconC = stL.icon, stLabelC = stL.label;
-    if (item.alertMuted && (stL.cls === 'st-warn' || stL.cls === 'st-danger')) {
-      stClsC = 'st-mute'; stIconC = '🔕'; stLabelC = '已忽略提醒';
-    }
-    // 【第 13 轮】两个小图标竖向排列（上下堆叠）
+    // 【第 45 轮】状态改由药丸表达，右列只留模型图标；仅「已忽略」保留安静的 🔕
     html += '<span style="flex-shrink:0;display:inline-flex;flex-direction:column;align-items:center;gap:2px;line-height:1">'
       + '<span class="card-model" title="' + mdlTxt + '">' + mdlC + '</span>'
-      + '<span class="card-st ' + stClsC + '" title="' + stLabelC + '">' + stIconC + '</span>'
+      + (item.alertMuted ? '<span class="card-st st-mute" title="已忽略提醒">🔕</span>' : '')
       + '</span>';
   }
   html += '</div>';
@@ -4169,7 +4186,16 @@ function renderItemCard(item, zone) {
     //   有闭环数据 → 「可用 ≈ X 天」；没有闭环 → 「📭 数据不足」，等有数据后自动更新。
     //   （绝不再出现整行空着、或拿「使用中」硬凑天数的情况）
     var daysTxtC = cardDaysText(item, status);
+    // 【第 45 轮】状态小药丸：三态只显示最紧急的一个（告急 > 余量少 > 该囤货），没有就不出现；
+    //   放在第二行行首，绝不挤占产品名
+    var pillC45 = '', pillTxt45 = '';
+    if (!item.alertMuted) {
+      if (stL && stL.cls === 'st-danger') { pillC45 = 'pill-danger'; pillTxt45 = '❗️告急'; }
+      else if (stL && stL.cls === 'st-warn') { pillC45 = 'pill-warn'; pillTxt45 = '⚠️余量少'; }
+      else if (status.stockUpAlert) { pillC45 = 'pill-stockup'; pillTxt45 = '🛒该囤货'; }
+    }
     html += '<div class="card-sec" style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">';
+    if (pillTxt45) html += '<span class="alert-pill ' + pillC45 + '">' + pillTxt45 + '</span>';
     if (heroSubC) html += '<span class="card-hero-sub">' + escapeHtml(heroSubC) + '</span>';
     html += '<span class="card-days">' + escapeHtml(daysTxtC) + '</span>';
     html += '</div>';
@@ -5092,8 +5118,8 @@ function renderCardFront(item, zone) {
     // 【第 28 轮】「库存」走件数口径，文案由 restPackText 拼成「9个（≈936g）」
     var totalStock = restPacksOf(item);
     if (totalStock !== undefined) {
-      var threshold = item.stockThreshold || 1;
-      var maxBar = Math.max(totalStock, threshold * 3);
+      // 【第 45 轮】条形比例按「3 件满格」估算，不再读取已退役的件数阈值
+      var maxBar = Math.max(totalStock, 3);
       var pct = maxBar > 0 ? (totalStock / maxBar * 100) : 0;
       var barClass = stockBarClass(item, status);
       html += '<div style="margin-top:14px">';
@@ -5267,10 +5293,8 @@ function renderCardBack(item, zone) {
     html += '<span style="font-size:14px;color:var(--text-primary);font-weight:600">' + stockTxt18 + '</span>';
     html += '</div>';
 
-    // ② 告急阈值（小字，保持原有弱化地位，位置不动）
-    if (item.stockThreshold) {
-      html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">🔔 告急阈值 <span style="color:var(--text-primary);font-weight:500">' + item.stockThreshold + mainPackUnit(item) + '</span></div>';
-    }
+    // ② 告急线（第 45 轮：容量口径 —— 不足 N 个月用量，括号补容量与件数；不再显示件数阈值）
+    html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">🔔 告急线 <span style="color:var(--text-primary);font-weight:500">' + alertLineText(item) + '</span></div>';
 
     // ③ 数据支撑：月消耗量 / 年消耗量（第 11 轮：从「消耗概览」上移，紧挨采购建议）
     var rateLine = '';
@@ -6149,7 +6173,7 @@ function manualRefresh() {
 
 // ========== 自动更新检查 ==========
 // deploy.py 部署时会把 1791388211 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1793261286';
+var APP_VERSION = '1793347686';
 
 function checkAppUpdate(manual) {
   try {
@@ -7303,7 +7327,10 @@ function openItemForm(itemId) {
     html += '</div>';
 
     // 消耗模型已上移到「名称」左侧的下拉框；这里只保留阈值
-    html += '<div class="form-group"><label class="form-label">库存告急阈值</label><input type="number" class="form-input" id="item-threshold" value="' + (item?(item.stockThreshold||1):1) + '" step="0.5"></div>';
+    // 【第 45 轮】告急线改为容量口径：剩余不足 N 个月用量（默认 1）；组件件数阈值彻底退场
+    var amVal45 = item ? alertMonthsOf(item) : 1;
+    html += '<div class="form-group"><label class="form-label">告急线（剩余不足几个月用量）</label><input type="number" class="form-input" id="item-alertmonths" value="' + trimNum(amVal45) + '" step="0.5" min="0.5">';
+    html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px">按消耗速度算：剩余不足这么多就提醒。默认 1 个月；没有消耗记录时按「不足 1 件」提示。</div></div>';
     html += '</div>';
   }
 
@@ -8120,7 +8147,10 @@ function saveItem() {
     data.stock = data.variants.reduce(function(s,v) { return s + (v.stock||0); }, 0);
     // 补给品总金额 = 各品牌总价之和
     data.currentPrice = data.variants.reduce(function(s,v){ return s + (v.totalPrice || ((v.price||0)*(v.stock||0))); }, 0);
-    data.stockThreshold = parseFloat(document.getElementById('item-threshold').value) || 1;
+    // 【第 45 轮】保存告急线（月数）；旧 stockThreshold 字段保留但不再参与判定
+    var amEl45 = document.getElementById('item-alertmonths');
+    data.alertMonths = parseFloat(amEl45 && amEl45.value) || 1;
+    data.stockThreshold = (typeof item !== 'undefined' && item && item.stockThreshold) || 1;
     var cmEl = document.getElementById('item-consumemode');
     data.consumeMode = (cmEl && CONSUME_MODELS[cmEl.value]) ? cmEl.value : 'period';
     data.oneShot = (data.consumeMode === 'instant'); // 即时消耗 = 旧 oneShot 语义，保持字段兼容
@@ -11734,7 +11764,7 @@ function showAlertDetail(type) {
           var totS = getTotalStock(it);
           lowPack = '（约 ' + Math.floor(totS / Math.max(1, it.variants[0].packQty)) + ' 套）';
         }
-        html += '<div style="margin-top:6px;font-size:13px;color:var(--text);font-weight:500;line-height:1.5">📦 库存仅剩 ' + getTotalStock(it) + stockNumUnitOf(it) + lowPack + '（告急阈值' + (it.stockThreshold||1) + '）</div>';
+        html += '<div style="margin-top:6px;font-size:13px;color:var(--text);font-weight:500;line-height:1.5">📦 库存仅剩 ' + getTotalStock(it) + stockNumUnitOf(it) + lowPack + '（不足' + trimNum(alertMonthsOf(it)) + '个月用量）</div>';
       } else if (type === 'lowStockSoft') {
         var est = status.estDaysLeft;
         html += '<div style="margin-top:6px;font-size:13px;color:var(--text);font-weight:500;line-height:1.5">⏳ 预计 ' + (est!==null?est:'?') + ' 天内用完</div>';
