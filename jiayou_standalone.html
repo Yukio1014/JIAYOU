@@ -2159,14 +2159,9 @@ function variantPackText(v, item) {
     var actPacks = 0;
     if (item) {
       variantActiveOpenRecs(item, v).forEach(function (r) {
-        var pqA2 = 1;
-        if (r.specName) {
-          var sA2 = spAll.find(function (x) { return String(x.name || '').trim() === String(r.specName).trim(); });
-          if (sA2) pqA2 = specPackQty(sA2);
-        } else {
-          pqA2 = parseFloat(v.packQty) || 1;
-        }
-        actPacks += recordPacksOf(r, pqA2);
+        // 【第 46 轮】统一走 recPacksOfSpec：老记录没有 specName 时靠 specText 反查规格，
+        //   绝不再拿 v.packQty（可能为空→1）去和 qty(400ml) 比 → 显示「另有 400 包在用」。
+        actPacks += recPacksOfSpec(v, r);
       });
     }
     actPacks = Math.round(actPacks * 100) / 100;
@@ -2727,20 +2722,14 @@ function inUseStockOf(item) {
     recs.forEach(function (r) {
       if (sp.length) {
         // 多规格：每条未结束开封记录 = recordPacksOf 包在用（R41：一条流水可能是一批 N 包）；
-        // r.qty 新口径 = 每包含量 × 包数，单包含量以 packPieces 为准（老数据退回 qty）
-        var s1 = null;
-        for (var i = 0; i < sp.length; i++) {
-          if (String(sp[i].name || '') === String(r.specName || '')) { s1 = sp[i]; break; }
-        }
-        var pq1 = s1 ? specPackQty(s1) : (parseFloat(r.packPieces) || 1);
-        var nPacks = recordPacksOf(r, pq1);
+        // 【第 46 轮】规格定位统一走 matchSpecOfRecord（含 specText 反查）：
+        //   老记录只有 specText、没有 specName，旧代码按名字硬比 → 找不到 → 把 qty(400ml) 当 400 件。
+        var s1 = matchSpecOfRecord(v, r);
+        var nPacks = recPacksOfSpec(v, r);
         out.qty += nPacks;
-        var perPack = parseFloat(r.packPieces);
-        if (!(perPack > 0)) perPack = parseFloat(r.qty);
-        if (!(perPack > 0) && s1) perPack = specPackQty(s1);
-        if (!(perPack > 0)) perPack = 1;
+        var perPack = s1 ? specCapPerPack(s1) : (parseFloat(r.packPieces) || 0);
         if (s1 && isContentUnitText(s1.unit)) {
-          out.content += perPack * nPacks * (specContentOf(s1) || 1);
+          out.content += perPack * nPacks;
         } else {
           out.hasContent = false;   // 片/粒类或对不上规格 → 含量口径不完整
         }
@@ -3138,6 +3127,28 @@ function matchSpecOfRecord(v, r) {
     var s2 = v.specs[r.packIdx];
     if (sp.indexOf(s2) >= 0) return s2;   // packIdx 指向的必须是有效规格行
   }
+  // 【第 46 轮】老记录只有「给人看的文字」specText（如「替换装×1包」），没有结构化 specName。
+  //   旧逻辑直接判「找不到规格」→ 下游退回把 r.qty（400ml）当件数 → 详情页显示「400 件使用中」。
+  //   按「+」拆段逐段反查：每段取最长的规格名（解决「替换装」包含「正装」的子串歧义）；
+  //   所有段都指向同一个规格才认定，组合装（正装+中样）一律不猜。
+  if (r.specText) {
+    var segs = String(r.specText).split('+');
+    var found = null, multi = false;
+    segs.forEach(function (seg) {
+      var h = sp.filter(function (x) {
+        var n = String(x.name || '').trim();
+        return n && seg.indexOf(n) >= 0;
+      });
+      if (!h.length) return;
+      var maxLen = 0;
+      h.forEach(function (x) { maxLen = Math.max(maxLen, String(x.name || '').trim().length); });
+      var top = h.filter(function (x) { return String(x.name || '').trim().length === maxLen; });
+      if (top.length !== 1) { multi = true; return; }   // 同段多义（两个同长规格名）→ 不猜
+      if (found && found !== top[0]) multi = true;
+      else found = top[0];
+    });
+    if (found && !multi) return found;
+  }
   if (sp.length === 1) return sp[0];      // 单规格兜底：这条记录只可能属于它
   return null;
 }
@@ -3285,10 +3296,10 @@ function capPerPackOf(item, r) {
   if (!v) return 0;
   var sp = variantSpecsOf(v);
   if (sp.length) {
-    if (r && r.specName) {
-      var s = sp.find(function (x) { return String(x.name || '').trim() === String(r.specName).trim(); });
-      if (s) return specCapPerPack(s);
-    }
+    // 【第 46 轮】统一走 matchSpecOfRecord（含 specText 反查）：老记录没有 specName，
+    //   旧代码直接退回 sp[0]（正装 460ml），拿替换装记录（400ml）去比 → 算出「400 件」。
+    var sHit = matchSpecOfRecord(v, r);
+    if (sHit) return specCapPerPack(sHit);
     return specCapPerPack(sp[0]);
   }
   return parseFloat(v.packWeight) || 0;
@@ -3360,6 +3371,18 @@ function recordPacksOf(r, pq) {
   var per = parseFloat(pq) || 0;
   if (per > 0 && q > per + 0.01) return Math.max(1, Math.round((q / per) * 100) / 100); // 旧多包记录：qty = 每包含量 × 包数
   return 1;
+}
+// ===== 【第 46 轮】一条开封记录「代表几件」的唯一入口 =====
+// 病根：详情页有 4 处各自判断「r.specName 是否存在」，不存在就把 r.qty 直接当件数。
+//   而老记录只有 specText、没有 specName → qty（400ml）被当成 400 件 → 「400 件使用中」/「400个」。
+// 规则：先按 matchSpecOfRecord 找规格（specName → packIdx → specText 反查 → 单规格兜底），
+//   用该规格的「每包真实容量」反推件数；找不到规格时才用记录自带的 packPieces；
+//   两者都没有 → 按 1 件（老口径：一条开封流水 = 开 1 件），绝不再拿容量数冒充件数。
+function recPacksOfSpec(v, r) {
+  if (!r) return 0;
+  var s = matchSpecOfRecord(v, r);
+  var pq = s ? specCapPerPack(s) : (parseFloat(r.packPieces) || 0);
+  return recordPacksOf(r, pq);
 }
 // 唯一的乘法：总容量 = 件数 × 单包容量
 function recordCap(item, r) {
@@ -4354,7 +4377,8 @@ function reconcileItemState(item) {
       specs.forEach(function (s, si) {
         var nm = s.name || '规格';
         var inUse = (item.usageRecords || []).some(function (r) {
-          return r.variantId === v.id && r.specName === nm && !r.endDate && !r.instant;
+          // 【第 46 轮】用规格反查（specText 也算）代替名字硬比，老记录不再被漏判
+          return r.variantId === v.id && !r.endDate && !r.instant && matchSpecOfRecord(v, r) === s;
         });
         s.__openPack = inUse;
       });
@@ -5375,18 +5399,19 @@ function renderCardBack(item, zone) {
         var actCountV = actRecsV.length;
         // 【第 41 轮】在用汇总按真实包数/件数：一条流水可能是一批（packs>1），绝不按条数算
         var actInUseV = (function () {
-          var q = 0, isSpec = false;
+          var q = 0;
           var spV = variantSpecsOf(v);
           actRecsV.forEach(function (r) {
-            if (spV.length && r.specName) {
-              var s1 = spV.find(function (x) { return String(x.name || '').trim() === String(r.specName).trim(); });
-              q += recordPacksOf(r, s1 ? specPackQty(s1) : (parseFloat(r.packPieces) || 1));
-              isSpec = true;
+            if (spV.length) {
+              // 【第 46 轮】规格型一律走「记录 → 规格 → 包数」链路（recPacksOfSpec 内含 specText 反查）。
+              //   旧代码要求 r.specName 存在，老记录没有 → 把 qty(400ml) 当件数 → 「400 件使用中」。
+              q += recPacksOfSpec(v, r);
             } else {
-              q += (parseFloat(r.qty) > 0 ? parseFloat(r.qty) : 1);
+              q += (parseFloat(r.qty) > 0 ? parseFloat(r.qty) : 1);   // 无规格变体：qty 本身就是件数
             }
           });
-          return { qty: Math.round(q * 100) / 100, unit: isSpec ? packCountUnitOf(item, v) : '件' };
+          // 【第 44/46 轮】单位一律引用用户写的件数文本（包/瓶/支…），绝不写死「件」
+          return { qty: Math.round(q * 100) / 100, unit: packCountUnitOf(item, v) || '件' };
         })();
         // 第 11 轮：品牌名与「💕感受 / 🚮弃用」并排 —— 感受只属于具体品牌，主卡不再有入口
         html += '<div class="vc-head" style="gap:6px">';
@@ -5497,13 +5522,19 @@ function renderCardBack(item, zone) {
             var dTxt = rc.startDate ? formatDate(rc.startDate) : '—';
             var dDays = rc.startDate ? daysBetween(new Date(rc.startDate), new Date()) : 0;
             var qTxt = '';
-            if (rc.packPieces) {
-              // R41：一条记录可能代表一批（packs>1），显示真实包数
-              var pqR = specPackQty((variantSpecsOf(v) || []).filter(function (x) { return String(x.name || '') === String(rc.specName || ''); })[0] || {});
-              var packsR = recordPacksOf(rc, pqR);
-              qTxt = (rc.specName ? escapeHtml(rc.specName) + ' · ' : '') + trimNum(packsR) + uPU + '（' + trimNum(rc.packPieces * packsR) + (v.packUnit || mainPackUnit(item)) + '）';
+            var spRow = variantSpecsOf(v);
+            if (spRow.length) {
+              // 【第 46 轮】规格型统一走「记录 → 规格 → 包数」：老记录靠 specText 反查定位规格，
+              //   绝不再把 r.qty（400ml）当件数显示成「400个」。单位全部引用用户写的文本。
+              var sRow = matchSpecOfRecord(v, rc);
+              var packsR = recPacksOfSpec(v, rc);
+              var capURow = sRow ? String(sRow.unit || '').trim() : '';
+              var capRow = sRow ? specCapPerPack(sRow) * packsR : 0;
+              qTxt = (sRow ? escapeHtml(sRow.name) + ' · ' : '')
+                + trimNum(packsR) + escapeHtml(uPU)
+                + ((capRow > 0 && capURow) ? '（约' + trimNum(round1(capRow)) + escapeHtml(capURow) + '）' : '');
             } else {
-              qTxt = trimNum(rc.qty || 1) + (v.packUnit || mainPackUnit(item));
+              qTxt = trimNum(rc.qty || 1) + escapeHtml(uPU);
             }
             html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 0">';
             html += '<div style="flex:1;min-width:0">';
@@ -5541,7 +5572,9 @@ function renderCardBack(item, zone) {
             var perSetL = specPackCount(s);
             var actL = 0;
             actRecsV.forEach(function (r) {
-              if (String(r.specName || '') === String(nmL)) actL += recordPacksOf(r, pqL);
+              // 【第 46 轮】按「记录 → 规格」反查归属（老记录没有 specName，靠 specText 命中），
+              //   绝不再用名字硬比 —— 那样老记录会从所有规格行里漏掉。
+              if (matchSpecOfRecord(v, r) === s) actL += recPacksOfSpec(v, r);
             });
             actL = Math.round(actL * 100) / 100;
             if (isInstantV13) {
@@ -5632,9 +5665,9 @@ function renderCardBack(item, zone) {
       (item.variants || []).forEach(function (vv) {
         var spV = variantSpecsOf(vv);
         variantActiveOpenRecs(item, vv).forEach(function (r) {
-          if (spV.length && r.specName) {
-            var s1 = spV.find(function (x) { return String(x.name || '') === String(r.specName || ''); });
-            actNowR += recordPacksOf(r, s1 ? specPackQty(s1) : 1);
+          if (spV.length) {
+            // 【第 46 轮】规格型走 recPacksOfSpec（含 specText 反查），绝不用 r.qty 当件数
+            actNowR += recPacksOfSpec(vv, r);
             // 【第 44 轮】单位引用规格单位文本（瓶/包/个/支……），绝不写死「包」
             //   即时型物品（含脏数据）走计数单位，防止件数容量串味
             actUnitR = (consumeModelOf(item) === 'instant') ? (instantCountUnit(item) || '件') : (packCountUnitOf(item, vv) || '包');
@@ -6173,7 +6206,7 @@ function manualRefresh() {
 
 // ========== 自动更新检查 ==========
 // deploy.py 部署时会把 1791388211 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1793347686';
+var APP_VERSION = '1793434086';
 
 function checkAppUpdate(manual) {
   try {
@@ -6393,7 +6426,8 @@ function openVariantItem(itemId, variantId) {
       var k = (v.specs || []).indexOf(s); // 原始下标：openOnePack 按 v.specs 解析
       var packsRemain = specPacksRemaining(v, s), pq = specPackQty(s), u = s.unit || '';
       var pieces = Math.round(packsRemain * pq * 100) / 100;
-      var actRecs = variantActiveOpenRecs(item, v).filter(function (r) { return String(r.specName || '') === String(s.name || ''); });
+      // 【第 46 轮】使用中条数按「记录 → 规格」反查归属（含 specText 反查），老记录不再漏计
+      var actRecs = variantActiveOpenRecs(item, v).filter(function (r) { return matchSpecOfRecord(v, r) === s; });
       html += '<div style="padding:10px;background:var(--bg);border-radius:10px;margin-bottom:6px">';
       html += '<div style="display:flex;gap:8px;align-items:center">';
       html += '<div style="flex:1;min-width:0"><div style="font-weight:600;font-size:14px">' + escapeHtml(s.name || ('规格' + (k + 1))) + '</div>';
