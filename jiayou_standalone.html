@@ -3725,11 +3725,9 @@ function renderAIAnalysis() {
     html += '</div>';
   }
 
-  // 花费：只给今年总额，明细不在首页
-  if (r.totalSpend > 0) {
-    html += '<div class="ai-item" style="border-top:1px solid rgba(0,105,92,0.2);margin-top:8px">';
-    html += '<span>今年已记录花费</span><span class="ai-val">¥' + r.totalSpend.toFixed(2) + '</span></div>';
-  }
+  // 【第 47 轮】首页不再出现任何金额。
+  //   金额口径（预估/实付/批次）只在详情与年报里说得清，摆到首页只会误导；
+  //   完整的花费统计在「年报 → 分类花费」，按实际购入算。
 
   // 入口
   html += '<button class="btn btn-primary btn-full" style="margin-top:12px" onclick="showPage(\'report\')">📊 查看完整年报</button>';
@@ -5248,6 +5246,249 @@ function toggleItemAlertMute(itemId) {
   toast(item.alertMuted ? '🔕 已忽略：库存再低，总览卡片也不亮红/黄框' : '🔔 已恢复提示：库存告急时总览卡片亮红/黄框');
 }
 
+// ========== 【第 47 轮】品牌变体管理（快捷编辑，规格可改） ==========
+// 入口两处：折叠栏「⚙️管理」（全部变体）、变体卡片头「✏️管理」（直达这一个）
+// 为什么允许改规格：凯旋入库的数据是委托单上的预估，核对时本来就要纠错（6瓶 → 实际5瓶）。
+function openVariantAdmin(itemId, vid) {
+  var item = findItemByIdGlobal(itemId);
+  if (!item) { toast('找不到这个物品'); return; }
+  window._vaCtx = { itemId: itemId, vid: vid || '' };
+  renderVariantAdmin();
+}
+function renderVariantAdmin() {
+  var ctx = window._vaCtx; if (!ctx) return;
+  var item = findItemByIdGlobal(ctx.itemId); if (!item) return;
+  var vs = item.variants || [];
+  var h = '<div class="modal-handle"></div>';
+  h += '<div class="modal-title">⚙️ 品牌变体管理</div>';
+
+  if (!ctx.vid) {
+    h += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px">点「修改」改这个品牌的名称、价格、规格与库存。</div>';
+    if (!vs.length) h += '<div style="padding:16px;text-align:center;color:var(--text-tertiary);font-size:13px">还没有品牌变体</div>';
+    vs.forEach(function (v) {
+      var uA = packCountUnitOf(item, v) || '包';
+      var setsA = +v.packCount || 0;
+      var restA = 0;
+      (variantSpecsOf(v) || []).forEach(function (x) { restA += Math.max(0, specPacksTotal(v, x) - specOpenPacks(x)); });
+      if (!(variantSpecsOf(v) || []).length) restA = +v.stock || 0;
+      h += '<div style="display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:0.5px solid var(--separator)">'
+        + '<div style="flex:1;min-width:0">'
+        + '<div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(v.brand || '未命名') + '</div>'
+        + '<div style="font-size:11px;color:var(--text-tertiary);margin-top:2px">¥' + (+v.totalPrice || 0).toFixed(2)
+        + (setsA > 0 ? ' · ' + trimNum(setsA) + ' 套' : '')
+        + ' · 库存 ' + trimNum(Math.round(restA * 100) / 100) + escapeHtml(uA) + '</div>'
+        + '</div>'
+        + '<button class="btn btn-outline btn-sm" style="flex-shrink:0" onclick="openVariantAdmin(\'' + item.id + '\',\'' + v.id + '\')">修改</button>'
+        + '</div>';
+    });
+    h += '<button class="btn btn-ghost btn-full" style="margin-top:12px" onclick="closeModal()">关闭</button>';
+  } else {
+    var v = null;
+    vs.forEach(function (x) { if (x.id === ctx.vid) v = x; });
+    if (!v) { closeModal(); return; }
+    var u = packCountUnitOf(item, v) || '包';
+    var sp = variantSpecsOf(v);
+    h += '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px">' + escapeHtml(item.name) + '</div>';
+    h += '<div class="form-group"><label class="form-label">品牌名</label><input class="form-input" id="va-brand" value="' + escapeHtml(v.brand || '') + '"></div>';
+    h += '<div class="form-group"><label class="form-label">总价（累计）</label><input type="number" inputmode="decimal" class="form-input" id="va-total" value="' + (+v.totalPrice || 0) + '">';
+    h += '<div style="font-size:11px;color:var(--text-tertiary);margin-top:4px">改这里会补一条「差额」批次，卡片金额与购买记录始终对得上。</div></div>';
+    h += '<div style="display:flex;gap:8px">'
+      + '<div class="form-group" style="flex:1"><label class="form-label">套数</label><input type="number" inputmode="decimal" class="form-input" id="va-sets" value="' + (v.packCount || '') + '"></div>'
+      + '<div class="form-group" style="flex:1"><label class="form-label">每套价（最近一批）</label><input type="number" inputmode="decimal" class="form-input" id="va-packprice" value="' + (v.packPrice || '') + '"></div>'
+      + '</div>';
+    // 规格型：每件容量由规格明细决定，这里只给「件数单位」（瓶/包/个 —— 必须引用用户写的文本）
+    // 无规格型：才需要「每件容量 + 容量单位」
+    h += '<div style="display:flex;gap:8px">';
+    if (sp.length) {
+      h += '<div class="form-group" style="flex:0 0 110px"><label class="form-label">件数单位</label><input class="form-input" id="va-qtyunit" value="' + escapeHtml(v.packQtyUnit || u) + '" list="qty-unit-list"></div>';
+      h += '<div style="flex:1;display:flex;align-items:flex-end;padding-bottom:10px;font-size:11px;color:var(--text-tertiary)">库存按这个单位数（瓶 / 包 / 个）</div>';
+    } else {
+      h += '<div class="form-group" style="flex:1"><label class="form-label">每件容量</label><input type="number" inputmode="decimal" class="form-input" id="va-qty" value="' + (v.packQty || '') + '"></div>';
+      h += '<div class="form-group" style="flex:0 0 84px"><label class="form-label">单位</label><input class="form-input" id="va-qtyunit" value="' + escapeHtml(v.packQtyUnit || u) + '" list="qty-unit-list"></div>';
+    }
+    h += '</div>';
+    if (sp.length) {
+      h += '<div style="display:flex;align-items:baseline;gap:6px;margin:12px 0 6px">'
+        + '<span style="font-size:12px;font-weight:600">规格明细</span>'
+        + '<span style="font-size:10px;color:var(--text-tertiary)">单套包数 · 每包含量 · 单位</span>'
+        + '<span style="flex:1"></span></div>';
+      sp.forEach(function (s, i) {
+        h += '<div style="border:0.5px solid var(--separator);border-radius:8px;padding:8px;margin-bottom:6px">';
+        h += '<input class="form-input" style="font-size:12px;padding:6px 8px" data-va="name" data-i="' + i + '" value="' + escapeHtml(s.name || '') + '" placeholder="规格名，如 正装">';
+        h += '<div style="display:flex;gap:6px;margin-top:6px">';
+        h += '<input type="number" inputmode="decimal" class="form-input" style="flex:1;min-width:0;font-size:12px;padding:6px" data-va="perSet" data-i="' + i + '" value="' + specPackCount(s) + '" placeholder="单套包数">';
+        h += '<input type="number" inputmode="decimal" class="form-input" style="flex:1;min-width:0;font-size:12px;padding:6px" data-va="qty" data-i="' + i + '" value="' + specPackQty(s) + '" placeholder="每包含量">';
+        h += '<input class="form-input" style="width:52px;flex-shrink:0;font-size:12px;padding:6px" data-va="unit" data-i="' + i + '" value="' + escapeHtml(s.unit || '') + '" placeholder="ml">';
+        h += '</div>';
+        h += '<div style="display:flex;gap:8px;margin-top:6px;align-items:center">';
+        h += '<span style="font-size:11px;color:var(--text-tertiary);flex-shrink:0;white-space:nowrap">库存包数</span>';
+        h += '<input type="number" inputmode="decimal" class="form-input" style="width:78px;flex:0 0 78px;font-size:12px;padding:6px 8px;text-align:right" data-va="stock" data-i="' + i + '" value="' + trimNum(specPacksTotal(v, s)) + '">';
+        h += '<span style="font-size:11px;color:var(--text-tertiary);flex-shrink:0;white-space:nowrap">已开 ' + trimNum(specOpenPacks(s)) + '</span>';
+        h += '<span style="flex:1"></span>';
+        h += '</div></div>';
+      });
+      h += '<div style="font-size:11px;color:var(--text-tertiary);line-height:1.5">改「库存包数」立刻改库存（低于已开数会被拦下）；改规格不影响历史消耗记录。</div>';
+    }
+    h += '<button class="btn btn-primary btn-full" style="margin-top:14px" onclick="saveVariantAdmin()">保存</button>';
+    h += '<button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="openVariantAdmin(\'' + item.id + '\',\'\')">返回列表</button>';
+  }
+  closeModal();
+  document.getElementById('modal-content').innerHTML = h;
+  document.getElementById('modal-overlay').classList.add('show');
+}
+function saveVariantAdmin() {
+  var ctx = window._vaCtx; if (!ctx || !ctx.vid) return;
+  var item = findItemByIdGlobal(ctx.itemId); if (!item) return;
+  var v = null; (item.variants || []).forEach(function (x) { if (x.id === ctx.vid) v = x; });
+  if (!v) return;
+  function gv(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+  var newBrand = String(gv('va-brand')).trim() || '未命名';
+  var newTotal = Math.max(0, parseFloat(gv('va-total')) || 0);
+  var newSets = Math.max(0, parseFloat(gv('va-sets')) || 0);
+  var newPackPrice = Math.max(0, parseFloat(gv('va-packprice')) || 0);
+  var newQty = Math.max(0, parseFloat(gv('va-qty')) || 0);
+  var newQtyUnit = String(gv('va-qtyunit')).trim();
+
+  // 规格输入：先收集，再统一校验（校验不过就整体不落库，避免半截改动）
+  var sp = variantSpecsOf(v);
+  var byIdx = {};
+  Array.prototype.forEach.call(document.querySelectorAll('[data-va]'), function (el) {
+    var i = +el.getAttribute('data-i'), k = el.getAttribute('data-va');
+    if (!byIdx[i]) byIdx[i] = {};
+    byIdx[i][k] = el.value;
+  });
+  var err = '';
+  Object.keys(byIdx).forEach(function (i) {
+    var s = sp[+i]; if (!s) return;
+    var st = parseFloat(byIdx[i].stock);
+    if (!isFinite(st) || st < 0) { if (!err) err = '库存包数不能为负'; return; }
+    var opened = specOpenPacks(s);
+    if (st < opened - 0.001) {
+      if (!err) err = '「' + (s.name || '规格') + '」已开 ' + trimNum(opened) + ' 包，库存不能少于这个数';
+    }
+  });
+  if (err) { toast(err); return; }
+
+  var oldTotal = +v.totalPrice || 0;
+  v.brand = newBrand;
+  if (newSets > 0) v.packCount = newSets;
+  if (newPackPrice > 0) v.packPrice = newPackPrice;
+  if (newQty > 0 && !sp.length) v.packQty = newQty;   // 规格型的每件容量由规格明细决定，不在这里改
+  if (newQtyUnit) v.packQtyUnit = newQtyUnit;
+  v.totalPrice = Math.round(newTotal * 100) / 100;
+
+  Object.keys(byIdx).forEach(function (i) {
+    var s = sp[+i]; if (!s) return;
+    var row = byIdx[i];
+    if (String(row.name || '').trim()) s.name = String(row.name).trim();
+    var ps = parseFloat(row.perSet); if (isFinite(ps) && ps > 0) s.packCount = ps;
+    var pq = parseFloat(row.qty); if (isFinite(pq) && pq > 0) s.packQty = pq;
+    if (String(row.unit || '').trim()) s.unit = String(row.unit).trim();
+    var st = parseFloat(row.stock);
+    if (isFinite(st) && st >= 0) s.packsTotal = Math.round(st * 100) / 100;   // 目标值直设，等价于差额调整且无浮点漂移
+  });
+
+  // 总价变了 → 补差额批次（卡片总价 = Σ批次，永远对得上）
+  var delta = Math.round((newTotal - oldTotal) * 100) / 100;
+  if (Math.abs(delta) >= 0.01) writePriceAdjust(item, v, delta, '总价 ' + trimNum(oldTotal) + ' → ' + trimNum(newTotal));
+
+  v.stock = variantSpecStockCalc(v);
+  if (v.stock > 0) { v.usedUp = false; v.finishDate = null; }
+  try { syncItemFromVariants(item); } catch (e) {}
+  saveDB();
+  try { renderZone(); } catch (e) {}
+  try { renderHome(); } catch (e) {}
+  try { if (currentDetailItem && currentDetailItem.id === item.id) renderCardBack(currentDetailItem, currentDetailZone); } catch (e) {}
+  closeModal();
+  toast('已保存');
+}
+
+// ========== 【第 47 轮】购买记录（物品 → 品牌 → 逐年） ==========
+// 数据保留规则：只看「今年 + 前两年」。连续 3 年没采购的品牌自然不在窗口里，
+// 但批次一条都不删 —— 只是不展示；日后同品牌再买，会重新出现。
+function buyHistYears() { var y = new Date().getFullYear(); return [y, y - 1, y - 2]; }
+function toggleBuyHistory(itemId) {
+  if (!window._buyHistOpen) window._buyHistOpen = {};
+  window._buyHistOpen[itemId] = !window._buyHistOpen[itemId];
+  try { if (currentDetailItem && currentDetailItem.id === itemId) renderCardBack(currentDetailItem, currentDetailZone); } catch (e) {}
+}
+function toggleBuyBrand(itemId, key) {
+  if (!window._buyHistBrand) window._buyHistBrand = {};
+  window._buyHistBrand[itemId] = (window._buyHistBrand[itemId] === key) ? '' : key;
+  try { if (currentDetailItem && currentDetailItem.id === itemId) renderCardBack(currentDetailItem, currentDetailZone); } catch (e) {}
+}
+function renderBuyHistory(item) {
+  var hist = (item && item.priceHistory) || [];
+  if (!hist.length) return '';
+  var years = buyHistYears();
+  var minY = years[years.length - 1];
+  var map = {}, order = [];
+  var olderAmt = 0, olderCnt = 0;
+  hist.forEach(function (p) {
+    if (!p) return;
+    var t = p.date ? new Date(p.date).getTime() : NaN;
+    if (!isFinite(t)) return;
+    var y = new Date(t).getFullYear();
+    var amt = parseFloat(p.totalPrice) || 0;
+    if (y < minY) { olderAmt += amt; if (amt > 0) olderCnt++; return; }
+    var key = p.variantId ? ('v' + p.variantId) : ('b' + (p.brand || ''));
+    if (!map[key]) { map[key] = { key: key, brand: p.brand || '未命名', amt: 0, cap: 0, capUnit: '', years: {} }; order.push(key); }
+    var r = map[key];
+    if (p.brand) r.brand = p.brand;
+    r.amt += amt;
+    r.cap += (parseFloat(p.capQty) || 0);
+    if (p.capUnit && !r.capUnit) r.capUnit = p.capUnit;
+    if (!r.years[y]) r.years[y] = { amt: 0, cap: 0, capUnit: '' };
+    r.years[y].amt += amt;
+    r.years[y].cap += (parseFloat(p.capQty) || 0);
+    if (p.capUnit && !r.years[y].capUnit) r.years[y].capUnit = p.capUnit;
+  });
+  var list = order.map(function (k) { return map[k]; }).filter(function (r) { return r.amt > 0 || r.cap > 0; });
+  list.sort(function (a, b) { return b.amt - a.amt; });   // 花得多的品牌排前面
+  if (!list.length) return '';
+  var open = !!(window._buyHistOpen && window._buyHistOpen[item.id]);
+  var nowBrand = (window._buyHistBrand && window._buyHistBrand[item.id]) || '';
+  var h = '<div style="margin-top:10px;padding-top:9px;border-top:0.5px solid var(--separator)">';
+  h += '<div style="display:flex;align-items:center;gap:6px;cursor:pointer" onclick="toggleBuyHistory(\'' + item.id + '\')">'
+    + '<span style="font-size:12px;color:var(--text-secondary)">💰 购买记录 · 近3年</span>'
+    + '<span style="font-size:11px;color:var(--text-tertiary)">' + list.length + '个品牌</span>'
+    + '<span style="flex:1"></span>'
+    + '<span style="font-size:11px;color:var(--text-tertiary)">' + (open ? '▲' : '▼') + '</span>'
+    + '</div>';
+  if (!open) return h + '</div>';
+  list.forEach(function (r) {
+    var bk = (encodeURIComponent(r.brand) + '|' + r.key).replace(/'/g, '%27');
+    var isOpen = (nowBrand === bk);
+    var unit = r.capUnit || '';
+    var per = (r.cap > 0 && r.amt > 0) ? (r.amt / r.cap) : 0;
+    h += '<div style="display:flex;align-items:baseline;gap:7px;padding:7px 0;border-bottom:0.5px solid var(--separator);cursor:pointer" onclick="toggleBuyBrand(\'' + item.id + '\',\'' + bk + '\')">'
+      + '<span style="flex:1;min-width:0;font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(r.brand) + '</span>'
+      + '<span style="font-size:11px;color:var(--text-secondary);flex-shrink:0">' + (r.cap > 0 ? trimNum(r.cap) + escapeHtml(unit) : '—') + '</span>'
+      + '<span style="font-size:12px;font-weight:600;flex-shrink:0">¥' + r.amt.toFixed(2) + '</span>'
+      + '<span style="font-size:11px;color:var(--text-tertiary);flex-shrink:0">' + (per > 0 ? '¥' + (per < 1 ? per.toFixed(3) : per.toFixed(2)) + '/' + escapeHtml(unit || '件') : '—') + '</span>'
+      + '<span style="font-size:10px;color:var(--text-tertiary);flex-shrink:0">' + (isOpen ? '⌄' : '›') + '</span>'
+      + '</div>';
+    if (!isOpen) return;
+    years.forEach(function (y) {
+      var d = r.years[y];
+      if (!d || (!(d.amt > 0) && !(d.cap > 0))) return;
+      var yu = d.capUnit || unit;
+      var yp = (d.cap > 0 && d.amt > 0) ? (d.amt / d.cap) : 0;
+      h += '<div style="display:flex;align-items:baseline;gap:7px;padding:4px 0 4px 10px;font-size:11px;color:var(--text-secondary)">'
+        + '<span style="flex:1;min-width:0">' + y + '年</span>'
+        + '<span style="min-width:62px;text-align:right;flex-shrink:0">' + (d.cap > 0 ? trimNum(d.cap) + escapeHtml(yu) : '—') + '</span>'
+        + '<span style="min-width:64px;text-align:right;flex-shrink:0">¥' + d.amt.toFixed(2) + '</span>'
+        + '<span style="min-width:60px;text-align:right;flex-shrink:0">' + (yp > 0 ? '¥' + (yp < 1 ? yp.toFixed(3) : yp.toFixed(2)) + '/' + escapeHtml(yu || '件') : '—') + '</span>'
+        + '</div>';
+    });
+  });
+  if (olderCnt > 0) {
+    h += '<div style="font-size:10px;color:var(--text-tertiary);padding-top:6px">另有 ' + olderCnt + ' 次更早采购未显示（共 ¥' + olderAmt.toFixed(2) + '）</div>';
+  }
+  h += '</div>';
+  return h;
+}
+
 function renderCardBack(item, zone) {
   var html = '<div class="detail-back">';
   // === 顶部：父名称 + 详细消耗模型 + ✕ ===
@@ -5343,30 +5584,17 @@ function renderCardBack(item, zone) {
       html += '<div style="font-size:12px;color:var(--text-tertiary);margin-top:4px">📈 消耗速度：' + NO_DATA_TEXT + '</div>';
     }
 
-    // ④ 采购建议：结论紧跟数据支撑，直接吃 buyAdviceOf 的容量结论
-    var stAllB = statsOf(item);
-    html += '<div style="margin-top:8px;padding:9px 11px;border-radius:10px;background:#F0F7FF">';
-    html += '<div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:5px">🛒 建议采购</div>';
-    html += '<div style="font-size:13px;line-height:1.7">';
-    if (!advB || advB.noData) {
-      // 【第 22 轮】没有完整闭环 → 强制显示「数据不足」，绝不在这里编造任何数字
-      html += '<span style="color:var(--text-secondary)">' + NO_DATA_TEXT + '</span>';
-    } else {
-      html += '· ' + advB.main + '<br>';
-      if (advB.detail) {
-        html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px">' + advB.detail + '</div>';
-      }
-      if (stAllB && stAllB.monthsLeft !== null && stAllB.monthsLeft !== undefined) {
-        // 当前剩余 = 剩余容量（与月/年消耗同单位，才能算出可用月数）
-        var uLeft = restCapText(item);
-        // 不足 1 个月时说「约 X 天」更直观（0 个月没有信息量）
-        var durTxt = (stAllB.monthsLeft < 1)
-          ? '约 ' + Math.max(1, Math.round(stAllB.monthsLeft * R24_DAYS_PER_MONTH)) + ' 天'
-          : '约够用 ' + Math.max(1, Math.round(stAllB.monthsLeft)) + ' 个月';
-        html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">当前库存 ' + uLeft + '，' + durTxt + '</div>';
-      }
-    }
-    html += '</div></div>';
+    // ④ 采购建议（【第 47 轮】压成一行、无底框）
+    //   为什么能压：年耗 / 剩余 / 够用月数上一行「消耗速度」已经说过，这里再摆一遍是重复。
+    //   单行只留结论；文案永远不会为空（无数据时给 NO_DATA_TEXT）。
+    var advMain47 = (!advB || advB.noData) ? NO_DATA_TEXT : String(advB.main || '');
+    html += '<div style="display:flex;gap:6px;font-size:12px;color:var(--text-secondary);margin-top:4px;line-height:1.6">'
+      + '<span style="flex-shrink:0">🛒 建议采购</span>'
+      + '<span style="color:var(--text-primary);font-weight:500;min-width:0">' + advMain47 + '</span>'
+      + '</div>';
+
+    // 购买记录（【第 47 轮】折叠：物品 → 品牌 → 逐年明细）
+    html += renderBuyHistory(item);
 
     html += '</div>';
 
@@ -5382,6 +5610,8 @@ function renderCardBack(item, zone) {
       html += '<div class="back-section-title" style="display:flex;align-items:center;gap:6px;margin-bottom:0">'
         + '<span>品牌变体 (' + liveVs.length + '个在用' + (doneVs.length ? ' · 已藏' + doneVs.length + '个' : '') + ')</span>'
         + '<button class="vfold-caret" title="' + (vFoldOpen ? '收起品牌变体' : '展开品牌变体') + '" onclick="toggleVariantFold(\'' + item.id + '\')">' + (vFoldOpen ? '▲' : '▼') + '</button>'
+        // 【第 47 轮】管理入口：折叠状态下也能点，不用先展开、不用滚回顶部
+        + '<button class="vfold-caret" style="margin-left:2px;font-size:11px;width:auto;padding:0 7px" title="管理这个物品的所有品牌变体" onclick="openVariantAdmin(\'' + item.id + '\',\'\')">⚙️</button>'
         + '</div>';
       if (!vFoldOpen) {
         html += '<div style="padding:11px 12px;margin-top:7px;border-radius:10px;background:var(--bg-secondary);font-size:12px;color:var(--text-secondary);text-align:center;cursor:pointer" onclick="toggleVariantFold(\'' + item.id + '\')">👥 共 ' + item.variants.length + ' 个品牌 · 点开查看明细与操作</div>';
@@ -5427,16 +5657,21 @@ function renderCardBack(item, zone) {
           html += '<button class="btn btn-outline vc-head-btn vc-pending-btn" title="核对完库存数据后点这里" onclick="variantConfirmOk(\'' + item.id + '\',\'' + v.id + '\')">✅ 确认完毕</button>';
         }
         html += '<span style="flex:1"></span>';
+        // 【第 47 轮】✏️ 管理：直达这一个变体（凯旋后核对、改价格、改规格都在这里）
+        html += '<button class="btn btn-outline vc-head-btn" title="修改这个品牌的名称/价格/规格/库存" onclick="openVariantAdmin(\'' + item.id + '\',\'' + v.id + '\')">✏️ 管理</button>';
         // 第 11 轮：感受 + 弃用（不再买），与品牌名并排，右侧对齐
         html += '<button class="btn btn-outline vc-head-btn" title="记录这个品牌的使用感受" onclick="openVariantFeelingForm(\'' + item.id + '\',\'' + v.id + '\')">💕 感受</button>';
         html += '<button class="btn btn-outline vc-head-btn' + (v.noRestock ? '' : ' vc-head-btn-mute') + '" title="弃用 = 不会再买、不会再用" onclick="toggleVariantNoRestock(\'' + item.id + '\',\'' + v.id + '\')">' + (v.noRestock ? '↩️ 恢复' : '🚮 弃用') + '</button>';
         html += '</div>';
-        // 价格：总价为主数字，套餐构成作为副说明
+        // 价格：累计总价为主数字；副说明改成「套数 · 均价/套」（480 ÷ 12 = 40，天生自洽）
+        // 【第 47 轮】旧版「12 套 × ¥30」是拿累计套数乘最近一批单价，12×30=360 ≠ 480 —— 三个数互相打架
         var cVTotal = v.totalPrice || 0;
+        var cVSets = +v.packCount || 0;
         html += '<div class="vc-price-line">';
         html += '<span class="vc-price">¥' + cVTotal.toFixed(2) + '</span>';
-        if (v.packCount) {
-          html += '<span class="vc-price-note">' + v.packCount + ' 套 × ¥' + (v.packPrice || 0).toFixed(2) + '</span>';
+        if (cVSets > 0) {
+          html += '<span class="vc-price-note">' + trimNum(cVSets) + ' 套'
+            + (cVTotal > 0 ? ' · 均价 ¥' + (cVTotal / cVSets).toFixed(2) + '/套' : '') + '</span>';
         }
         // 【第 13 轮】折算单价并入价格行右侧小字：信息网格让位给「库存+容量并排 / 开封时间整行」
         html += '<span class="vc-price-note">' + variantPriceCompareText(v) + '</span>';
@@ -5792,24 +6027,9 @@ function renderCardBack(item, zone) {
       html += '</div>';
     }
 
-    // === 价格历史 ===
-    if (item.priceHistory && item.priceHistory.length > 0) {
-      html += '<div class="back-section">';
-      html += '<div class="back-section-title">价格历史 (' + item.priceHistory.length + '次)</div>';
-      var prices = item.priceHistory.map(function(p) { return p.unitPrice || 0; });
-      var minPrice = Math.min.apply(null, prices);
-      var avgPrice = prices.reduce(function(s,p) { return s+p; }, 0) / prices.length;
-      html += '<div class="back-row"><span class="back-label">历史最低</span><span class="back-value" style="color:var(--green)">¥' + minPrice.toFixed(2) + '</span></div>';
-      html += '<div class="back-row"><span class="back-label">均价</span><span class="back-value">¥' + avgPrice.toFixed(2) + '</span></div>';
-      html += '<div style="margin-top:8px">';
-      item.priceHistory.slice().reverse().slice(0, 5).forEach(function(p) {
-        html += '<div class="open-record">📅 ' + formatDate(p.date) + ' · ' + escapeHtml(p.channel||'') + ' · ¥' + parseFloat((p.unitPrice||0)).toFixed(2) + '/' + mainPackUnit(item);
-        if (p.notes) html += ' · ' + escapeHtml(p.notes);
-        html += '</div>';
-      });
-      html += '</div>';
-      html += '</div>';
-    }
+    // 【第 47 轮】旧「价格历史」区块已删除 —— 与信息区的「💰 购买记录」完全重复，
+    //   而且它的「历史最低/均价」读的是 unitPrice（旧代码写死 0），永远显示 ¥0.00。
+    //   购买记录已经给出：按品牌、近 3 年、逐年明细、加权单价，信息更全且不会自相矛盾。
   }
 
   // === 使用感受（第 11 轮：逻辑去重 —— 感受只属于具体品牌变体，主卡不再提供入口） ===
@@ -6206,7 +6426,7 @@ function manualRefresh() {
 
 // ========== 自动更新检查 ==========
 // deploy.py 部署时会把 1791388211 替换为构建时间戳，并上传同目录 version.json
-var APP_VERSION = '1793434086';
+var APP_VERSION = '1793547760';
 
 function checkAppUpdate(manual) {
   try {
@@ -8214,8 +8434,11 @@ function saveItem() {
     data.channel = '';
   }
 
+  var _preVariantIds = [];
   if (editingItemId) {
     var item = getItem(currentZoneId, editingItemId);
+    // 【第 47 轮】先记下旧变体 id —— 下面 Object.assign 会把 variants 整个换掉，之后就分不出谁是新增的
+    _preVariantIds = (item.variants || []).map(function (v) { return v.id; });
     if (zone.type === 'consumable') {
       // 补给品：保留已有的variant使用数据
       var oldVariants = item.variants || [];
@@ -8258,6 +8481,12 @@ function saveItem() {
     data.priceHistory = [];
     data.createdAt = new Date().toISOString();
     zone.items.push(data);
+  }
+
+  // 【第 47 轮】新增品牌 → 立刻生成一条购买批次（手工新增也要有记录，不是只有凯旋才有）
+  if (zone.type === 'consumable') {
+    var _batchItem = editingItemId ? getItem(currentZoneId, editingItemId) : data;
+    writeBatchesForNewVariants(_batchItem, _preVariantIds);
   }
 
   saveDB();
@@ -8378,6 +8607,16 @@ function buildYearStats(year) {
       // （固化时物品还在，statsOf/buyAdviceOf 可正常计算；此后这件数据不再变化）
       var stY = statsOf(it);
       var advY = buyAdviceOf(it);
+      // 【第 47 轮】按用量折算的花费（消耗口径，只作对照，绝不与「实际购入」相加）
+      //   单价 = 各变体单位容量价的容量加权平均；算不出（老数据没容量/没价格）→ 0，不显示
+      var _upSum = 0, _upW = 0;
+      (it.variants || []).forEach(function (v) {
+        var _cap = variantBoughtCapacity(v);
+        var _up = variantUnitPrice(v);
+        if (_up !== null && _up > 0 && _cap.qty > 0) { _upSum += _up * _cap.qty; _upW += _cap.qty; }
+      });
+      var _unitCapPrice = _upW > 0 ? (_upSum / _upW) : 0;
+      var _calcSpend = _unitCapPrice > 0 && yq > 0 ? Math.round(_unitCapPrice * yq * 100) / 100 : 0;
       items.push({
         itemId: it.id,
         zoneId: z.id, zoneName: z.name, zoneIcon: z.icon || '📦',
@@ -8387,6 +8626,7 @@ function buildYearStats(year) {
         capQty: capQty,
         capUnit: showCapUnit,
         spend: Math.round(spend * 100) / 100,
+        calcSpend: _calcSpend,
         unitPrice: yq > 0 ? Math.round((spend / yq) * 100) / 100 : 0,
         times: times,
         avgDays: dayCnt > 0 ? Math.round(daySum / dayCnt) : 0,
@@ -8403,6 +8643,7 @@ function buildYearStats(year) {
   DB.yearStats[String(year)] = {
     generatedAt: new Date().toISOString(),
     itemCount: items.length,
+    calcSpend: Math.round(items.reduce(function (a, x) { return a + (+x.calcSpend || 0); }, 0) * 100) / 100,
     totalSpend: Math.round(totalSpend * 100) / 100,
     items: items
   };
@@ -8626,7 +8867,40 @@ function openYearReview(year) {
   html += '<div style="font-size:13px;color:var(--text-secondary)">' + year + '年 · ' + st.itemCount + ' 件物品有消耗记录</div>';
   html += '<div style="font-size:24px;font-weight:700;color:var(--accent);margin-top:2px">¥' + st.totalSpend.toFixed(2) + '</div>';
   html += '<div style="font-size:11px;color:var(--text-tertiary);margin-top:2px">生成于 ' + formatDateTime(new Date(st.generatedAt).getTime()) + '</div>';
+  // 【第 47 轮】消耗口径只作对照小字，绝不与「实际购入」相加（两种钱，混加必错）
+  if (st.calcSpend > 0) {
+    html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px">其中按今年用量折算 ≈ ¥' + st.calcSpend.toFixed(2) + '</div>';
+  }
   html += '</div>';
+
+  // 【第 47 轮】分类花费：按实际购入金额，与详情页「购买记录」逐条对得上
+  (function () {
+    var catMap = {};
+    (st.items || []).forEach(function (e) {
+      var cp = String(e.categoryPath || '未分类');
+      var leaf = cp.split('·').pop().trim() || '未分类';
+      catMap[leaf] = (catMap[leaf] || 0) + (+e.spend || 0);
+    });
+    var catList = Object.keys(catMap).map(function (k) { return { name: k, amt: catMap[k] }; })
+      .filter(function (x) { return x.amt > 0.004; })
+      .sort(function (a, b) { return b.amt - a.amt; });
+    if (!catList.length) return;
+    var showCats = catList.slice(0, 8);
+    var restAmt = catList.slice(8).reduce(function (a, x) { return a + x.amt; }, 0);
+    if (restAmt > 0) showCats.push({ name: '其他', amt: restAmt });
+    var catTotal = catList.reduce(function (a, x) { return a + x.amt; }, 0);
+    html += '<div style="padding:12px;border:0.5px solid var(--separator);border-radius:10px;margin-bottom:14px">';
+    html += '<div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px">📊 分类花费</div>';
+    showCats.forEach(function (c) {
+      var pct = catTotal > 0 ? Math.round((c.amt / catTotal) * 100) : 0;
+      html += '<div style="display:flex;align-items:baseline;gap:8px;padding:3px 0;font-size:12px">'
+        + '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(c.name) + '</span>'
+        + '<span style="font-weight:600;flex-shrink:0">¥' + c.amt.toFixed(2) + '</span>'
+        + '<span style="color:var(--text-tertiary);min-width:34px;text-align:right;flex-shrink:0">' + pct + '%</span>'
+        + '</div>';
+    });
+    html += '</div>';
+  })();
 
   st.items.forEach(function(e) {
     html += '<div style="padding:12px;border:0.5px solid var(--separator);border-radius:10px;margin-bottom:10px">';
@@ -10066,6 +10340,71 @@ function findItemByIdGlobal(itemId) {
 //   ② 品牌名匹配到已有变体 → 合并；匹配不到 → 在父级下新建货架；
 //   ③ 旧变体（哪怕库存为 0）的历史数据一字不动；
 //   ④ 价格只写「实付金额」与价格历史，绝不参与库存数量/消耗计算。
+// ========== 【第 47 轮】价格批次台账 ==========
+// 一次入库 = 一条批次。卡片总价 = 名下所有批次金额之和（改价补差额批次，绝不直接覆盖）。
+// 老数据兼容：老 priceHistory 只有 date / totalPrice / notes，新字段缺失时展示层按「1 批」处理。
+function pushPriceBatch(item, v, b) {
+  if (!item) return null;
+  if (!item.priceHistory) item.priceHistory = [];
+  b = b || {};
+  var amt = Math.round((+b.amount || 0) * 100) / 100;
+  var cap = Math.round((+b.capQty || 0) * 100) / 100;
+  var packs = Math.round((+b.packs || 0) * 100) / 100;
+  var rec = {
+    date: b.date || new Date().toISOString(),
+    brand: (v && v.brand) || b.brand || '',
+    variantId: (v && v.id) || '',
+    channel: b.channel || '',
+    quantity: 1,
+    totalPrice: amt,
+    unitPrice: 0,        // 每容量单位价（¥/ml）：老字段沿用，但不再写死 0
+    perPackPrice: 0,     // 每件价（¥/瓶）
+    sets: (+b.sets > 0) ? Math.round(+b.sets * 100) / 100 : 0,
+    packs: packs,
+    capQty: cap,
+    capUnit: b.capUnit || '',
+    specText: b.specText || '',
+    source: b.source || 'manual',
+    notes: b.note || ''
+  };
+  if (amt > 0 && cap > 0) rec.unitPrice = Math.round((amt / cap) * 10000) / 10000;
+  if (amt > 0 && packs > 0) rec.perPackPrice = Math.round((amt / packs) * 100) / 100;
+  item.priceHistory.push(rec);
+  return rec;
+}
+// 改已有变体的总价 → 补一条差额批次，保证「卡片总价 = Σ批次」
+function writePriceAdjust(item, v, delta, note) {
+  if (!(delta > 0) && !(delta < 0)) return null;
+  return pushPriceBatch(item, v, {
+    amount: delta, sets: 0, packs: 0, capQty: 0,
+    source: 'adjust', note: note || '价格调整'
+  });
+}
+// 【第 47 轮】手工新增的品牌变体 → 立即生成一条购买批次。
+//   不是只有凯旋才有记录：表单里新加一个品牌并填了总价，也要进「购买记录」。
+function writeBatchesForNewVariants(item, preIds) {
+  if (!item || !item.variants) return;
+  preIds = preIds || [];
+  item.variants.forEach(function (v) {
+    if (preIds.indexOf(v.id) >= 0) return;      // 老变体：不补、不伪造历史
+    var tp = Math.round((+v.totalPrice || 0) * 100) / 100;
+    if (!(tp > 0)) return;
+    var cap = variantBoughtCapacity(v);
+    var perSet = 0;
+    (variantSpecsOf(v) || []).forEach(function (s) { perSet += specPackCount(s); });
+    var packs = perSet > 0 ? Math.round(variantPacksBought(v) * perSet * 100) / 100 : variantPacksBought(v);
+    pushPriceBatch(item, v, {
+      amount: tp,
+      sets: +v.packCount || 0,
+      packs: packs,
+      capQty: cap.qty || 0,
+      capUnit: cap.unit || '',
+      source: 'manual',
+      note: '新增品牌·登记入库'
+    });
+  });
+}
+
 function doWinSettle(ws) {
   var rows = ws.rows || [];
   var createdVariants = 0, mergedVariants = 0, addedSpecs = 0, mergedSpecs = 0;
@@ -10132,10 +10471,13 @@ function doWinSettle(ws) {
 
     // ④ 逐行处理 —— 核心铁律：能匹配就累加，匹配不上就新增，旧行一个字都不改写
     var thisSets = 0;
+    var batchPacks = 0, batchCap = 0;   // 【第 47 轮】本批到货包数 / 容量，供批次台账记录
     g.rows.forEach(function (r) {
       var packs = winRowPacks(r);          // 本次到货「包/件数」= 套数 × 单套包数
       if (!(packs > 0)) return;
       thisSets = Math.max(thisSets, +r.actSets || 0);
+      batchPacks += packs;
+      batchCap += packs * (+r.actQtyPerPack || 0);
       var hit = specMatchRow(v, r, isInst);
       if (hit) {
         // 场景一 / 二（部分）：同名同容量同单位 → 累加，旧的消耗记录与库存一个字不动
@@ -10172,23 +10514,31 @@ function doWinSettle(ws) {
     v.pendingConfirm = true;
 
     // ⑥ 价格只记账，绝不参与库存数量/消耗计算
+    //   【第 47 轮】实付优先：结算页按方案填的实付金额（预估 ≠ 实际付款）
     var amt = Math.round((+g.amount || 0) * 100) / 100;
+    if (ws.amounts && ws.amounts[g.planId] !== undefined && ws.amounts[g.planId] !== null && ws.amounts[g.planId] !== '') {
+      amt = Math.round((parseFloat(ws.amounts[g.planId]) || 0) * 100) / 100;
+    }
     if (amt > 0) {
       v.totalPrice = Math.round(((+v.totalPrice || 0) + amt) * 100) / 100;
       if (g.comboPrice > 0) v.packPrice = g.comboPrice;
       v.price = v.stock > 0 ? Math.round((v.totalPrice / v.stock) * 100) / 100 : (v.price || 0);
     }
-    // ⑦ 价格历史（含完整明细文字）
-    if (!item.priceHistory) item.priceHistory = [];
+    // ⑦ 批次：一次入库 = 一条批次（年份归属看 date）
+    //   【第 47 轮】绝不再「事后覆盖最后一条」——那就是多方案互相踩、改了不生效的根因
     var specTxt = v.specs.map(function (s) {
       // 【第 44 轮】「规格单位」引用用户写的文本（瓶/包/个/支……），绝不写死「包」
       return specKindIcon(specKindOf(s)) + (s.name || '') + '×' + trimNum(specPacksTotal(v, s)) + (packCountUnitOf(item, v) || '包');
     }).join(' + ');
-    item.priceHistory.push({
-      date: new Date().toISOString(), channel: '', quantity: 1,
-      totalPrice: amt, unitPrice: 0,
-      notes: '任务委托·凯旋结算' + (isNewVariant ? '（新建货架 ' + v.brand + '）' : '（并入货架 ' + v.brand + '）') + '：' + specTxt,
-      brand: v.brand || '', attachments: []
+    pushPriceBatch(item, v, {
+      amount: amt,
+      sets: thisSets,
+      packs: batchPacks,
+      capQty: batchCap,
+      capUnit: (v.specs[0] && v.specs[0].unit) || '',
+      specText: specTxt,
+      source: 'win',
+      note: '委托·凯旋' + (isNewVariant ? '（新建货架 ' + v.brand + '）' : '（并入货架 ' + v.brand + '）') + '：' + specTxt
     });
     // ⑧ 物品级汇总（其它变体不受影响）
     syncItemFromVariants(item);
@@ -10197,17 +10547,9 @@ function doWinSettle(ws) {
     }, 0);
   });
 
-  // ⑨ 实付金额覆盖（仅记账，不影响库存数量）
-  if (ws.amountOverride !== undefined && ws.amountOverride !== null && ws.amountOverride !== '') {
-    order.forEach(function (gk) {
-      var g = groups[gk];
-      var it = findItemByIdGlobal(g.parentId);
-      if (!it || !it.priceHistory || !it.priceHistory.length) return;
-      var last = it.priceHistory[it.priceHistory.length - 1];
-      last.totalPrice = Math.round((parseFloat(ws.amountOverride) || 0) * 100) / 100;
-      last.notes += '（实付 ' + trimNum(parseFloat(ws.amountOverride) || 0) + '）';
-    });
-  }
+  // ⑨ 【第 47 轮】已删除旧的「事后覆盖最后一条价格历史」：
+  //    它只改 priceHistory 不改 v.totalPrice（改了不生效），且多方案时都去改同一条（互相踩）。
+  //    实付金额现在直接在 ⑥ 逐方案写入，见 ws.amounts。
 
   // ⑩ 任务状态流转
   (ws.taskIds || []).forEach(function (tid) {
@@ -10427,15 +10769,31 @@ function renderWinSettle() {
   });
   html += '<button class="btn btn-outline btn-sm" style="width:100%;margin-bottom:10px" onclick="winSettleAddRow()">＋ 补一行（临时加的赠品 / 漏填的规格）</button>';
 
-  // 实付金额（方案级，仅记账用，不进库存计算）
+  // 【第 47 轮】实付金额：按方案逐个填（预估只是委托时的估算，实付才是真花的钱）
   var planIds = [];
   rows.forEach(function (r) { if (planIds.indexOf(r.planId) < 0) planIds.push(r.planId); });
-  if (planIds.length === 1 && _winSettle.mode === 'single') {
-    html += '<div class="form-group" style="margin-top:4px"><label class="form-label">实付金额（凑单/优惠后，仅记账，不影响库存数量）</label>';
-    html += '<input type="number" inputmode="decimal" class="form-input" id="win-settle-amount" placeholder="如 280" value="' + (rows[0].amount || '') + '" onchange="winSettleSetAmount(this.value)"></div>';
-  } else if (planIds.length > 1) {
-    html += '<div style="padding:10px 12px;background:var(--bg);border-radius:8px;font-size:12px;color:var(--text-secondary);margin-bottom:10px">本次结算含 <b>' + planIds.length + '</b> 个方案，实付金额将按原预估逐方案记账（金额不影响库存数量）。</div>';
-  }
+  if (!_winSettle.amounts) _winSettle.amounts = {};
+  html += '<div class="form-group" style="margin-top:4px"><label class="form-label">实付金额（按方案填，仅记账，不影响库存数量）</label>';
+  planIds.forEach(function (pid) {
+    var est = 0, pname = '方案';
+    var t0 = null;
+    rows.forEach(function (r) {
+      if (String(r.planId) !== String(pid)) return;
+      est = +r.amount || 0;
+      if (!t0) t0 = taskById(r.taskId);
+    });
+    var p0 = t0 ? findPlan(t0, pid) : null;
+    if (p0 && p0.name) pname = p0.name;
+    var curAmt = (_winSettle.amounts[pid] !== undefined && _winSettle.amounts[pid] !== '') ? _winSettle.amounts[pid] : est;
+    html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">'
+      + '<div style="flex:1;min-width:0">'
+      + '<div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escTask(pname) + '</div>'
+      + '<div style="font-size:11px;color:var(--text-tertiary)">预估 ¥' + trimNum(est) + '</div>'
+      + '</div>'
+      + '<input type="number" inputmode="decimal" class="form-input" style="width:112px;flex-shrink:0;text-align:right;font-weight:700" placeholder="实付" value="' + escTask(String(curAmt)) + '" onchange="winSettleSetAmount(\'' + pid + '\',this.value)">'
+      + '</div>';
+  });
+  html += '<div style="font-size:11px;color:var(--text-tertiary)">这里填实际付了多少。库存数量只认上面的实际件数，金额只记账。</div></div>';
 
   var ccTotal = 0;
   rows.forEach(function (r) { ccTotal += winRowPieces(r); });
@@ -10497,7 +10855,12 @@ function renderWinSettleKeepFocus(idx) {
     if (na[pos]) { na[pos].focus(); try { na[pos].setSelectionRange(val.length, val.length); } catch (e) {} }
   }
 }
-function winSettleSetAmount(v) { if (_winSettle) _winSettle.amountOverride = v; }
+function winSettleSetAmount(pid, v) {
+  if (!_winSettle) return;
+  if (!_winSettle.amounts) _winSettle.amounts = {};
+  if (v === '' || v === null || v === undefined) delete _winSettle.amounts[pid];
+  else _winSettle.amounts[pid] = parseFloat(v) || 0;
+}
 function confirmWinSettle() {
   if (!_winSettle) return;
   var rows = _winSettle.rows;
