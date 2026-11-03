@@ -3,7 +3,7 @@
  * 更新逻辑：页面请求带 ?v=<新版本号> 时强制走网络并覆盖缓存，
  *          与 index.html 里的 checkAppUpdate 配合，发布后刷新即生效。 */
 
-var CACHE_NAME = 'jiayou-1793551420';
+var CACHE_NAME = 'jiayou-1793717826';
 
 // 安装时就把主页面存进来，这样「第二次打开」就能直接命中，不用等第三次。
 // 这一步通常直接读浏览器 HTTP 缓存（GitHub Pages 给了 10 分钟 max-age），几乎不额外耗流量。
